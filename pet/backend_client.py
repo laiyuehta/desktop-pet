@@ -7,6 +7,7 @@
 - 後端回傳的指令（directives）轉成既有的事件丟回事件匯流排，由 PetApp 照原本的流程處理：
     set_state / set_stage → control 事件
     say / emotion / actuator → action 事件（say 會在畫面上顯示對話框）
+    skill（例如 camera.snapshot）→ skill 事件，由對應的能力模組處理
 """
 
 from __future__ import annotations
@@ -55,6 +56,13 @@ def directive_to_event(d: Dict[str, Any]) -> Optional[dict]:
                 return None
             return make_event("action", "expression", source=src,
                               params={"expression": expr, "seconds": float(d.get("seconds", 2))})
+        if t == "skill":
+            name = str(d.get("name") or "")
+            if not name:
+                return None
+            params = {k: v for k, v in d.items() if k not in ("type", "name")}
+            params.setdefault("reason", "backend")
+            return make_event("skill", name, source=src, params=params)
         if t == "actuator":
             params = {k: v for k, v in d.items() if k != "type"}
             if not params.get("motion"):

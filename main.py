@@ -14,12 +14,15 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 import signal
 import sys
 import time
 
 from pet.app import PetApp
 from pet.events import make_event
+from pet.extensions import CameraSnapshot, CameraWebAPI, PhotoUploader
+from pet.extensions.camera import DEFAULT_PENDING_DIR
 from pet.inputs import KeyboardInput, WebRemoteInput
 from pet.pack import AnimationPack, PackDriver
 from pet.outputs import FileSink, NullSink, PiscreenSink
@@ -49,7 +52,13 @@ def parse_args(argv=None):
     p.add_argument("--backend", default=None,
                    help="後端（大腦）網址，例如 http://192.0.2.100:8090；預設不接")
     p.add_argument("--pet-id", default="seed-001", help="寵物 ID（後端存檔用）")
-    p.add_argument("--backend-token", default="", help="後端 api_token（有設才需要）")
+    p.add_argument("--backend-token", default="", help="後端 api_token（不建議：會出現在 ps；請用 --backend-token-file）")
+    p.add_argument("--backend-token-file", default=None,
+                   help="從檔案讀後端 api_token（建議，例如 ~/.config/desktop-pet/backend-token，權限 600）")
+    p.add_argument("--camera", choices=["auto", "on", "off"], default="auto",
+                   help="拍照能力模組 camera.snapshot（auto = 有 rpicam-still 才開）")
+    p.add_argument("--camera-pending-dir", default=None, help="上傳失敗的照片暫存資料夾（預設 ~/.local/share/desktop-pet/pending-photos）")
+    p.add_argument("--camera-cooldown", type=float, default=5.0, help="拍照冷卻秒數（預設 5）")
     p.add_argument("--font", default=None, help="對話框中文字型路徑（預設自動尋找）")
     p.add_argument("--wifi", choices=["auto", "on", "off"], default="auto",
                    help="網頁 Wi‑Fi 設定與自動重連（auto = 有 nmcli 和 Wi‑Fi 介面才開）")
@@ -77,8 +86,22 @@ def main(argv=None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log = logging.getLogger("main")
     overrides = {"idle_timeout": args.idle_timeout} if args.idle_timeout else None
+    token = args.backend_token
+    if args.backend_token_file:
+        try:
+            with open(os.path.expanduser(args.backend_token_file), "r", encoding="utf-8") as fh:
+                token = fh.read().strip()
+        except OSError as exc:
+            log.error("讀不到後端 token 檔 %s：%s", args.backend_token_file, exc.strerror)
+            return 2
+    camera = None
+    if args.camera == "on" or (args.camera == "auto" and shutil.which("rpicam-still")):
+        uploader = PhotoUploader(args.backend, args.pet_id, token) if args.backend else None
+        camera = CameraSnapshot(uploader, pending_dir=args.camera_pending_dir or DEFAULT_PENDING_DIR,
+                                cooldown=args.camera_cooldown)
+        log.info("拍照能力模組：開（%s）", "上傳到後端" if uploader else "沒有後端，只存在本機")
     app = PetApp(args.config, timer_overrides=overrides, backend_url=args.backend, pet_id=args.pet_id,
-                 backend_token=args.backend_token, font_path=args.font)
+                 backend_token=token, font_path=args.font, extensions=[camera] if camera else None)
     sink = make_sink(args)
     pack_dir = args.pack
     if pack_dir == "auto":
@@ -123,7 +146,8 @@ def main(argv=None) -> int:
         elif name == "web":
             host, _, port = args.web.rpartition(":")
             inputs.append(WebRemoteInput(app.post, host or "0.0.0.0", int(port), status_fn=status_with_wifi,
-                                          routes=[WifiWebAPI(wifi)] if wifi else None))
+                                          routes=([WifiWebAPI(wifi)] if wifi else [])
+                                          + ([CameraWebAPI(camera)] if camera else [])))
         elif name != "none":
             log.error("未知的輸入：%s", name)
             return 2

@@ -288,3 +288,81 @@ class MoodTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhotoApiTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        cfg = make_cfg(self.tmp, "http://127.0.0.1:1/v1", photos={"retention": 3})
+        cfg["server"]["api_token"] = "tok"
+        self.brain = Brain(cfg)
+        self.httpd, port = serve_in_thread(self.brain)
+        self.base = f"http://127.0.0.1:{port}"
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def req(self, path, data=None, token="tok", ctype="image/jpeg"):
+        h = {"Content-Type": ctype}
+        if token:
+            h["X-Pet-Token"] = token
+        r = urllib.request.Request(self.base + path, data=data, headers=h, method="POST" if data is not None else "GET")
+        return urllib.request.urlopen(r, timeout=5)
+
+    def code(self, *a, **kw):
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self.req(*a, **kw)
+        return cm.exception.code
+
+    def test_upload_list_get_retention(self):
+        jpg = b"\xff\xd8" + b"x" * 200
+        ids = []
+        for i in range(5):
+            r = json.load(self.req(f"/v1/pet/photo?pet_id=p1&reason=manual&taken={time.time() - 10 + i}", jpg))
+            self.assertTrue(r["ok"])
+            ids.append(r["photo_id"])
+        lst = json.load(self.req("/v1/pet/p1/photos"))
+        self.assertEqual(lst["count"], 3)
+        self.assertEqual([p["photo_id"] for p in lst["photos"]], ids[::-1][:3])
+        self.assertEqual(self.req(f"/v1/pet/p1/photos/{ids[-1]}").read(), jpg)
+        self.assertEqual(self.code(f"/v1/pet/p1/photos/{ids[0]}"), 404)       # 超過保留數量被刪
+        self.assertEqual(len(os.listdir(os.path.join(self.tmp, "photos", "p1"))), 6)  # 3 jpg + 3 json
+        st = json.load(self.req("/v1/pet/p1/state"))
+        self.assertEqual(st["photos"][-1]["photo_id"], ids[-1])
+
+    def test_auth_and_validation(self):
+        jpg = b"\xff\xd8" + b"x" * 200
+        self.assertEqual(self.code("/v1/pet/photo?pet_id=p1", jpg, token=None), 401)
+        self.assertEqual(self.code("/v1/pet/photo?pet_id=p1", jpg, token="bad"), 401)
+        self.assertEqual(self.code("/v1/pet/p1/photos", token=None), 401)
+        self.assertEqual(self.code("/v1/pet/p1/photos/20260101-000000-000", token=None), 401)
+        self.assertEqual(self.code("/v1/pet/photo?pet_id=p1", b"not a jpeg" * 10), 400)
+        self.assertEqual(self.code("/v1/pet/photo?pet_id=../x", jpg), 400)
+        self.assertEqual(self.code("/v1/pet/p1/photos/..%2f..%2fx"), 400)
+        self.assertEqual(self.code("/v1/pet/p1/photos/20260101-000000-000"), 404)
+
+    def test_health_public_vs_token(self):
+        pub = json.load(urllib.request.urlopen(self.base + "/health", timeout=5))
+        self.assertEqual(set(pub), {"ok", "service", "version"})
+        full = json.load(self.req("/health"))
+        self.assertIn("llm", full)
+
+    def test_photo_api_off_without_token(self):
+        self.brain.cfg["server"]["api_token"] = ""
+        tmp2 = tempfile.mkdtemp()
+        try:
+            cfg = make_cfg(tmp2, "http://127.0.0.1:1/v1")
+            httpd, port = serve_in_thread(Brain(cfg))
+            r = urllib.request.Request(f"http://127.0.0.1:{port}/v1/pet/photo?pet_id=p1", data=b"\xff\xd8" + b"x" * 100,
+                                       method="POST", headers={"Content-Type": "image/jpeg"})
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(r, timeout=5)
+            self.assertEqual(cm.exception.code, 403)
+            httpd.shutdown()
+        finally:
+            shutil.rmtree(tmp2, ignore_errors=True)
+
+    def test_skill_directive_passes_filter(self):
+        out = Brain._clean([{"type": "skill", "name": "camera.snapshot"}, {"type": "skill", "name": "rm -rf"}])
+        self.assertEqual(out, [{"type": "skill", "name": "camera.snapshot"}])

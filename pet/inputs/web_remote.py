@@ -71,7 +71,10 @@ class WebRemoteInput(InputAdapter):
                         self._json(500, {"ok": False, "error": f"內部錯誤：{type(exc).__name__}"})
                         return True
                     if res is not None:
-                        self._json(res[0], res[1])
+                        if len(res) == 3:          # (code, bytes, content-type)，例如縮圖
+                            self._send(res[0], res[1], res[2])
+                        else:
+                            self._json(res[0], res[1])
                         return True
                 return False
 

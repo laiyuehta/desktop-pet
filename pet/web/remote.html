@@ -122,6 +122,14 @@
   <div id="log"></div>
 </div>
 
+<div class="card" id="cam-card">
+  <h2>拍照（camera.snapshot）</h2>
+  <div class="talk"><button class="acc" id="cam-btn">📷 拍一張</button>
+    <span class="dim" id="cam-st" style="align-self:center">—</span></div>
+  <div class="dim" id="cam-last" style="margin-top:6px">還沒有照片</div>
+  <img id="cam-img" alt="最後一張" style="display:none;margin-top:8px;max-width:100%;border-radius:10px">
+</div>
+
 <div class="card" id="wifi-card">
   <h2>Wi‑Fi 設定</h2>
   <div class="status">
@@ -291,6 +299,40 @@ async function wifiInit() {
   wifiStatus(); wifiSaved(); setInterval(wifiStatus, 3000);
 }
 wifiInit();
+
+// ---- 拍照 ----
+let camLastKey = null;
+function camFmt(t) { return t ? new Date(t * 1000).toLocaleString("zh-TW", { hour12: false }) : "—"; }
+async function camStatus() {
+  try {
+    const r = await fetch("/skill/camera.snapshot", { cache: "no-store" });
+    if (r.status === 404) { $("#cam-card").style.display = "none"; return false; }
+    const s = await r.json();
+    $("#cam-st").textContent = s.busy ? "拍照中…" : s.cooldown_left > 0 ? "冷卻 " + s.cooldown_left + " 秒" :
+      "待傳 " + s.pending + " 張" + (s.uploader ? "" : "（沒接後端）");
+    const l = s.last;
+    if (l) {
+      $("#cam-last").innerHTML = l.ok
+        ? "最後一張：" + esc(camFmt(l.time)) + "（" + esc(l.reason) + "）" + (l.uploaded ? ' <span class="good">已傳到後端</span>' : ' <span class="bad">先存在本機，等網路恢復補傳</span>')
+        : '<span class="bad">' + esc(camFmt(l.time) + " 失敗：" + l.error) + "</span>";
+      const key = (l.file || "") + (l.time || "");
+      if (s.has_thumb && key !== camLastKey && l.ok) {
+        camLastKey = key; const img = $("#cam-img"); img.src = "/skill/camera.snapshot/last.jpg?t=" + Date.now(); img.style.display = "block";
+      }
+    }
+    return true;
+  } catch (e) { $("#cam-st").textContent = "讀不到"; return true; }
+}
+$("#cam-btn").onclick = async () => {
+  try {
+    const r = await fetch("/skill/camera.snapshot", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "manual" }) });
+    const j = await r.json();
+    toast(j.ok ? "喀嚓！" : "錯誤：" + j.error);
+  } catch (e) { toast("送出失敗"); }
+  setTimeout(camStatus, 300);
+};
+camStatus().then(ok => { if (ok) setInterval(camStatus, 2000); });
 </script>
 </body>
 </html>

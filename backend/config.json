@@ -56,5 +56,10 @@
     "chance": 0.35,
     "comment": "被摸等互動時偶爾說一句固定台詞（不用 LLM）。chance=1、cooldown_s=0 方便測試。"
   },
-  "memory_size": 20
+  "memory_size": 20,
+  "photos": {
+    "retention": 200,
+    "recent_in_record": 20,
+    "comment": "camera.snapshot 上傳的照片存在 data/photos/<pet_id>/，只保留最近 retention 張；照片 API 一定要設定 api_token"
+  }
 }

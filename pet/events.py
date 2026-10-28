@@ -10,6 +10,7 @@ type 常見值：
 - control ：遙控指令（set_state、set_stage）
 - action  ：動作請求（motion、expression、say、sound），由寵物本體決定怎麼表現
 - pet     ：寵物本體發出的通知（state_changed、stage_changed）
+- skill   ：能力模組（例如 {"type":"skill","name":"camera.snapshot"}；結果 camera.snapshot.done／failed）
 """
 
 import time

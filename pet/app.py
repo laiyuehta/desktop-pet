@@ -31,7 +31,8 @@ class PetApp:
     def __init__(self, config_path: Optional[str] = None, timer_overrides: Optional[Dict[str, float]] = None,
                  use_clock: bool = True, eye_seed: Optional[int] = None, actuators: Optional[ActuatorHub] = None,
                  backend_url: Optional[str] = None, pet_id: str = "seed-001", backend_token: str = "",
-                 font_path: Optional[str] = None, backend_opts: Optional[dict] = None):
+                 font_path: Optional[str] = None, backend_opts: Optional[dict] = None,
+                 extensions: Optional[list] = None):
         config_path = config_path or os.path.join(ROOT, "config", "states.json")
         with open(config_path, "r", encoding="utf-8") as fh:
             self.config = json.load(fh)
@@ -44,6 +45,8 @@ class PetApp:
         self.actuators = actuators or ActuatorHub([self.logger_actuator])
         self.extensions = ExtensionManager(self.bus)
         self.extensions.register(ExampleExtension())
+        for ext in extensions or []:          # 能力模組（例如 camera.snapshot）
+            self.extensions.register(ext)
         clock_cfg = self.config.get("clock", {})
         self.clock = (ClockEvents(self.bus.publish, clock_cfg.get("night_start", 23), clock_cfg.get("night_end", 7))
                       if use_clock and clock_cfg.get("enabled", True) else None)
@@ -130,6 +133,8 @@ class PetApp:
         if t == "action":
             self._handle_action(ev)
             return
+        if t == "skill":
+            return                                  # 能力模組自己訂閱處理，不進狀態機
         self.fsm.handle_event(ev)
         if t in INTERACTION_TYPES and t != "talk" or t == "time":
             self._forward(ev)
