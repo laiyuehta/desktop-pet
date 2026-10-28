@@ -1,4 +1,4 @@
-# 桌寵專案 項目書 v2.8
+# 桌寵專案 項目書 v2.9
 
 > 最後更新：2026-10-29　｜　狀態：第一期規劃定稿，細節持續補充
 >
@@ -14,7 +14,8 @@
 > v2.0：後端設好 `api_token`（裝置用 token 檔帶上，`/health` 對外只回基本資訊）；拍照模組實作完成並在 Pi 實測（見該節「實作備註」）。
 > v2.1：新增「週邊常駐服務原則」：每個週邊由一個專門的常駐程式獨占、負責對接；新增相機常駐服務 picam，拍照改成多個觸發共用同一張照片、分送給每個請求者（取代冷卻與「相機忙碌」）。
 > v2.2：網頁遙控新增「螢幕畫面同步」：送到螢幕的每張畫面同步一份到網頁，方便遠端調整。
-> v2.8：改成 git 為主的多人開發流程（見「15. 開發流程（git 為主）」）：分支命名、main 只透過 PR＋CI、規格走 `spec/` PR 由使用者核准、commit 訊息格式、squash merge、Issue、CODEOWNERS（共用帳號的限制）、不再改寫歷史、semver tag＋`CHANGELOG.md`、只部署 tag（部署腳本是設計）。新增 CI（測試、gitleaks、個人資訊檢查）。
+> v2.8：改成 git 為主的多人開發流程（見「15. 開發流程（git 為主）」）：分支命名、main 只透過 PR＋CI、規格走 `spec/` PR 由使用者核准、commit 訊息格式、squash merge、Issue、CODEOWNERS（共用帳號的限制）、不再改寫歷史、semver tag＋`CHANGELOG.md`、只部署 tag（部署腳本是設計；v2.9 改成跟著 main）。新增 CI（測試、gitleaks、個人資訊檢查）。
+> v2.9：新增「16. 自動部署」（規格，尚未實作）：端點、帳號、路徑、token 檔位置都改用環境變數（Pi `/etc/desktop-pet/env`、R7 環境檔，repo 只放 `deploy.env.example`；優先順序與變數一覽）；Pi 與 R7 各自定時用 HTTPS 拉 main（不用帳號、不開入站 ssh）、版本目錄＋連結切換、健康檢查、失敗自動回退並記下失敗 commit、暫停開關、顯示目前版本。部署規則從「只部署 tag」改成**跟著 main**，tag 只當里程碑。
 > v2.7：新增「後端控制網頁」（只限內網，另開 listener，網際網路連不到）、「前後端連線安全：API 金鑰」（每台裝置一把、綁 pet_id、全部 `/v1/*` 都要、速率限制與鎖定、不中斷遷移）、「14. 專案公開前的檢查」；v2.6 的六個問題已決定。控制網頁與金鑰是規格，尚未實作。
 > v2.6：定下整體架構（見「整體架構」）：三層（前端／後端／後端支援）；前端拆成桌寵主程式、前端後台（獨立程式）、各模組守護程式（一個程式獨占一個模組，可給別的專案用）；新的常駐守護程式改用 Rust，先做 Wi‑Fi 的 piwifi；附遷移步驟。v2.5 的多模態與記憶規格**擱置**，問題暫緩。
 > v2.5：新增「後端：多模態模型」與「後端：記憶系統」規格（**待核准，尚未實作**）：R7 現況調查、提議以 Qwen3-VL-8B 取代 qwen3-14b（含 A/B 與回退）、三層記憶（短期對話、長期事實、日記）存在後端 SQLite。
@@ -1094,6 +1095,7 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
 | 整體架構 | 規格 v2.6 | 三層＋前端拆分＋守護程式規範＋Rust；尚未實作（遷移第 1 步：拆出前端後台） |
 | 多模態模型＋記憶系統 | 擱置中 | v2.5 規格待核准，問題暫緩；尚未下載模型、尚未實作 |
 | 後端控制網頁、API 金鑰 | 規格 v2.7 | 尚未實作 |
+| 自動部署 | 規格 v2.9 | 環境變數＋定時拉 main、健康檢查、自動回退；尚未實作（實作前手動部署最新的綠燈 main） |
 | 開發流程 | v2.8 | git 為主：分支＋PR＋CI，squash merge，semver tag；repo 已公開，main 有 ruleset 保護；Antigravity 加入開發 |
 | 公開專案 | 檢查中 | 歷史已改寫、佔位化、MIT；剩下的見「14. 專案公開前的檢查」 |
 | 尚未做 | — | 前端後台拆分、piwifi（Rust）、後端控制網頁、API 金鑰、成長推進規則、多模態模型、記憶系統、ESP32 原型、外殼 |
@@ -1112,8 +1114,8 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
   恢復：`sudo systemctl enable --now desktop-pet`。
 - 停止：`sudo systemctl stop desktop-pet`（`Restart=always` 不會在手動 stop 後重啟）。
 - 日誌：`journalctl -u desktop-pet -f`；螢幕狀態：`cat /run/piscreen/status.json`。
-- 更新流程（v2.8 起）：改動走 PR、CI 綠燈、合併後打 tag，**只部署 tag**（見「15. 開發流程」的「部署：只部署 tag」）。動畫包另外用 `python3 tools/bake.py` 產生再放到 Pi。
-- 部署值（執行使用者 `PET_USER`、家目錄 `PET_HOME`、後端網址 `PET_BACKEND_URL`）放在 repo 根目錄的 `deploy.env`（不進 repo，範本 `deploy.env.example`）。`install.sh` 把 unit 裡的 `@USER@`／`@HOME@`／`@BACKEND_URL@` 換成這些值，只讀不寫 `deploy.env`。
+- 更新流程（v2.9 起）：改動走 PR、CI 綠燈、合併到 main，**部署 main 的最新 commit**（見「15. 開發流程」的「部署：跟著 main」）；之後由自動更新做（見「16. 自動部署」，尚未實作）。動畫包另外用 `python3 tools/bake.py` 產生再放到 Pi。
+- 部署值（執行使用者 `PET_USER`、家目錄 `PET_HOME`、後端網址 `PET_BACKEND_URL`）放在 repo 根目錄的 `deploy.env`（不進 repo，範本 `deploy.env.example`）。v2.9 規格改放 `/etc/desktop-pet/env`，由 systemd 在執行時載入（見 16.2）。`install.sh` 把 unit 裡的 `@USER@`／`@HOME@`／`@BACKEND_URL@` 換成這些值，只讀不寫 `deploy.env`。
 - 其他啟動參數（寫在 unit 裡，改參數就改 `services/desktop-pet/desktop-pet.service` 再跑 `install.sh`）：`--sink piscreen --input web --web 0.0.0.0:8080 --fps 20 --pack @HOME@/desktop-pet/packs/seed`。
 - 後端 token 放在 `@HOME@/.config/desktop-pet/backend-token`（@USER@ 擁有、權限 0600），用 `--backend-token-file` 讀，不放在命令列（`ps`、systemd 設定都看不到）。換 token 時改這個檔和 R7 的設定，再重啟 `desktop-pet`。
 
@@ -1141,7 +1143,7 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
 - token 在 R7 的 `backend\config.json` 的 `server.api_token`。這個檔是本機設定、已列入 `.gitignore`，repo 只放預設值 `backend\config.example.json`（後端先讀 example，再疊上本機 config.json）。**更新程式時不要覆蓋或刪除 R7 的 `config.json`**。
 - 照片存在 `backend\data\photos\<pet_id>\`（每張一個 .jpg＋.json），不進 repo。
 - LLM 由 llama-server 提供（埠 8080），需另外手動開；沒開時後端用備用台詞，寵物照常運作。
-- R7 沒有 GitHub 登入，程式用打包檔傳過去更新。
+- R7 沒有 GitHub 登入，程式用打包檔傳過去更新。v2.9 規格：repo 公開，R7 不用登入就能用 HTTPS 自己拉 main（見「16. 自動部署」）。
 - 存檔在 `backend/data/`（每隻寵物一個 JSON 檔），建議定期備份。
 
 ## 8. 安全
@@ -1178,7 +1180,8 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
 2. ~~骨架格式與 runtime、狀態機、輸入模擬器~~（已完成）
 3. ~~樹莓派原型（接 piscreen，量 fps）~~（已完成：改預錄動畫後穩定 20 fps）
    - 接著做（v2.6 架構）：拆出前端後台 → piwifi（Rust）取代程序內 Wi‑Fi → 整理現有守護程式 → 新模組（Rust）。見「整體架構」的遷移步驟。
-   - 接著做（v2.7）：API 金鑰（每台裝置一把，不中斷遷移）→ 後端控制網頁 → 專案公開前的檢查（見第 14 節）
+   - 接著做（v2.9）：自動部署（環境變數 → Pi 更新程式 → R7 更新程式），見第 16 節。
+  - 接著做（v2.7）：API 金鑰（每台裝置一把，不中斷遷移）→ 後端控制網頁 → 專案公開前的檢查（見第 14 節）
    - 擱置：R7 後端的多模態模型與記憶系統（v2.5）
 4. ESP32 原型
 5. 比較兩平台（流暢度、耗電、成本、開發難度），選定平台
@@ -1206,6 +1209,7 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
   - piwifi 用專用使用者 `piwifi` 跑。
   - 內網管理網頁不加 PIN。
 - ~~熱點名稱~~ 已決定（2026-10-29）：改成 `PetRescue-AP`，密碼不變。
+- **v2.9（待決定）**：自動部署的 12 個問題，見「16. 自動部署」最後的「待決定（v2.9）」。
 - **v2.8（待決定）**：
   - repo 合併設定要不要改成只允許 squash、合併後自動刪分支？
   - 要不要讓 bot 改用獨立的 GitHub 帳號（machine user）或 GitHub App，讓 CODEOWNERS 與核准真的生效？
@@ -1368,42 +1372,35 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
 - 第一個 tag 是 **`v2.8.0`**：這個流程合併後的 main。MINOR 先跟項目書版本對齊，之後各自前進（項目書改版不一定要發佈）。
 - `CHANGELOG.md`：每個 PR 在「未發佈」加一行；發佈時把「未發佈」改成版號與日期，再打 tag。
 - 打 tag 由使用者決定（或叫 bot 打），只打在 CI 綠燈的 main commit 上。
+- **tag 是里程碑，不是部署條件**（v2.9）：機器跟著 main 更新，tag 只用來標記發佈與整理 `CHANGELOG.md`。機器顯示的 `describe`（例如 `v2.8.0+5`）會帶最近的 tag。
 - 後端 `/health` 回的 `version`（目前 `0.1.0`）之後改成讀發佈版號，讓部署後看得出跑的是哪一版。
 
-### 部署：只部署 tag
-- 正式機器（Pi、R7）**只部署 tag**，不部署分支或沒打 tag 的 commit。要測試分支就在電腦上跑，或明確說是「暫時測試」，測完部署回 tag。
-- `deploy.env`（Pi）與 `backend/config.json`（R7）只存在機器上，不進 git；部署不建立、不覆蓋、不刪除它們。
-- 動畫包 `packs/` 不進 git，由 bake 產生後另外放到 Pi。
+### 部署：跟著 main（v2.9 起，取代 v2.8 的「只部署 tag」）
+- 使用者決定（2026-10-29）：**正式機器（Pi、R7）部署 main 的最新 commit**。
+  - main 只收 CI 綠燈、而且跟 main 同步過的 PR（見「分支保護」），所以 main 就是測過的版本。
+  - **tag 只是里程碑**（發佈與更新紀錄用），不是部署的條件。
+- 自動部署的設計在「16. 自動部署」（規格，尚未實作）：兩台機器各自定時拉 main，健康檢查不過就自動回到上一版。
+- 實作之前由桌寵專案機器人1 手動部署，版本一樣用「最新的、CI 綠燈的 main commit」。
+- 不部署分支或沒進 main 的 commit。要測試分支就在電腦上跑，或明確說是「暫時測試」，測完部署回 main。
+  - 自動更新的機器上要暫時測試時，先暫停自動更新（16.6）。
+- 機器上的設定（Pi 的 `/etc/desktop-pet/env`，過渡期還有 `deploy.env`；R7 的環境檔與 `config.json`）只存在機器上，不進 git。部署不建立、不覆蓋、不刪除它們。
+- 動畫包 `packs/` 不進 git，由 bake 產生後另外放到 Pi 的共用位置（16.3）。
+- 合併前要想清楚：**合併就等於上線**（約 10 分鐘內）。
+  - 需要手動步驟的 PR（unit、apt、資料遷移）照 16.7 標記，機器就不會自動切換。
 
-**規劃中的部署腳本 `tools/deploy/deploy.sh`（只有設計，尚未實作）**
-
-`tools/deploy/deploy.sh <pi|r7> <tag> [--dry-run]`、`tools/deploy/deploy.sh <pi|r7> --rollback`、`tools/deploy/deploy.sh <pi|r7> --status`
-- **部署前檢查**：
-  - tag 存在、在 main 上、tag 的 commit CI 是綠的（用 GitHub API 查 check runs）。
-  - 目標機器的 `deploy.env`／`config.json` 存在。
-  - Pi 上 piscreen 在跑（只讀，不碰它）。
-- **Pi**：
-  - 目錄改成 `@HOME@/desktop-pet-releases/<tag>/`，`@HOME@/desktop-pet` 是指向目前版本的連結。
-  - `packs/` 與 `deploy.env` 放在共用位置，每個版本用連結接上。
-  - 流程：
-    1. 用 `git archive <tag>` 打包並複製過去，解開到新版本目錄。
-    2. 先產生 unit 等檔案，和已安裝的比對差異（`--dry-run` 到這裡就停）。
-    3. 把連結換到新版本，跑 `services/desktop-pet/install.sh`、`services/picam/install.sh`、需要時 `tools/wifi/install.sh`。
-    4. 做健康檢查：服務 active、fps 達標、`/wifi/status`、`/screen.jpg`、piscreen 錯誤數沒增加。
-  - 健康檢查失敗就自動回到上一版（連結換回去、重跑 install），並回報。
-  - 記錄 `CURRENT`／`PREVIOUS`，保留最近 3 個版本。
-  - 不碰 piscreen、USB、eth0、使用者存的 Wi‑Fi 設定。
-- **R7**：
-  - 工作資料夾維持 git checkout。R7 沒有 GitHub 登入，用 `git bundle` 傳 tag。
-  - 流程：
-    1. 檢查工作區乾淨（只允許被忽略的 `config.json`、`backend/data/`、日誌）。
-    2. 記下目前的 tag，`git checkout --detach <tag>`。
-    3. 用工作排程器重啟後端，檢查 `/health` 與它回報的版本，再從 Pi 做一次帶金鑰的呼叫。
-  - 失敗就 `checkout` 回上一個 tag，再重啟。
-  - 不碰 llama-server、ComfyUI。
-- **回退**：`--rollback` 回到 `PREVIOUS` 記錄的 tag，同樣跑健康檢查。
-  資料格式有變的版本（例如存檔遷移），PR 的「回退方式」要另外寫清楚，腳本會提醒。
-- 部署紀錄（時間、tag、結果）寫在目標機器本機，不寫個人資訊。
+**手動部署腳本 `tools/deploy/deploy.sh`（只有設計，尚未實作；跟自動更新用同一套版本目錄）**
+- 用法：
+  - `tools/deploy/deploy.sh <pi|r7> --apply <commit> [--dry-run]`：手動部署 main 上的某個 commit，包含 16.7 的「需要手動安裝」項目。
+  - `tools/deploy/deploy.sh <pi|r7> --rollback`：回到上一版。
+  - `tools/deploy/deploy.sh <pi|r7> --status`：看狀態。
+- `--apply` 跟自動更新跑同樣的下載、切換前檢查、切換、健康檢查、失敗回退（16.4～16.6）。
+  - 另外會：
+    - 跑 install 腳本（裝 unit、polkit、daemon-reload）。
+    - 在 R7 重新註冊工作。
+    - 執行 `manual-steps.txt` 的步驟，記進機器的 `applied-steps.txt`。
+  - 部署前檢查：commit 在 main 上、CI 是綠的、機器的環境檔存在、Pi 上 piscreen 在跑（只讀，不碰它）。
+- 不碰 piscreen、USB、eth0、使用者存的 Wi‑Fi 設定；R7 不碰 llama-server、ComfyUI。
+- 部署紀錄跟自動更新寫在同一個 `updates.jsonl`（`source: manual`），不寫個人資訊。
 
 ### 分支保護（目前狀態）
 - 2026-10-29 repo 改成公開，main 套用 ruleset `protect-main`（沒有 bypass，管理員也一樣）：
@@ -1412,3 +1409,382 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
   - 禁止 force push、禁止刪除。
 - 合併方式目前三種都允許；流程規定用 squash，要不要在 ruleset 只留 squash 由使用者決定。
 - 等 bot 有獨立帳號後，再把核准數改成 1，並要求 code owner 核准。
+
+## 16. 自動部署（v2.9 規格，尚未實作）
+> 使用者決定（2026-10-29）：
+> - 端點、帳號、路徑、token 檔位置都改用**環境變數**，每台機器一個自己的環境檔。repo 只放範本 `deploy.env.example`。
+> - Pi 和 R7 各自**定時拉 main**（pull-based）。main 只收 CI 綠燈的 PR，所以 main 就是測過的版本。**tag 只是里程碑，不是部署的觸發條件。**
+>
+> 本節是規格，**尚未實作**。實作之前照舊由桌寵專案機器人1 手動部署，但部署的版本也改成「最新的、CI 綠燈的 main」（見第 15 節「部署：跟著 main」）。
+
+### 16.1 目標與原則
+- **合併到 main 後，約 10 分鐘內兩台機器自動更新**，不用人上機器。
+- **只往外連**：機器用 HTTPS 連 github.com（repo 公開，不用帳號）。
+  - 不開入站 ssh，GitHub 上不放任何機密（沒有 deploy key、沒有 Actions secret 連到機器）。
+  - 機器上也不放 GitHub 憑證。
+- **先試、再切換、壞了自動退回**：
+  1. 新版本下載到新的版本目錄。
+  2. 準備依賴、做切換前檢查。
+  3. 用連結切換（Pi 是 symlink，R7 是目錄 junction）。
+  4. 健康檢查。不過就自動回到上一版，並記下失敗的 commit。
+- **設定、機密、資料都放在版本目錄外面**，更新不會動到：
+  - 環境檔、`config.json`、token 檔、動畫包 `packs/`、照片與存檔、日誌。
+- **絕不碰**：
+  - `piscreen.service` 與 piscreen 的程式、USB、eth0、使用者存的 Wi‑Fi 設定。
+  - R7 的 llama-server、ComfyUI。
+- **絕不重開機**，也不登出使用者。
+- **可以暫停**：環境檔裡設 `PET_AUTOUPDATE=0`，或放一個暫停檔（見 16.6），現場除錯時用。
+- 每次檢查與更新都留紀錄。Pi 的管理頁和 R7 的控制網頁都顯示目前的版本（commit）。
+
+### 16.2 環境變數與設定的優先順序
+**環境檔的位置**
+| 機器 | 環境檔 | 權限 | 誰讀 |
+|---|---|---|---|
+| Pi | `/etc/desktop-pet/env` | root:@USER@ 0640（跟現有的 `wifi-hotspot.conf` 同一個資料夾） | systemd 的 `EnvironmentFile=`（各 unit）、`install.sh`、更新程式 |
+| R7 | `%LOCALAPPDATA%\desktop-pet\env`（可用使用者環境變數 `PET_ENV_FILE` 改位置） | 只有執行後端的使用者能讀（NTFS 預設） | `supervise.py`、更新程式（啟動時讀，傳給子程序） |
+
+- R7 也可以直接用 Windows 的**使用者環境變數**（`setx`／系統設定）設同樣的名稱。
+  - 但使用者環境變數要重新登入才會進到工作排程器的程序，所以**建議用環境檔**：改完只要重啟後端。
+- 格式：一行一個 `KEY=VALUE`，`#` 開頭是註解。不加引號、不寫 `export`、不用 `$VAR` 展開、`=` 兩邊不留空白。
+  - 這樣 systemd、POSIX sh 的 `.`、Python 解析的結果都一樣。
+  - 範本裡的 `@HOME@` 只是佔位，Pi 的環境檔要寫實際路徑（systemd 不會代換）。
+  - 例外：R7 的環境檔只由 Python 讀，路徑變數可以寫 `%LOCALAPPDATA%`，用 `os.path.expandvars` 展開。
+- 值是空字串就當作沒設（跟現在 `main.py` 的 `os.environ.get(...) or None` 一致）。
+- **環境檔只放位置，不放機密本身**：token 一律放檔案，環境變數只寫檔案路徑（`*_TOKEN_FILE`）。
+  - 現有的例外是 `PET_CLOUD_API_KEY`（第二期，還沒用），見 16.10。
+
+**優先順序（高 → 低）**
+- Pi 桌寵主程式（之後的前端後台也一樣）：
+  1. 命令列參數（unit 的 `ExecStart` 只留跟機器無關的行為參數，例如 `--sink piscreen --fps 20`）。
+  2. 環境變數（systemd 從 `/etc/desktop-pet/env` 載入）。
+  3. 程式內建預設。
+- Pi 的安裝腳本（`tools/deploy/common.sh` 的 `load_deploy_env`）：
+  1. 目前 shell 已有的環境變數。
+  2. `PET_DEPLOY_ENV` 指定的檔案。
+  3. `/etc/desktop-pet/env`。
+  4. 舊的 repo 根目錄 `deploy.env`（過渡用，讀到時印警告；遷移後一個版本移除）。
+- R7 後端：
+  1. 命令列（`--host`、`--port`、`--config`）。
+  2. 環境變數：程序本身的環境（含使用者環境變數）優先於環境檔。
+  3. 本機設定：`PET_BACKEND_CONFIG` 指定的 `config.json`；沒設時用舊位置 `backend\config.json`（過渡用）。
+  4. `backend/config.example.json`（進 repo 的預設）。
+  - 環境變數只覆蓋對照表裡列的欄位，**不會寫回** `config.json`。`load_config` 仍然只讀不寫。
+  - `PET_BACKEND_NO_LOCAL_CONFIG=1`（測試用）照舊：不讀第 3 層。
+
+**變數一覽**（「現有」= 程式或 `deploy.env` 現在就有；「新」= 這個規格新增）
+| 變數 | 機器 | 現有／新 | 預設 | 取代／對應 | 說明 |
+|---|---|---|---|---|---|
+| `PET_USER` | Pi | 現有（deploy.env） | 呼叫 sudo 的使用者 | — | 執行桌寵、picam、更新程式的使用者。安裝時代換 `@USER@`（systemd 的 `User=` 不能讀環境變數，所以仍在安裝時代換） |
+| `PET_HOME` | Pi | 現有（deploy.env） | 從 `/etc/passwd` 查 | — | 安裝時代換 `@HOME@` |
+| `PET_BACKEND_URL` | Pi | 現有（deploy.env） | 空 = 不接後端 | `--backend`、舊的 `PET_BACKEND`、unit 裡的 `@BACKEND_URL@` | 後端網址，例如 `https://pet.example.com`。**改成執行時從環境讀**，unit 不再代換它；換網址只要改環境檔再重啟。`main.py` 繼續接受舊名 `PET_BACKEND`（讀到時記一次警告），遷移後一個版本移除 |
+| `PET_BACKEND_TOKEN_FILE` | Pi | 現有（main.py） | `@HOME@/.config/desktop-pet/backend-token` | `--backend-token-file` | token 檔路徑（0600），unit 不再寫死 |
+| `PET_PET_ID` | Pi | 新 | `seed-001` | `--pet-id` | 寵物 ID |
+| `PET_PACK_DIR` | Pi | 新 | `@HOME@/.local/share/desktop-pet/packs/seed` | `--pack` | 動畫包放在版本目錄外面 |
+| `PET_WEB_LISTEN` | Pi | 新 | `0.0.0.0:8080` | `--web` | 網頁遙控（之後是前端後台）的監聽位址 |
+| `PET_CAMERA_PENDING_DIR` | Pi | 新 | `@HOME@/.local/share/desktop-pet/pending-photos` | `--camera-pending-dir` | 待傳照片 |
+| `PET_WIFI_IFACE` | Pi | 新 | `wlan0` | `--wifi-iface` | 要管理的 Wi‑Fi 介面 |
+| `PET_HOTSPOT_URL` | Pi | 現有（pet/wifi.py） | 空 = 從 wlan0 取得 | — | 熱點時顯示的網址 |
+| `PET_ENV_FILE` | R7 | 新 | `%LOCALAPPDATA%\desktop-pet\env` | — | 環境檔位置（只能用使用者環境變數設） |
+| `PET_PY`／`PET_PYTHONW` | R7 | 現有 | PATH 上的 python／pythonw | — | ComfyUI 內附的 Python |
+| `PET_BACKEND_HOST` | R7 | 新 | config 的 `server.host` | `server.host` | |
+| `PET_BACKEND_PORT` | R7 | 現有（supervise.py） | config 的 `server.port`（8090） | `server.port` | 後端也讀它；`start_hidden.cmd` 的 8090 檢查也改用它 |
+| `PET_SUPERVISOR_LOCK_PORT` | R7 | 現有 | 18090 | — | supervise.py 的防重複鎖 |
+| `PET_BACKEND_CONFIG` | R7 | 新 | 舊位置 `backend\config.json` | `LOCAL_PATH` | 本機設定檔，建議 `%LOCALAPPDATA%\desktop-pet\config\config.json` |
+| `PET_BACKEND_DATA_DIR` | R7 | 新 | config 的 `data_dir` | `data_dir` | 存檔與照片，建議 `%LOCALAPPDATA%\desktop-pet\data` |
+| `PET_BACKEND_LOG_DIR` | R7 | 新 | repo 根目錄（現況） | — | `backend_out.log`、`backend_err.log`、`backend_supervisor.log` 的位置，建議 `%LOCALAPPDATA%\desktop-pet\logs` |
+| `PET_BACKEND_API_TOKEN_FILE` | R7 | 新 | 空 = 用 config 的 `server.api_token` | `server.api_token` | 從檔案讀 token（有設就優先）。v2.7 的 API 金鑰（雜湊檔）實作時沿用這種「環境變數給路徑」的做法 |
+| `PET_LLM_LOCAL_URL` | R7 | 新 | config 的值 | `llm.local.base_url` | 本機 LLM 端點 |
+| `PET_LLM_LOCAL_MODEL` | R7 | 新 | config 的值 | `llm.local.model` | |
+| `PET_CONSOLE_LISTEN` | R7 | 新（v2.7 實作時） | 空 = 不開 | `console.listen` | 後端控制網頁的位址，例如 `127.0.0.1:8091,192.0.2.10:8091` |
+| `PET_CLOUD_API_KEY` | R7 | 現有（config 的 `api_key_env`） | 空 | — | 第二期雲端金鑰（還沒用） |
+| `PET_BACKEND_NO_LOCAL_CONFIG` | R7 | 現有 | 空 | — | 測試用 |
+| `PET_AUTOUPDATE` | 兩台 | 新 | `1` | — | `0` = 暫停自動更新 |
+| `PET_AUTOUPDATE_REPO` | 兩台 | 新 | `https://github.com/laiyuehta/desktop-pet` | — | 公開 repo 的 HTTPS 網址（不用帳號） |
+| `PET_AUTOUPDATE_BRANCH` | 兩台 | 新 | `main` | — | 跟哪個分支 |
+| `PET_AUTOUPDATE_INTERVAL` | 兩台 | 新 | `600`（秒） | — | 多久檢查一次，最小 300（排程每 5 分鐘叫一次更新程式，更新程式自己判斷到時間沒） |
+| `PET_AUTOUPDATE_REQUIRE_CI` | 兩台 | 新 | `1` | — | 新 commit 的 CI（兩個必過的 check）要是 success 才部署 |
+| `PET_AUTOUPDATE_PIN` | 兩台 | 新 | 空 | — | 填 commit 就固定在那一版（要在 main 上），不往前更新 |
+| `PET_AUTOUPDATE_KEEP` | 兩台 | 新 | `3` | — | 除了目前版本，再保留幾個舊版本 |
+| `PET_AUTOUPDATE_HEALTH_TIMEOUT` | 兩台 | 新 | `120`（秒） | — | 健康檢查最多等多久 |
+| `PET_AUTOUPDATE_HEALTH_MIN_FPS` | Pi | 新 | `18` | — | 健康檢查要求的 fps |
+| `PET_RELEASES_DIR` | 兩台 | 新 | Pi：`@HOME@/desktop-pet-releases`；R7：`%LOCALAPPDATA%\desktop-pet\releases` | — | 版本目錄 |
+| `PET_STATE_DIR` | 兩台 | 新 | Pi：`@HOME@/.local/state/desktop-pet/update`；R7：`%LOCALAPPDATA%\desktop-pet\state` | — | 更新狀態、紀錄、暫停檔、鎖 |
+
+- 這些都在 `deploy.env.example` 列出（新的先用註解，實作 PR 再打開）。
+- 測試用假值：`pet.example.com`、`192.0.2.x`、`<user>`，佔位 `@USER@`、`@HOME@`。
+
+### 16.3 目錄配置
+**Pi**
+```
+@HOME@/desktop-pet                 → 目前版本的 symlink（unit 的 WorkingDirectory／ExecStart 都經過它）
+@HOME@/desktop-pet-releases/
+    20261029T0312Z-1a2b3c4d5e6f/   一個版本一個目錄（commit 時間 UTC＋commit 前 12 碼），裡面有 RELEASE.json
+    .staging/                      下載與解壓中的暫存（成功才改名成正式目錄）
+/etc/desktop-pet/env               環境檔（不在版本目錄）
+@HOME@/.config/desktop-pet/backend-token
+@HOME@/.local/share/desktop-pet/packs/          動畫包（bake 產生，另外放；不進 git）
+@HOME@/.local/share/desktop-pet/pending-photos/
+@HOME@/.local/share/desktop-pet/venvs/<依賴雜湊>/  （有需要 pip 套件時才有，見 16.5）
+@HOME@/.local/state/desktop-pet/update/         status.json、updates.jsonl、failed.json、PAUSE、lock
+```
+- picam 改成直接從目前版本執行（`@HOME@/desktop-pet/services/picam/picamd.py`），不再複製到 `@HOME@/picam`。
+  這是 unit 的改動，在一次性遷移時手動做（見 16.9）。
+
+**R7**
+```
+%LOCALAPPDATA%\desktop-pet\
+    env                      環境檔
+    current\                 → 目前版本的目錄 junction（mklink /J，不用系統管理員）
+    releases\<版本>\          同 Pi 的命名，裡面有 RELEASE.json
+    config\config.json       本機設定（從舊的 backend\config.json 搬過來）
+    secrets\backend-token    （選用）PET_BACKEND_API_TOKEN_FILE 指的檔案
+    data\                    存檔與照片（從舊的 backend\data\ 搬過來）
+    logs\                    後端與 supervise 的日誌
+    state\                   更新狀態、紀錄、暫停檔、鎖
+```
+- `RELEASE.json`（更新程式寫在每個版本目錄）：`{commit, short, committed_at, describe, deployed_at, source}`。
+  - `describe` 是最近的 tag 加距離，例如 `v2.8.0+5`。
+  - `source` 是 `auto` 或 `manual`。
+  - 程式從這個檔讀自己的版本來顯示；沒有這個檔（在開發機的 git checkout 裡跑）就顯示 `dev`。
+
+### 16.4 檢查與下載（兩台相同，更新程式 `tools/deploy/autoupdate.py`）
+- **語言**：Python，只用標準函式庫（兩台都有 Python 3.13，不用另外裝 git）。
+- **同時只跑一個**：Pi 用 `flock`，R7 用鎖檔。
+- **流程**：
+  1. 讀環境檔。`PET_AUTOUPDATE=0` 或有暫停檔 → 記一行「暫停中」就結束。
+  2. 還沒到 `PET_AUTOUPDATE_INTERVAL` → 結束。
+  3. 查 main 最新的 commit：用 git 的 smart HTTP（`<repo>/info/refs?service=git-upload-pack`，跟 `git ls-remote` 一樣）。
+     - 不走 GitHub API，所以沒有 API 次數限制問題。
+  4. 跟目前版本一樣 → 只更新 `status.json` 的「上次檢查」。
+  5. 新 commit 在 `failed.json` 裡 → 不重試，等 main 再前進。
+  6. 新 commit 被標成「需要手動安裝」（16.7）→ 不重試，只提醒。
+  7. `PET_AUTOUPDATE_REQUIRE_CI=1` 時，用 GitHub API（不帶帳號）查這個 commit 的 check runs：
+     - `tests (Python 3.13)` 與 `secrets & personal-info scan` 都是 success 才繼續。
+     - 還在跑 → 下次再看。
+     - failure → 記進 `failed.json`。
+     - API 被限流 → 當作「還不知道」，下次再看。
+     - 這是第二道保險：main 本來就只收綠燈的 PR。只有 commit 換了才查，兩台加起來每小時只有幾次，遠低於不帶帳號每個 IP 每小時 60 次的上限。
+  8. 下載 `https://codeload.github.com/<owner>/<repo>/tar.gz/<commit>`（HTTPS，驗證憑證），解壓到 `.staging/`。
+     - 確認壓縮檔最上層目錄名稱裡的 commit 跟要的一樣。
+     - 不解壓 `..` 或絕對路徑、symlink 指到目錄外的項目。
+     - 完成後改名成正式版本目錄，寫 `RELEASE.json`，並寫一份檔案雜湊清單 `MANIFEST.sha256`（用來發現有人手動改過，見 16.6）。
+  9. 磁碟剩不到 200 MB → 不下載，記錄原因。
+- 沒有網路、GitHub 掛了 → 記一行，下次再試，不影響正在跑的版本。
+
+### 16.5 安裝依賴與切換前檢查
+**Pi**
+- Python 依賴照 `requirements.txt` 檢查（`importlib.metadata`）。現在只有 Pillow，Pi 上由 apt 的 `python3-pil` 提供，所以通常什麼都不用裝。
+- 需要新的 pip 套件時：
+  - 建一個 `--system-site-packages` 的 venv，放在 `venvs/<requirements.txt 的雜湊>/`，只裝 wheel（`--only-binary=:all:`，Pi 3B 上不編譯）。
+  - 依賴沒變的版本共用同一個 venv。
+  - 版本目錄裡的 `.venv` 連到它；unit 的 ExecStart 改成用 `@HOME@/desktop-pet/.venv/bin/python3`（一次性遷移時改）。
+- 需要新的 **apt 套件**（要 root）→ 不自動裝，標成「需要手動安裝」。
+- **切換前檢查**（在新版本目錄裡跑，還沒切換）：
+  - `python3 -m compileall -q`。
+  - `python3 main.py --help` 能跑（import 都成功）。
+  - `python3 tools/deploy/autoupdate.py --self-test`：新版本的更新程式自己能跑，避免更新後把自動更新弄壞。
+  - 把 unit 等範本依環境檔代換，跟 `/etc/systemd/system/` 已安裝的比對（16.7）。
+  - 全部測試在 Pi 3B 上太慢，不跑；CI 已經跑過。
+- 只做讀取與在版本目錄裡寫檔，**還沒停掉任何服務**。
+
+**R7**
+- 後端只用標準函式庫（`backend/requirements.txt` 沒有套件），通常不用裝東西。
+  - 之後要加套件時，ComfyUI 內附的 Python 不適合自動 pip 安裝，先標成「需要手動安裝」（見 16.10）。
+- 切換前檢查：`compileall`、`python -c "import backend"`，再用暫時的埠（例如 18099）、`PET_BACKEND_DATA_DIR` 指到暫存資料夾，啟動一次新版本後端，打 `/health` 成功就關掉。
+  - 這一步不碰正式的 8090、正式資料。
+
+### 16.6 切換、健康檢查、回退
+**切換**
+- Pi：在版本目錄旁建新的 symlink，再 `rename` 蓋過 `@HOME@/desktop-pet`（原子操作）。
+- R7：重建 `current` junction。
+  - Windows 沒辦法原子地取代目錄連結，中間有不到 1 秒沒有 `current`。
+  - 更新程式是在這之後才重啟後端，所以只有「後端剛好在那 1 秒內自己當掉」才會碰到；碰到時 supervise.py 5 秒後重試就好。
+- **只重啟有改到的服務**：比對新舊版本的檔案雜湊。
+  | 改到的路徑 | 重啟 |
+  |---|---|
+  | `main.py`、`pet/`、`config/`、依賴 | `desktop-pet`（之後加 `desktop-pet-admin`） |
+  | `services/picam/` | `picam` |
+  | `backend/`（`autostart/` 以外） | R7 後端（只結束 8090 上的後端程序，supervise.py 5 秒內用新版本重啟） |
+  | `backend/autostart/supervise.py` | R7：先結束工作 `DesktopPet Backend`（supervise）→ 結束 8090 的後端 → 再執行這個工作 |
+  | 只有文件、測試、`assets/`、`preview/` 等 | 都不重啟，只切換連結（顯示的版本跟著換） |
+- 重啟方式：
+  - Pi：`systemctl restart <unit>`，更新程式用 @USER@ 身分執行，靠 polkit 規則 `51-desktop-pet-update.rules` 允許。
+    - 規則只允許 `desktop-pet`、`desktop-pet-admin`、`picam`、`piwifi`（之後）這幾個 unit 的 start／stop／restart。
+    - **不包含 piscreen，也沒有重開機或 daemon-reload 的權限**。
+  - R7：只結束「8090 上的後端」與 supervise.py 的程序，**不碰 llama-server（8080）與 ComfyUI**。不需要系統管理員。
+- 桌寵重啟時，螢幕由 piscreen 保持最後一張畫面，大約 3～5 秒恢復。
+- **不在這些時候更新**（Pi）：救援熱點開著或 Wi‑Fi 正在重連（看 `/wifi/status`）、正在拍照。等下次。
+
+**健康檢查**（切換後，最多 `PET_AUTOUPDATE_HEALTH_TIMEOUT` 秒；全部過才算成功）
+- Pi：
+  - 有重啟的 unit 都是 `active`，而且最後 30 秒內 `NRestarts` 沒有增加。
+  - `GET http://127.0.0.1:8080/status` 正常，fps ≥ `PET_AUTOUPDATE_HEALTH_MIN_FPS`。拆出主程式控制 API 後改用 `control.sock` 的 `/v1/health`。
+  - **畫面有送到 piscreen**：`GET /screen.jpg` 的 `X-Frame-Seq` 在 5 秒內增加（這份就是送給 piscreen 的同一份 bytes）。
+    - 同時只讀 `/run/piscreen/status.json`，確認收到的幀數增加、錯誤與救援次數沒增加（欄位名稱以 piscreen 實際的檔案為準）。
+  - **螢幕畫面同步正常**：`/screen.jpg` 回 200 而且是 JPEG。
+  - **picam 正常**：`/run/picam/status.json` 有更新、pid 活著、`errors` 沒增加。**不實際拍照**。
+  - Wi‑Fi：`/wifi/status` 有回應（不切換熱點）。
+  - 後端連得上（`PET_BACKEND_URL/health`）只當**警告**，不算失敗：R7 沒開機不是 Pi 新版本的錯。
+- R7：
+  - `GET http://127.0.0.1:<PET_BACKEND_PORT>/health` 回 ok。
+  - 後端啟動時寫的 `state\backend-status.json`（commit、pid、啟動時間）的 commit 是新版本。
+  - 之後 60 秒沒有被 supervise 重啟（看 `backend_supervisor.log`）。
+  - LLM 沒開只當警告，不算失敗（後端本來就會用備用台詞）。
+
+**回退**
+- 健康檢查失敗：
+  1. 把連結換回上一版，重啟同樣的服務，再做一次健康檢查。
+  2. 把失敗的 commit、失敗的步驟、原因寫進 `failed.json`。之後**不重試這個 commit**，等 main 再前進到別的 commit 才再試。
+  3. `autoupdate.py --retry` 可以手動清掉失敗紀錄。
+- 回到上一版也不過：狀態設成 `broken`，停止自動更新（等同暫停），在管理頁與日誌標出，等人處理。
+  - **不重開機、不一直來回切換**。
+- 資料格式有變的版本（例如存檔遷移）沒辦法單靠換連結回退，PR 的「回退方式」要寫清楚。
+  - 這種 PR 要在 `tools/deploy/manual-steps.txt` 加一行（編號＋一句說明＋適用機器），機器就不會自動切換（見 16.7），由桌寵專案機器人1 手動處理。
+
+**暫停與手動除錯**
+- 暫停：
+  - 環境檔設 `PET_AUTOUPDATE=0`（Pi 要 sudo）。
+  - 或建暫停檔：Pi `touch @HOME@/.local/state/desktop-pet/update/PAUSE`（不用 sudo），R7 在 `state\` 建 `PAUSE`。
+  - 刪掉就恢復。
+- 現場除錯時有人直接改了目前版本目錄裡的檔案：
+  - 更新程式比對 `MANIFEST.sha256` 發現不同 → 自動當作暫停，記「有手動修改」，不會蓋掉。
+  - 改回原樣或刪掉暫停狀態才恢復。
+- 固定版本：`PET_AUTOUPDATE_PIN=<commit>`。
+
+**保留版本**
+- 保留目前版本加 `PET_AUTOUPDATE_KEEP` 個舊版本（預設 3）。
+- 最舊的先刪。目前版本與上一版永遠不刪。
+- 沒有版本在用的 venv 一起刪。
+
+### 16.7 不自動做的事（「需要手動安裝」）
+新版本改到下面這些，更新程式**不切換**：
+- 把那個 commit 標成 `held`，管理頁顯示「需要手動安裝」。
+- 由桌寵專案機器人1 用 `tools/deploy/deploy.sh <pi|r7> --apply <commit>` 手動部署，並做實機驗收。
+
+| 改到的東西 | 為什麼不自動 |
+|---|---|
+| systemd unit、timer、polkit 規則（代換後跟已安裝的不同） | 要 root 和 `daemon-reload`；改錯可能讓服務起不來 |
+| apt 套件、R7 要 pip 的新套件 | 要 root 或改 ComfyUI 的 Python |
+| `tools/wifi/` 的系統檔 | 改錯會讓救援熱點失效 |
+| R7 工作排程器的工作定義（`install_task.ps1`） | 要重新註冊工作 |
+| Rust 守護程式的執行檔（在 16.8 決定之前） | 見 16.8 |
+| `tools/deploy/manual-steps.txt` 多了這台機器還沒做過的項目 | 例如資料遷移；做完由 `deploy.sh --apply` 記進機器的 `state/applied-steps.txt` |
+
+- 這樣更新程式就只需要 @USER@ 權限加上「重啟幾個指定服務」，不需要 root。
+
+### 16.8 Rust 守護程式的執行檔怎麼到 Pi（待決定）
+- 現在的決定（v2.6）：
+  - 在 box 用 rustup 交叉編譯成 `aarch64-unknown-linux-musl`。
+  - 執行檔不進 git、不放 GitHub Releases，裝在 Pi 的 `/opt/<名稱>/<版本>/`。
+- 自動更新只拉原始碼，所以要決定執行檔怎麼來：
+
+| 方案 | 做法 | 優點 | 缺點 |
+|---|---|---|---|
+| A. 在 Pi 上編 | 更新程式在 Pi 跑 `cargo build --release -j2` | 不用別的地方 | Pi 3B 只有 905 MB 記憶體，可能要十幾分鐘到更久，也可能記憶體不足；編譯時 CPU 滿載會拖到桌寵的 20 fps；Pi 要裝 rustup。**不建議** |
+| B. CI 編譯、放 GitHub Release | main 每次合併由 CI 交叉編譯，以 commit 為名附在 Release（附 sha256）；更新程式不帶帳號下載、驗證 sha256 | 跟原始碼同一個 commit、可重現；不用帳號；box 不用參與 | 要改 v2.6「不放 GitHub Releases」的決定；CI 多幾分鐘 |
+| C. box 編、推到 Pi | box 編好用 ssh／scp 推過去 | 沿用現在的做法 | 不是 pull-based，box 要能 ssh 進 Pi，跟這節的原則衝突 |
+| D. Rust 先不自動更新 | Rust 相關路徑有改就標「需要手動安裝」，由桌寵專案機器人1 在 box 編、手動裝 | 最安全、現在就能做 | Rust 改動要等人 |
+
+- **建議：先用 D**（piwifi 還沒寫，而且它管救援熱點，出錯代價高）。piwifi 穩定後改成 **B**。
+- B 的額外保護：
+  - 只在 `services/<名稱>/` 有改時才換執行檔。
+  - 照現有規格裝到 `/opt/<名稱>/<版本>/`、換 `/usr/local/bin/<名稱>` 連結。
+  - 健康檢查加 `<名稱> status`。
+  - 救援熱點開著時不換 piwifi。
+  - 回退就是改回連結。
+  - `/opt` 要 root：B 要另外給更新程式一個只能寫 `/opt/<名稱>/` 的小 helper，或維持手動。
+
+### 16.9 Pi 與 R7 的排程（跟現有的共存）
+**Pi**
+- `desktop-pet-update.service`：`Type=oneshot`、`User=@USER@`、`EnvironmentFile=/etc/desktop-pet/env`、`Nice=10`、`IOSchedulingClass=idle`。
+  - 執行 `/usr/bin/python3 @HOME@/desktop-pet/tools/deploy/autoupdate.py --once`。
+- `desktop-pet-update.timer`：`OnBootSec=5min`、`OnUnitActiveSec=5min`、`RandomizedDelaySec=60`。實際間隔由 `PET_AUTOUPDATE_INTERVAL` 決定。
+  - 不跟任何服務有 `Requires=`／`BindsTo=`。更新程式失敗不影響桌寵、picam、piscreen。
+- 日誌：`journalctl -u desktop-pet-update`，加上 `updates.jsonl`。
+- `desktop-pet.service`、`picam.service` 改成 `EnvironmentFile=/etc/desktop-pet/env`，ExecStart 拿掉跟機器有關的參數（後端網址、token 檔、pack 路徑都從環境讀）。
+  - `Wants=`／`After=` 的規則不變（絕不 `Requires=` piscreen）。
+
+**R7**
+- 新增工作排程器的工作 `DesktopPet Update`：
+  - 執行後端的使用者登入時開始，每 5 分鐘重複。
+  - 只在使用者登入時執行，不存密碼、不需要系統管理員。
+  - 「已在執行就不啟動新的」。
+  - 執行 `pythonw.exe %LOCALAPPDATA%\desktop-pet\current\tools\deploy\autoupdate.py --once`（沒有視窗）。
+- 既有的工作 `DesktopPet Backend` 與 supervise.py **保留**，只改路徑：
+  - 工作的動作改成 `pythonw.exe %LOCALAPPDATA%\desktop-pet\current\backend\autostart\supervise.py`（`install_task.ps1` 加參數）。
+  - supervise.py 用 `os.path.abspath`（不用 `realpath`）算路徑，所以重啟後端時會經過 `current` junction 拿到新版本。
+  - supervise.py 讀環境檔，把變數傳給後端。
+  - 日誌改到 `PET_BACKEND_LOG_DIR`。
+  - 8090 的防重複檢查改用 `PET_BACKEND_PORT`。
+  - 18090 鎖、退避、重啟紀錄都不變。
+- 更新程式重啟後端的方式見 16.6。手動開的後端（8090 已被占用）照現在的規則，supervise.py 不會搶。
+
+**一次性遷移（實作 PR 合併後，由桌寵專案機器人1 手動做；每一步都可以回到上一步）**
+- Pi：
+  1. 把 repo 的 `deploy.env` 的值寫進 `/etc/desktop-pet/env`（root:@USER@ 0640），加上新的變數。
+  2. 動畫包搬到 `@HOME@/.local/share/desktop-pet/packs/`。
+  3. 現在的 `@HOME@/desktop-pet` 資料夾改名成 `@HOME@/desktop-pet-releases/<日期>-legacy/`，建 symlink 指過去。
+  4. 裝新的 unit（`EnvironmentFile=`、picam 從版本目錄執行）、timer、polkit 規則。
+  5. `autoupdate.py --once --dry-run` 確認會做什麼，再 enable timer。
+  6. 舊的 `deploy.env` 保留一個版本當備援。`@HOME@/picam` 在穩定 1 週後刪除。
+  - 回退：停用 timer，symlink 指回 legacy 目錄，裝回舊 unit。
+- R7：
+  1. 建 `%LOCALAPPDATA%\desktop-pet\` 的資料夾。
+  2. **複製**（不是搬）`backend\config.json` 和 `backend\data\` 過去，比對檔案數與大小。
+  3. 寫環境檔。
+  4. 解開第一個版本、建 `current`。
+  5. 用新路徑重新註冊 `DesktopPet Backend`，註冊 `DesktopPet Update`。
+  6. 舊的資料夾 `C:\Users\<user>\desktop-pet` 原樣保留 2 週當備援。
+  - 回退：把 `DesktopPet Backend` 註冊回舊路徑。
+  - 注意：舊資料夾保留期間，新的存檔與照片只寫到新位置。
+
+### 16.10 顯示版本與紀錄
+- 更新程式寫 `status.json`：
+  - 目前 commit（短碼）、`describe`、部署時間、上一版。
+  - 自動更新狀態（`on`、`paused`、`pinned`、`held`、`broken`）、暫停原因。
+  - 上次檢查時間與結果、`failed.json` 的內容。
+- **Pi 管理頁**（現在是 :8080 遙控頁，之後是 `desktop-pet-admin`）加一塊唯讀的「版本」：
+  - 上面這些資訊，commit 連到 GitHub 上那個 commit。
+  - 第一版**不放按鈕**（內網頁沒有密碼，不給它能觸發更新或暫停）。
+- **R7 控制網頁**（v2.7，8091，只限內網）的「狀態」頁加同樣的「部署」區塊。
+  - 控制網頁做好之前，帶 token 的 `/health` 回 `commit`。不帶 token 的 `/health` 照 v2.7 規格，不多給資訊。
+- **紀錄** `updates.jsonl`：每次嘗試一行。
+  - 欄位：時間（UTC＋時區）、從哪個 commit、到哪個 commit、結果（`ok`、`no_change`、`paused`、`ci_pending`、`held`、`failed`、`rolled_back`、`broken`）、各步驟耗時、健康檢查明細、原因。
+  - 超過 1 MB 截掉舊的。
+  - **不寫 token、不寫環境檔的值**（只寫變數名稱）、不寫 Wi‑Fi 名稱。
+- 後端與桌寵啟動時在日誌第一行寫自己的 commit。
+
+### 16.11 安全
+- 自動更新代表「**能合併到 main 的人就能改兩台機器上跑的程式**」。
+  - 現在使用者、三個 bot、Antigravity 共用同一個 GitHub 帳號，ruleset 的核准數是 0。所以 CI 綠燈的 PR 只要有人按合併，就會自動上線。
+  - 規則上只有使用者合併；要用技術保證，見「待決定」第 1 題。
+- 機器端只信任 HTTPS 連到 github.com／codeload.github.com 的內容（驗證憑證），只接受 `PET_AUTOUPDATE_REPO` 的 `PET_AUTOUPDATE_BRANCH`。
+- 更新程式不需要、也不保存任何 GitHub 憑證。機器上不開新的入站連接埠。
+- Pi 上更新程式不是 root：權限只有寫自己的目錄，加上 polkit 允許的幾個 unit 的重啟。
+
+### 16.12 驗收（實作時）
+- 合併一個只改文件的 PR：兩台在 15 分鐘內都顯示新 commit，**沒有**重啟任何服務。
+- 合併一個改 `pet/` 的 PR：Pi 只重啟 `desktop-pet`。
+  - 健康檢查通過，20 fps，piscreen 錯誤與救援 0。
+  - picam、piscreen 的 PID 不變。
+- 故意做一個切換前檢查會過、但啟動會失敗的版本（只在測試分支用 `PET_AUTOUPDATE_BRANCH` 指過去測，不進 main）：
+  - 兩台都自動回到上一版，`failed.json` 有紀錄，下一輪不重試。
+- `PET_AUTOUPDATE=0`、暫停檔、手動改檔案三種暫停都有效。
+- 拔網路：更新程式只記錄，不影響運作；救援熱點開著時不更新。
+- 改 unit 的 PR：標成 `held`，不切換。
+- 檢查期間 `piscreen.service` 沒有被 stop／restart（看 journal），沒有重開機。
+- R7：llama-server、ComfyUI 的 PID 不變。手動開的後端不會被搶。
+
+### 16.13 待決定（v2.9）
+1. **合併權限**：自動部署後，main 等於正式版。要不要讓 bot 改用獨立的 GitHub 帳號（machine user），ruleset 改成需要使用者核准 1 次？（v2.8 的同一題，現在更重要。）
+2. **Rust 執行檔**：先用 D（Rust 不自動更新），piwifi 穩定後改 B（CI 編譯放 GitHub Release，等於改掉 v2.6「不放 GitHub Releases」的決定）。可以嗎？
+3. **檢查間隔**：預設 10 分鐘可以嗎？要不要限定更新時段（例如半夜不更新，或只在半夜更新）？
+4. **CI 雙重確認**：除了 main 只收綠燈 PR，機器端再查一次 commit 的 CI（預設開）。可以嗎？
+5. **只改文件的 commit**：只切換連結、不重啟服務。可以嗎？
+6. **暫停方式**：除了環境檔的 `PET_AUTOUPDATE=0`，也允許不用 sudo 的暫停檔，而且手動改檔案會自動暫停。可以嗎？
+7. **R7 的設定方式**：用環境檔 `%LOCALAPPDATA%\desktop-pet\env`（建議，改完只要重啟後端），還是直接用 Windows 使用者環境變數（要重新登入）？
+8. **R7 資料搬家**：`config.json`、`backend\data\` 搬到 `%LOCALAPPDATA%\desktop-pet\`，舊資料夾留 2 週。位置和保留時間可以嗎？要不要順便做定期備份？
+9. **R7 的 token**：繼續放在 `config.json` 的 `server.api_token`，還是改成 `PET_BACKEND_API_TOKEN_FILE` 指的檔案（建議，跟 Pi 一致，也方便 v2.7 的金鑰檔）？
+10. **管理頁按鈕**：Pi 管理頁和 R7 控制網頁第一版只顯示版本、不放「立即更新／暫停」按鈕。可以嗎？
+11. **保留版本數**：目前版本加 3 個舊版本。可以嗎？
+12. **需要手動部署的 PR**（資料遷移等機器自己看不出來的）：用 repo 裡的 `tools/deploy/manual-steps.txt`（建議：跟程式同一個 commit，不用 API）標記。可以嗎？

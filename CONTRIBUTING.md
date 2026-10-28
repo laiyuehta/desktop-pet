@@ -9,6 +9,7 @@
 3. **commit 訊息**：`<type>(<scope>): <摘要>`，例如 `fix(wifi): 熱點關閉後沒有重連`。
 4. **開 PR**（用範本）：寫對應規格、`Closes #n`、測試、部署影響、回退方式。
    CI 要綠燈；由使用者核准並用 **squash merge** 合併。不要直接 push 到 main。
+   **main 就是正式版**：合併後部署的是 main 的最新 commit（tag 只是里程碑，不是部署條件）；自動部署上線後，合併約 10 分鐘內 Pi 與 R7 就會自動更新（項目書「16. 自動部署」）。需要手動步驟（unit、apt、資料遷移）的 PR 要照 16.7 標記。
 5. **規格**先走 `spec/` PR 給使用者核准，實作 PR 再引用那個規格版本或 PR。
 6. **不要 force push、不要改寫歷史**。分支推上去以後，要跟上 main 就 merge main 進來，不要 rebase。
 7. **負責範圍**看 `.github/CODEOWNERS`；改到別人負責的路徑要在 PR 標出來，請負責的人確認。
@@ -28,10 +29,10 @@ Antigravity 是使用者在自己的 Windows 電腦上跑的 AI 開發 agent，�
 
 **不碰**
 - 美術與動畫：`packs/`、`assets/`、`preview/`、動畫規格（桌寵專案機器人2 負責）。
-- 機器上的設定：`deploy.env`、`backend/config.json`。
+- 機器上的設定：`deploy.env`、`/etc/desktop-pet/env`、R7 的環境檔、`backend/config.json`。新增的設定值要做成環境變數（見項目書 16.2），在 PR 寫變數名稱，不寫值。
 - Pi 與 R7 上的任何東西，包括 piscreen。不改 piscreen 的程式，也不改 `piscreen.service`。
 - **不用 ssh 連 Pi 或 R7，不部署，不需要任何密碼、token 或金鑰。**
-- 部署與實機驗收由桌寵專案機器人1 在合併後負責。要在機器上量的東西寫進 PR 的「部署影響」，請它測。
+- 部署跟著 main：自動部署上線前由桌寵專案機器人1 在合併後手動部署，上線後由機器自己更新；實機驗收一律由桌寵專案機器人1 負責。要在機器上量的東西寫進 PR 的「部署影響」，請它測。
 
 **流程**
 1. 動手前先讀 PROPOSAL.md 相關章節：一定要讀「整體架構」（含「主程式 ↔ 前端後台的接口」「守護程式的共同規範」「Rust 怎麼編給 Pi 3B」「piwifi」「遷移步驟」）和「15. 開發流程」，再讀任務 Issue 指定的章節。
