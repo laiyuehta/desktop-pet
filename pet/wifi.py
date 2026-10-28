@@ -440,7 +440,7 @@ class WifiManager:
             return
         # 成功：自動記錄、排到最前面
         new_uuid = created or up_uuid
-        self._promote(new_uuid, autoconnect=True)
+        self._promote(new_uuid, autoconnect=bool(created))   # 原本就有的設定只在需要時調優先值
         if created:
             for s in saved:      # 同一個 SSID 的舊設定（舊密碼）已經被取代
                 if s["ssid"] == ssid and s["uuid"] != new_uuid:
