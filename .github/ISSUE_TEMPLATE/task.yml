@@ -1,0 +1,32 @@
+name: 任務
+description: 要做的功能、規格或整理
+labels: [task]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 種類（決定分支前綴）
+      options: [feat 功能, fix 修正, spec 規格, anim 動畫／美術, chore 整理／工具]
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: 要做什麼
+    validations:
+      required: true
+  - type: input
+    id: spec
+    attributes:
+      label: 對應規格
+      description: 項目書版本或章節、規格 PR（實作任務一定要有）
+  - type: dropdown
+    id: owner
+    attributes:
+      label: 負責
+      options: [桌寵專案機器人1（程式）, 桌寵專案機器人2（美術／動畫）, 桌寵專案機器人3（公開／歷史）, 使用者]
+  - type: textarea
+    id: done
+    attributes:
+      label: 完成條件
+      placeholder: "- [ ] …"
