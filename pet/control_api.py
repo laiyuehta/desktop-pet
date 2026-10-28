@@ -240,24 +240,29 @@ class ControlAPIServer:
             daemon_threads = True
             allow_reuse_address = True
 
-        server = UnixServer(self.path, ControlAPIHandler)
-        server.version = self.version
-        server.started = self.started
-        server.camera = self.camera
-        server.get_status = self.get_status
-        server.post_event = self.post_event
-        server.get_fps = self.get_fps
-
         try:
-            os.chmod(self.path, 0o660)
-        except OSError:
-            pass
+            server = UnixServer(self.path, ControlAPIHandler)
+            server.version = self.version
+            server.started = self.started
+            server.camera = self.camera
+            server.get_status = self.get_status
+            server.post_event = self.post_event
+            server.get_fps = self.get_fps
 
-        self.httpd = server
-        self.running = True
-        self.thread = threading.Thread(target=self.httpd.serve_forever, name="control-api", daemon=True)
-        self.thread.start()
-        log.info("控制 API 服務已啟動：%s", self.path)
+            try:
+                os.chmod(self.path, 0o660)
+            except OSError:
+                pass
+
+            self.httpd = server
+            self.running = True
+            self.thread = threading.Thread(target=self.httpd.serve_forever, name="control-api", daemon=True)
+            self.thread.start()
+            log.info("控制 API 服務已啟動：%s", self.path)
+        except OSError as exc:
+            log.warning("無法啟動 control.sock %s：%s（略過啟動）", self.path, exc)
+            self.running = False
+            self.httpd = None
 
     def stop(self) -> None:
         self.running = False
@@ -271,3 +276,4 @@ class ControlAPIServer:
             except OSError:
                 pass
         log.info("控制 API 服務已停止：%s", self.path)
+

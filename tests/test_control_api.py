@@ -129,3 +129,4 @@ def test_control_api_routes(tmp_path):
         conn.close()
     finally:
         srv.stop()
+

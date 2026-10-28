@@ -76,3 +76,4 @@ def test_frames_latest_and_subscribe(tmp_path):
         sub2.close()
     finally:
         srv.stop()
+

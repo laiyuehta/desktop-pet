@@ -65,3 +65,4 @@ python3 admin.py [參數]
    ```bash
    sudo systemctl restart desktop-pet
    ```
+

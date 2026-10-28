@@ -24,3 +24,4 @@ sudo systemctl start desktop-pet-admin
 sleep 2
 systemctl is-enabled desktop-pet-admin
 systemctl is-active desktop-pet-admin
+

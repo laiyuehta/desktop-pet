@@ -168,3 +168,4 @@ class ScreenWebAPI:
             m.streamed += sent
             m.release()
             log.debug("螢幕串流結束：送了 %d 張", sent)
+

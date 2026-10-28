@@ -100,18 +100,23 @@ class FramesServer:
             except OSError as exc:
                 log.warning("無法建立 socket 資料夾 %s：%s", parent, exc)
 
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.bind(self.path)
         try:
-            os.chmod(self.path, 0o660)
-        except OSError:
-            pass
-        s.listen(4)
-        self._sock = s
-        self._running = True
-        self._accept_thread = threading.Thread(target=self._accept_loop, name="frames-accept", daemon=True)
-        self._accept_thread.start()
-        log.info("畫面供應服務已啟動：%s", self.path)
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.bind(self.path)
+            try:
+                os.chmod(self.path, 0o660)
+            except OSError:
+                pass
+            s.listen(4)
+            self._sock = s
+            self._running = True
+            self._accept_thread = threading.Thread(target=self._accept_loop, name="frames-accept", daemon=True)
+            self._accept_thread.start()
+            log.info("畫面供應服務已啟動：%s", self.path)
+        except OSError as exc:
+            log.warning("無法啟動 frames.sock %s：%s（略過啟動）", self.path, exc)
+            self._running = False
+            self._sock = None
 
     def _accept_loop(self) -> None:
         while self._running and self._sock:
@@ -140,7 +145,7 @@ class FramesServer:
             if cmd == "latest":
                 frame = self.latest()
                 if frame is None:
-                    conn.sendall(json.dumps({"ok": False, "error": "還沒有畫面"}).encode("utf-8") + b"\n")
+                    conn.sendall(json.dumps({"ok": False, "error": "還沒有畫面"}, ensure_ascii=False).encode("utf-8") + b"\n")
                 else:
                     seq, ts, data, meta = frame
                     header = {
@@ -163,6 +168,8 @@ class FramesServer:
                         conn.close()
                         return
                     self._subscribers.add(sub)
+                    if self._latest_frame is not None:
+                        sub.offer(self._latest_frame)
 
                 conn.sendall(json.dumps({"ok": True, "proto": 1}).encode("utf-8") + b"\n")
                 conn.settimeout(None)
@@ -247,3 +254,4 @@ class FrameBroadcaster:
                 t.publish(data, meta)
             except Exception:
                 pass
+

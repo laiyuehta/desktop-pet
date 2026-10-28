@@ -157,6 +157,12 @@ def test_admin_forwarding_and_reconnect(tmp_path):
         assert events[-1]["type"] == "talk"
 
         # 7. 測試畫面同步 /screen.jpg 與 /screen.info
+        for _ in range(50):
+            if admin.mirror.latest()[2] is not None:
+                break
+            core_frames.publish(b"admin-test-jpeg", {"mode": "live", "clip": "idle"})
+            time.sleep(0.05)
+
         code, body, headers = http_get(f"{base_url}/screen.jpg")
         assert code == 200
         assert headers.get("content-type") == "image/jpeg" or headers.get("Content-Type") == "image/jpeg"
@@ -171,3 +177,4 @@ def test_admin_forwarding_and_reconnect(tmp_path):
         admin.stop()
         core_ctrl.stop()
         core_frames.stop()
+
