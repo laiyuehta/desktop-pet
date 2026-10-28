@@ -31,15 +31,21 @@ def test_frames_latest_and_subscribe(tmp_path):
         s2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s2.connect(sock_path)
         s2.sendall(json.dumps({"v": 1, "cmd": "latest"}).encode("utf-8") + b"\n")
-        line = b""
-        while b"\n" not in line:
-            line += s2.recv(1024)
+        raw = b""
+        while b"\n" not in raw:
+            raw += s2.recv(1024)
+        line, buf = raw.split(b"\n", 1)
         header = json.loads(line.decode("utf-8"))
         assert header["ok"] is True
         assert header["size"] == len(b"test-jpeg-1")
-        len_bytes = s2.recv(4)
+        while len(buf) < 4:
+            buf += s2.recv(1024)
+        len_bytes = buf[:4]
+        buf = buf[4:]
         assert struct.unpack(">I", len_bytes)[0] == len(b"test-jpeg-1")
-        payload = s2.recv(len(b"test-jpeg-1"))
+        while len(buf) < len(b"test-jpeg-1"):
+            buf += s2.recv(1024)
+        payload = buf[:len(b"test-jpeg-1")]
         assert payload == b"test-jpeg-1"
         s2.close()
 

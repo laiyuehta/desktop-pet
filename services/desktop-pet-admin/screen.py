@@ -88,7 +88,17 @@ class ScreenWebAPI:
 
     def info(self) -> dict:
         seq, ts, data, meta = self.mirror.latest()
-        st = self.status_fn() or {}
+        raw_st = self.status_fn()
+        if isinstance(raw_st, bytes):
+            try:
+                import json
+                st = json.loads(raw_st.decode("utf-8"))
+            except Exception:
+                st = {}
+        elif isinstance(raw_st, dict):
+            st = raw_st
+        else:
+            st = {}
         render = st.get("render") or {}
         mode = meta.get("mode") or render.get("mode") or "live"
         core_online = self.is_core_online_fn()

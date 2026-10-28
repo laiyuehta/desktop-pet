@@ -139,8 +139,14 @@ class FramesSubscriber:
                 sock.settimeout(3.0)
                 sock.connect(self.socket_path)
                 sock.sendall(json.dumps({"v": 1, "cmd": "subscribe", "fps": 10}).encode("utf-8") + b"\n")
-                first = sock.recv(1024)
-                first_cmd = json.loads(first.decode("utf-8").strip() or "{}")
+                buf = b""
+                while b"\n" not in buf:
+                    chunk = sock.recv(1024)
+                    if not chunk:
+                        raise OSError("連線關閉")
+                    buf += chunk
+                first_line, buf = buf.split(b"\n", 1)
+                first_cmd = json.loads(first_line.decode("utf-8").strip() or "{}")
                 if not first_cmd.get("ok"):
                     log.warning("訂閱畫面失敗：%s", first_cmd.get("error"))
                     sock.close()
@@ -149,7 +155,6 @@ class FramesSubscriber:
 
                 self.connected = True
                 sock.settimeout(5.0)
-                buf = b""
                 while not self._stop.is_set():
                     while b"\n" not in buf:
                         chunk = sock.recv(4096)
@@ -204,9 +209,18 @@ class AdminServer:
         self.frames = FramesSubscriber(frames_socket, self.mirror)
         self.wifi = wifi_manager
         self.wifi_api = WifiWebAPI(wifi_manager) if wifi_manager else None
+        def get_core_status():
+            try:
+                code, body, _, _ = self.control.forward("GET", "/v1/status")
+                if code == 200:
+                    return json.loads(body.decode("utf-8"))
+            except Exception:
+                pass
+            return {}
+
         self.screen_api = ScreenWebAPI(
             self.mirror,
-            status_fn=lambda: self.control.forward("GET", "/v1/status")[1],
+            status_fn=get_core_status,
             is_core_online_fn=lambda: self.control.connected or self.frames.connected,
         )
         self.started_ts = time.time()
