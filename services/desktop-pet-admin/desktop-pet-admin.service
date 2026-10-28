@@ -1,0 +1,19 @@
+[Unit]
+Description=desktop-pet-admin frontend management (web remote, screen mirror, wifi manager)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+WorkingDirectory=@HOME@/desktop-pet
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 @HOME@/desktop-pet/services/desktop-pet-admin/admin.py --listen 0.0.0.0:8080 --control-socket /run/desktop-pet/control.sock --frames-socket /run/desktop-pet/frames.sock --wifi auto
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
