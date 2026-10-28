@@ -302,8 +302,8 @@ python3 -m unittest discover -s tests -v     # 不需要額外套件（pytest �
 
 ## 授權
 
-- **程式碼、工具與設定**（含 `tools/gen_seed_parts.py`、`config/bake.json`、`config/states.json`）：MIT，見 [LICENSE](LICENSE)。
+- **程式碼、工具、設定與預覽圖**（含 `tools/gen_seed_parts.py`、`config/bake.json`、`config/states.json`、`preview/` 的 `demo.gif` 與各狀態 PNG）：MIT，見 [LICENSE](LICENSE)。
 - **美術素材 `assets/`**（含 `assets/skeletons/`、`assets/parts/`）：[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)（姓名標示－非商業性），見 [assets/LICENSE](assets/LICENSE)。署名：laiyuehta（https://github.com/laiyuehta/desktop-pet）。
 - 由素材烘焙出的動畫包 `packs/`（不進 repo）屬衍生作品，同樣適用 CC BY-NC 4.0。
 
-English: code, tools and `config/` are MIT; everything under `assets/` (and packs baked from it) is CC BY-NC 4.0 — see [assets/LICENSE](assets/LICENSE).
+English: code, tools, `config/` and `preview/` are MIT; everything under `assets/` (and packs baked from it) is CC BY-NC 4.0 — see [assets/LICENSE](assets/LICENSE).

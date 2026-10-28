@@ -35,4 +35,4 @@ Files under assets/ (including assets/skeletons/ and assets/parts/) are NOT
 covered by the MIT License above. They are licensed under the Creative
 Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0);
 see assets/LICENSE. Animation packs baked from them (packs/) inherit
-CC BY-NC 4.0. Code, tools and config/ remain under the MIT License.
+CC BY-NC 4.0. Code, tools, config/ and preview/ remain under the MIT License.

@@ -6,8 +6,9 @@ International License (CC BY-NC 4.0). Attribution: laiyuehta
 Scope: everything under assets/ (including assets/skeletons/ and
 assets/parts/). Animation packs baked from these assets (packs/, not
 tracked in git) are derived works and are also under CC BY-NC 4.0.
-Code, tools (including tools/gen_seed_parts.py) and config/ remain under
-the MIT License in the repository root LICENSE.
+Code, tools (including tools/gen_seed_parts.py), config/ and preview/
+(demo.gif and state PNGs) remain under the MIT License in the
+repository root LICENSE.
 
 The full legal code of CC BY-NC 4.0 follows, verbatim from
 https://creativecommons.org/licenses/by-nc/4.0/legalcode.txt
