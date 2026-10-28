@@ -25,6 +25,11 @@
   .dim { color: var(--dim); font-size: 0.85rem; }
   #toast { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); background: #000c; padding: 8px 14px;
            border-radius: 20px; font-size: 0.9rem; opacity: 0; transition: opacity .2s; pointer-events:none; }
+  .talk { display: flex; gap: 8px; }
+  .talk input { flex: 1; min-width: 0; font: inherit; font-size: 1rem; padding: 10px 12px; border-radius: 10px;
+                border: 1px solid #36507a; background: #0f1626; color: var(--fg); }
+  .talk button { flex: none; padding: 8px 16px; }
+  #st-say { color: var(--fg); }
   #log { font-family: ui-monospace, monospace; font-size: 0.78rem; color: var(--dim); white-space: pre-wrap; max-height: 9em; overflow: auto; }
 </style>
 </head>
@@ -40,8 +45,19 @@
     <span>表情</span><span id="st-eyes">—</span>
     <span>畫面 FPS</span><span id="st-fps">—</span>
     <span>最後事件</span><span id="st-last">—</span>
+    <span>大腦（後端）</span><span id="st-backend">—</span>
+    <span>寵物說</span><span id="st-say">—</span>
   </div>
   <div class="dim" id="st-conn">連線中…</div>
+</div>
+
+<div class="card">
+  <h2>跟寵物說話</h2>
+  <form class="talk" id="talk-form">
+    <input id="talk-text" maxlength="200" placeholder="想對種子說什麼？" autocomplete="off" enterkeyhint="send">
+    <button type="submit" class="acc">送出</button>
+  </form>
+  <div class="dim">會轉給後端的本機 AI 回覆；後端沒開時寵物會說「大腦在休息」。</div>
 </div>
 
 <div class="card">
@@ -114,6 +130,13 @@ document.querySelectorAll("[data-ev]").forEach(b => b.onclick = () => post("/eve
 document.querySelectorAll("[data-state]").forEach(b => b.onclick = () => post("/control", { cmd: "set_state", state: b.dataset.state }, b.textContent.trim()));
 document.querySelectorAll("[data-stage]").forEach(b => b.onclick = () => post("/control", { cmd: "set_stage", stage: +b.dataset.stage }, b.textContent.trim()));
 document.querySelectorAll("[data-act]").forEach(b => b.onclick = () => post("/actuator", JSON.parse(b.dataset.act), b.textContent.trim()));
+$("#talk-form").onsubmit = (e) => {
+  e.preventDefault();
+  const t = $("#talk-text").value.trim();
+  if (!t) return;
+  post("/talk", { text: t }, "說話");
+  $("#talk-text").value = "";
+};
 async function poll() {
   try {
     const s = await (await fetch("/status", { cache: "no-store" })).json();
@@ -123,6 +146,9 @@ async function poll() {
     $("#st-eyes").textContent = s.eyes || "—";
     $("#st-fps").textContent = s.fps != null ? s.fps.toFixed(1) : "—";
     $("#st-last").textContent = s.last_event ? (s.last_event.type + ":" + s.last_event.name) : "—";
+    const b = s.backend;
+    $("#st-backend").textContent = !b ? "未設定" : (b.online === true ? "已連線" : b.online === false ? "離線（" + (b.last_error || "") + "）" : "連線中…");
+    $("#st-say").textContent = s.bubble || s.last_say || "—";
     $("#log").textContent = (s.actuator_log || []).slice(-6).reverse().join("\n");
     document.querySelectorAll("[data-state]").forEach(b => b.classList.toggle("on", b.dataset.state === s.state));
     document.querySelectorAll("[data-stage]").forEach(b => b.classList.toggle("on", +b.dataset.stage === s.stage));

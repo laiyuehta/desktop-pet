@@ -5,6 +5,8 @@
     python3 main.py --sink preview --input keyboard,web
 樹莓派（piscreen 服務已在跑）：
     python3 main.py --sink piscreen --input web --web 0.0.0.0:8080
+接後端（大腦，跑在 R7）：
+    python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 """
 
 from __future__ import annotations
@@ -37,6 +39,11 @@ def parse_args(argv=None):
     p.add_argument("--idle-timeout", type=float, default=None,
                    help="覆寫閒置秒數（測試用，例如 10；預設用設定檔的 600）")
     p.add_argument("--duration", type=float, default=0, help="跑幾秒後自動結束（0 = 不限）")
+    p.add_argument("--backend", default=None,
+                   help="後端（大腦）網址，例如 http://192.0.2.100:8090；預設不接")
+    p.add_argument("--pet-id", default="seed-001", help="寵物 ID（後端存檔用）")
+    p.add_argument("--backend-token", default="", help="後端 api_token（有設才需要）")
+    p.add_argument("--font", default=None, help="對話框中文字型路徑（預設自動尋找）")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -55,7 +62,8 @@ def main(argv=None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log = logging.getLogger("main")
     overrides = {"idle_timeout": args.idle_timeout} if args.idle_timeout else None
-    app = PetApp(args.config, timer_overrides=overrides)
+    app = PetApp(args.config, timer_overrides=overrides, backend_url=args.backend, pet_id=args.pet_id,
+                 backend_token=args.backend_token, font_path=args.font)
     sink = make_sink(args)
     stop = {"flag": False}
 

@@ -4,6 +4,7 @@
   p 摸頭(pat)   o 戳一下(poke)   b 按鈕(press)   v 有人靠近(person_near)
   w 叫醒(wake)  s 去睡覺(sleep)   1/2/3 切換成長階段
   state <名稱>  強制切狀態        n 點頭  h 搖頭（外部控制器測試）
+  t <文字>      對寵物說話（有接後端時由 LLM 回覆）
   q 結束程式
 也可以直接輸入事件名稱，例如 idle_timeout。
 """
@@ -54,6 +55,8 @@ class KeyboardInput(InputAdapter):
             self.emit(make_event("control", "set_stage", source=self.source, stage=int(cmd)))
         elif cmd == "state" and len(parts) > 1:
             self.emit(make_event("control", "set_state", source=self.source, state=parts[1]))
+        elif cmd == "t" and len(parts) > 1:
+            self.emit(make_event("talk", "talk", source=self.source, text=line.split(None, 1)[1]))
         elif cmd in ("n", "h"):
             self.emit(make_event("action", "motion", source=self.source,
                                  params={"motion": "nod" if cmd == "n" else "shake"}))

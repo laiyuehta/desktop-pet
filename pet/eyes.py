@@ -42,6 +42,8 @@ EXPRESSIONS: Dict[str, EyeState] = {
     "sleep": EyeState(shape="closed", glow=0.5, mouth="tiny"),
     "squint": EyeState(open=0.35, glow=0.9),
     "surprised": EyeState(size=1.15, glow=1.3, mouth="open"),
+    "sleepy": EyeState(open=0.25, glow=0.6, look_y=0.4, mouth="tiny"),
+    "sad": EyeState(open=0.7, glow=0.55, size=0.92, look_y=0.6, mouth="flat"),
 }
 
 

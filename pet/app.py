@@ -13,10 +13,10 @@ import logging
 import os
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from .actuators import ActuatorHub, LoggingActuator
-from .events import make_event
+from .events import INTERACTION_TYPES, make_event
 from .extensions import EventBus, ExampleExtension, ExtensionManager
 from .eyes import EyeController
 from .renderer import Renderer
@@ -29,14 +29,16 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 class PetApp:
     def __init__(self, config_path: Optional[str] = None, timer_overrides: Optional[Dict[str, float]] = None,
-                 use_clock: bool = True, eye_seed: Optional[int] = None, actuators: Optional[ActuatorHub] = None):
+                 use_clock: bool = True, eye_seed: Optional[int] = None, actuators: Optional[ActuatorHub] = None,
+                 backend_url: Optional[str] = None, pet_id: str = "seed-001", backend_token: str = "",
+                 font_path: Optional[str] = None, backend_opts: Optional[dict] = None):
         config_path = config_path or os.path.join(ROOT, "config", "states.json")
         with open(config_path, "r", encoding="utf-8") as fh:
             self.config = json.load(fh)
         self.bus = EventBus()
         self.fsm = StateMachine(self.config, timer_overrides=timer_overrides, emit=self.bus.publish)
         self._skeleton_cache: Dict[int, Skeleton] = {}
-        self.renderer = Renderer(self._load_stage_skeleton(self.fsm.growth.stage))
+        self.renderer = Renderer(self._load_stage_skeleton(self.fsm.growth.stage), font_path=font_path)
         self.eyes = EyeController(seed=eye_seed)
         self.logger_actuator = LoggingActuator()
         self.actuators = actuators or ActuatorHub([self.logger_actuator])
@@ -51,6 +53,14 @@ class PetApp:
         self._status: dict = {}
         self._status_lock = threading.Lock()
 
+        # 後端（大腦）：可選，沒設定或連不上時寵物照常運作
+        self.backend = None
+        if backend_url:
+            from .backend_client import BackendClient
+            self.backend = BackendClient(backend_url, pet_id, self.bus.publish, status_fn=self.status,
+                                         token=backend_token, **(backend_opts or {}))
+            _ = self.renderer.bubble     # 先載入中文字型，避免第一次說話時卡一下
+
         self.fsm.state_listeners.append(self._on_state_change)
         self.fsm.stage_listeners.append(self._on_stage_change)
         self.bus.subscribe("*", self._route, owner="core")
@@ -60,8 +70,12 @@ class PetApp:
     def start(self) -> None:
         self.actuators.start()
         self.extensions.start_all()
+        if self.backend:
+            self.backend.start()
 
     def stop(self) -> None:
+        if self.backend:
+            self.backend.stop()
         self.extensions.stop_all()
         self.actuators.stop()
 
@@ -91,7 +105,10 @@ class PetApp:
     def _route(self, ev: dict) -> None:
         t = ev.get("type")
         if t == "pet":
+            self._forward(ev)                       # 狀態改變通知後端
             return                                  # 自己發的通知，不再處理
+        if t == "talk":
+            self._talk(ev)
         if t == "control":
             try:
                 if ev.get("name") == "set_state":
@@ -105,6 +122,24 @@ class PetApp:
             self._handle_action(ev)
             return
         self.fsm.handle_event(ev)
+        if t in INTERACTION_TYPES and t != "talk" or t == "time":
+            self._forward(ev)
+
+    # -- 後端 ---------------------------------------------------------------------
+    def _forward(self, ev: dict) -> None:
+        """把事件送給後端（不阻塞）。後端自己發的指令不回送。"""
+        if self.backend and not str(ev.get("source", "")).startswith("backend"):
+            self.backend.send_event(ev, self.fsm.state, self.fsm.growth.stage)
+
+    def _talk(self, ev: dict) -> None:
+        text = str(ev.get("text", "")).strip()
+        if not text:
+            return
+        if self.backend:
+            self.renderer.say("…", seconds=self.backend.talk_timeout)   # 等大腦回覆
+            self.backend.talk(text, self.fsm.state, self.fsm.growth.stage)
+        else:
+            self.renderer.say("（還沒接上大腦）", seconds=3)
 
     def _handle_action(self, ev: dict) -> None:
         """動作請求（ActionRouter）：寵物本體決定怎麼表現。"""
@@ -121,8 +156,13 @@ class PetApp:
                 self.fsm.force(params["state"], reason=ev.get("source", "action"))
             except KeyError as exc:
                 log.warning("%s", exc)
-        elif name in ("say", "sound"):
-            log.info("（第一期尚未實作）%s：%s", name, params)
+        elif name == "say":
+            text = str(params.get("text", "")).strip()
+            if text:
+                self.renderer.say(text, float(params.get("seconds", 4)))
+                self.last_say = text
+        elif name == "sound":
+            log.info("（尚未實作）sound：%s", params)
         else:
             log.warning("未知的動作請求：%s", name)
 
@@ -178,6 +218,9 @@ class PetApp:
             "last_event": {k: last.get(k) for k in ("type", "name", "source")} if last else None,
             "actuator_log": list(self.logger_actuator.history[-10:]),
             "extensions": self.extensions.list(),
+            "backend": self.backend.status() if self.backend else None,
+            "bubble": self.renderer.bubble.text if self.renderer._bubble is not None else None,
+            "last_say": getattr(self, "last_say", None),
         }
         with self._status_lock:
             self._status = st

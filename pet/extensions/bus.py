@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import queue
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, List, Tuple
 
 log = logging.getLogger("pet.bus")
 

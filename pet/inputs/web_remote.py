@@ -6,6 +6,7 @@
   POST /event      送標準事件，例如 {"type":"touch","name":"pat"}
   POST /control    {"cmd":"set_state","state":"sleep"} 或 {"cmd":"set_stage","stage":2}
   POST /actuator   {"motion":"nod"}、{"motion":"wheels","action":"forward"} 等 → 外部控制器接口
+  POST /talk       {"text":"你好"} → 對寵物說話（有接後端時由後端 LLM 回覆）
 
 用 curl 測：
   curl -X POST localhost:8080/event -d '{"type":"touch","name":"pat"}'
@@ -108,6 +109,11 @@ class WebRemoteInput(InputAdapter):
             if cmd == "set_stage":
                 return make_event("control", "set_stage", source=self.source, stage=int(data["stage"]))
             raise ValueError(f"未知的 cmd：{cmd}")
+        if path == "/talk":
+            text = data.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("text 不能是空的")
+            return make_event("talk", "talk", source=self.source, text=text.strip()[:200])
         if path == "/actuator":
             if not data.get("motion"):
                 raise ValueError("缺少 motion")

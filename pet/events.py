@@ -5,6 +5,7 @@
 
 type 常見值：
 - touch / button / vision / sim ：互動輸入（會重置閒置計時）
+- talk    ：對人說話（{"type":"talk","name":"talk","text":"…"}，有接後端時轉給 /v1/pet/talk）
 - time    ：時間事件（idle_timeout、happy_done、night、morning）
 - control ：遙控指令（set_state、set_stage）
 - action  ：動作請求（motion、expression、say、sound），由寵物本體決定怎麼表現
@@ -14,7 +15,7 @@ type 常見值：
 import time
 from typing import Any, Dict, Optional
 
-INTERACTION_TYPES = {"touch", "button", "vision", "sim"}
+INTERACTION_TYPES = {"touch", "button", "vision", "sim", "talk"}
 
 
 def make_event(type_: str, name: str, source: str = "unknown", ts: Optional[float] = None,

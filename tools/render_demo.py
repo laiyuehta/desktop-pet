@@ -4,7 +4,8 @@
 流程：idle → 摸頭 → happy → 回 idle → 閒置逾時 → bored（左右滾動一整圈）→ sleep → 摸頭 → 醒來 idle
 輸出：
   preview/demo.gif（400×240，10 fps）
-  preview/idle.png、preview/happy.png、preview/bored.png（滾動中）、preview/sleep.png（800×480 原尺寸）
+  preview/idle.png、preview/happy.png、preview/say.png（對話框）、preview/bored.png（滾動中）、
+  preview/sleep.png（800×480 原尺寸）
 用法：python3 tools/render_demo.py
 """
 
@@ -27,9 +28,11 @@ BORED_TIMEOUT = 10.5  # 示範用：無聊滾完一整圈（10 秒）再睡
 # (時間, 事件)
 SCRIPT = [
     (2.0, make_event("touch", "pat", source="demo")),
+    # 模擬後端（大腦）回傳的 say / emotion 指令 → 對話框
+    (5.6, make_event("action", "say", source="backend-demo", params={"text": "你好呀～我是種子！", "seconds": 2.3})),
     (22.0, make_event("touch", "pat", source="demo")),
 ]
-STILLS = {"idle.png": 1.0, "happy.png": 2.6, "bored.png": 9.4, "sleep.png": 21.0}
+STILLS = {"idle.png": 1.0, "happy.png": 2.6, "say.png": 6.5, "bored.png": 9.4, "sleep.png": 21.0}
 END = 25.0
 
 

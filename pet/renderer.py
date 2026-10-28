@@ -10,6 +10,7 @@ from typing import Dict, Optional
 
 from PIL import Image, ImageDraw, ImageFilter
 
+from .bubble import SpeechBubble
 from .eyes import EyeState, FaceRenderer
 from .skeleton import AnimationPlayer, PartCompositor, Skeleton, mat_apply
 
@@ -32,8 +33,10 @@ def make_background(size) -> Image.Image:
 
 
 class Renderer:
-    def __init__(self, skeleton: Skeleton, size=(800, 480)):
+    def __init__(self, skeleton: Skeleton, size=(800, 480), font_path: Optional[str] = None):
         self.size = tuple(size)
+        self.font_path = font_path
+        self._bubble: Optional[SpeechBubble] = None   # 第一次說話時才載入字型
         self.background = make_background(self.size)
         self.parts = PartCompositor()
         self.set_skeleton(skeleton)
@@ -47,7 +50,18 @@ class Renderer:
         self.face = FaceRenderer(skeleton.face)
         self.parts.cache.clear()
 
+    @property
+    def bubble(self) -> SpeechBubble:
+        if self._bubble is None:
+            self._bubble = SpeechBubble(self.font_path)
+        return self._bubble
+
+    def say(self, text: str, seconds: float = 4.0) -> None:
+        self.bubble.say(text, seconds)
+
     def update(self, dt: float) -> None:
+        if self._bubble is not None:
+            self._bubble.update(dt)
         self.player.update(dt)
         self.effect_time += dt
 
@@ -104,4 +118,8 @@ class Renderer:
             if "zzz" in self.effects:
                 x, y = mat_apply(world[face_bone], 120, -120)
                 self._draw_zzz(frame, x, y)
+        if self._bubble is not None and self._bubble.active:
+            # 泡泡尾巴指向球的上緣（跟著球左右移動）
+            bx, by = mat_apply(world.get("body", world[sk.draw_order()[0].name]), 0, 0)
+            self._bubble.draw(frame, bx, by - 150)
         return frame
