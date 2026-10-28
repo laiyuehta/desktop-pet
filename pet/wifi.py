@@ -243,6 +243,7 @@ class WifiManager:
         self._thread: Optional[threading.Thread] = None
         self._status_cache: Tuple[float, Optional[dict]] = (-1e9, None)
         self._hotspot_checked = False
+        self.sleep = time.sleep
 
     # -- 權限（預留 PIN）-----------------------------------------------------------
     def authorize(self, headers) -> bool:
@@ -545,11 +546,18 @@ class WifiManager:
         u = self._hotspot_uuid()
         if not u:
             return False
-        try:
-            self.nm.up(u, self.iface, 30)
-        except NmError as exc:
-            log.warning("開熱點失敗：%s", exc)
-            return False
+        for attempt in (1, 2):
+            try:
+                self.nm.up(u, self.iface, 30)
+                break
+            except NmError as exc:
+                # 別的程式（例如系統的 wifi-watchdog）剛好在切換時去連別的網路，會打斷熱點；等一下再試一次
+                if attempt == 1 and "interrupted" in str(exc).lower():
+                    log.info("開熱點被打斷，5 秒後再試一次")
+                    self.sleep(5)
+                    continue
+                log.warning("開熱點失敗：%s", exc)
+                return False
         self.mode = "hotspot"
         self.hotspot_since = self.clock()
         log.info("設定熱點 %s 已開啟（%s）", self.hotspot_ssid, HOTSPOT_URL)

@@ -410,3 +410,18 @@ def test_web_remote_http_wifi(env):
         assert got == []                     # Wi‑Fi 路由不會變成寵物事件
     finally:
         w.stop()
+
+
+def test_hotspot_retry_when_interrupted(env):
+    nm, mgr, home, _, _ = env
+    mgr.sleep = lambda s: None
+    real_up = nm.up
+    state = {"n": 0}
+
+    def flaky(uuid, iface, wait):
+        if nm.conns[uuid]["mode"] == "ap" and state["n"] == 0:
+            state["n"] += 1
+            raise NmError("Error: Connection activation failed: The base network connection was interrupted")
+        return real_up(uuid, iface, wait)
+    nm.up = flaky
+    assert mgr.set_hotspot(True)["ok"] and mgr.mode == "hotspot"
