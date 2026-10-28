@@ -1,6 +1,6 @@
 # 誰負責哪裡（說明見 PROPOSAL.md「15. 開發流程（git 為主）」的「負責範圍」）
 #
-# 限制：使用者和三個 bot 目前共用同一個 GitHub 帳號 @laiyuehta，所以每一行的擁有者都是 @laiyuehta。
+# 限制：使用者、三個 bot 和 Antigravity 目前共用同一個 GitHub 帳號 @laiyuehta，所以每一行的擁有者都是 @laiyuehta。
 # GitHub 不會向 PR 作者本人要求審查，所以這個檔案現在「只是文件」：
 # 不會自動加審查者，也無法當成合併條件。真正的負責人寫在每段的註解裡；
 # 改到別人負責的路徑時，PR 說明要標出來，並請負責的 bot 在 PR 留言確認（見 PR 範本）。
@@ -16,16 +16,27 @@
 /.github/                 @laiyuehta
 /.gitleaks.toml           @laiyuehta
 
-# 程式與測試：桌寵專案機器人1
+# 程式、網頁介面、Rust 守護程式、測試與 CI 修正：Antigravity（使用者在自己的 Windows 電腦上跑的 AI 開發 agent，只開 PR）
 /main.py                  @laiyuehta
 /pet/                     @laiyuehta
 /backend/                 @laiyuehta
 /services/                @laiyuehta
-/tools/                   @laiyuehta
+/services/piwifi/         @laiyuehta
+/services/desktop-pet-admin/ @laiyuehta
 /tests/                   @laiyuehta
+/.github/workflows/       @laiyuehta
 /requirements.txt         @laiyuehta
-/deploy.env.example       @laiyuehta
 /config/states.json       @laiyuehta
+
+# 部署、實機驗收、規格、跨 bot 協調：桌寵專案機器人1
+/tools/                   @laiyuehta
+/tools/deploy/            @laiyuehta
+/tools/wifi/              @laiyuehta
+/services/*/install.sh    @laiyuehta
+/services/*/*.service     @laiyuehta
+/deploy.env.example       @laiyuehta
+# CI 檢查工具：Antigravity（要放在 /tools/ 後面才會蓋過）
+/tools/ci/                @laiyuehta
 
 # 美術與動畫：桌寵專案機器人2（包含素材工具與動畫規格）
 /packs/                   @laiyuehta
