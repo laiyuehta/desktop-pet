@@ -1,4 +1,4 @@
-# 桌寵專案 項目書 v2.3
+# 桌寵專案 項目書 v2.4
 
 > 最後更新：2026-10-28　｜　狀態：第一期規劃定稿，細節持續補充
 >
@@ -14,6 +14,7 @@
 > v2.0：後端設好 `api_token`（裝置用 token 檔帶上，`/health` 對外只回基本資訊）；拍照模組實作完成並在 Pi 實測（見該節「實作備註」）。
 > v2.1：新增「週邊常駐服務原則」：每個週邊由一個專門的常駐程式獨占、負責對接；新增相機常駐服務 picam，拍照改成多個觸發共用同一張照片、分送給每個請求者（取代冷卻與「相機忙碌」）。
 > v2.2：網頁遙控新增「螢幕畫面同步」：送到螢幕的每張畫面同步一份到網頁，方便遠端調整。
+> v2.4：裝置端（Pi `desktop-pet.service`）與後端（R7 工作排程器）改成開機／登入自動啟動，見「部署與維運」。
 > v2.3：picam 相機常駐服務、camera.snapshot 改成 picam client、camcast 改成訂閱 client、螢幕畫面同步都已實作並在 Pi 實測（見各節「實作備註」）。
 
 ## 1. 專案目標
@@ -540,17 +541,27 @@ flowchart LR
 | 相機常駐服務 picam | 運作中 | `picam.service`（開機啟動）；閒置 CPU 約 1.2%，預覽 800×480@15 約 11% |
 | 螢幕畫面同步 | 運作中 | 遙控頁最上方；`/screen.mjpg`、`/screen.jpg`；開著時仍 20 fps |
 | 後端 token | 已設定 | 裝置用 token 檔；`/health` 對外只回基本資訊 |
-| 測試 | 146 個全過 | 含動畫包、播放器、Wi‑Fi（假 nmcli）、picam（假相機）、拍照（假 picam、假上傳）、照片 API、螢幕畫面同步測試 |
-| 尚未做 | — | 開機自動啟動、成長推進規則、小模型替換、ESP32 原型、外殼 |
+| 測試 | 151 個全過 | 含開機自動啟動設定（unit、supervise）、動畫包、播放器、Wi‑Fi（假 nmcli）、picam（假相機）、拍照（假 picam、假上傳）、照片 API、螢幕畫面同步測試 |
+| 開機自動啟動 | 已設定 | Pi `desktop-pet.service`（enable）；R7 工作排程器 `DesktopPet Backend`（登入時） |
+| 尚未做 | — | 成長推進規則、小模型替換、ESP32 原型、外殼 |
 
 ## 7. 部署與維運
 **裝置端（Pi 3B，`/home/pi-user/desktop-pet`）**
-- 目前以臨時 systemd 服務 `desktop-pet` 執行（重開機不會自動啟動），只當 piscreen 的 client，不碰 USB、不重啟 piscreen 服務。
-- 停止：`sudo systemctl stop desktop-pet`；日誌：`journalctl -u desktop-pet -f`；螢幕狀態：`cat /run/piscreen/status.json`。
+- **開機自動啟動**：正式 systemd 服務 `desktop-pet.service`（repo 的 `services/desktop-pet/`，`install.sh` 安裝），已 enable。
+  - 以 pi-user 身分執行，`Restart=always`（3 秒後重啟，不限次數）。
+  - 啟動順序：`After=piscreen.service picam.service network-online.target`。
+  - 依賴只用 `Wants=`，**不用 `Requires=`／`BindsTo=`**：桌寵停止、重啟或失敗都不會連帶停止或重啟 piscreen。
+    piscreen 或 picam 沒在跑時，桌寵照樣啟動；螢幕 socket 與相機都會自動重連。
+  - network-online 最多等 NetworkManager-wait-online 的逾時時間（約 60 秒）。沒網路也會照樣啟動，之後由 Wi‑Fi 管理器重試，必要時開救援熱點。
+  - Wi‑Fi 權限走 polkit 規則 `/etc/polkit-1/rules.d/50-desktop-pet-wifi.rules`。規則看的是使用者（pi-user），不是登入工作階段，所以在 systemd 服務裡照樣有效。
+  - 只當 piscreen 的 client，不碰 USB、不重啟 piscreen 服務。
+- 停用自動啟動：`sudo systemctl disable --now desktop-pet`（`--now` 會順便停掉）。
+  恢復：`sudo systemctl enable --now desktop-pet`。
+- 停止：`sudo systemctl stop desktop-pet`（`Restart=always` 不會在手動 stop 後重啟）。
+- 日誌：`journalctl -u desktop-pet -f`；螢幕狀態：`cat /run/piscreen/status.json`。
 - 更新流程：在電腦上改程式或骨架 → 跑測試 → `python3 tools/bake.py` 產生動畫包 → 連同程式複製到 Pi → 重啟 `desktop-pet`。
-- 目前啟動參數：`--sink piscreen --input web --web 0.0.0.0:8080 --backend https://pet.example.com --backend-token-file /home/pi-user/.config/desktop-pet/backend-token --pack /home/pi-user/desktop-pet/packs/seed`。
+- 啟動參數（寫在 unit 裡，改參數就改 `services/desktop-pet/desktop-pet.service` 再跑 `install.sh`）：`--sink piscreen --input web --web 0.0.0.0:8080 --fps 20 --backend https://pet.example.com --backend-token-file /home/pi-user/.config/desktop-pet/backend-token --pack /home/pi-user/desktop-pet/packs/seed`。
 - 後端 token 放在 `/home/pi-user/.config/desktop-pet/backend-token`（pi-user 擁有、權限 0600），用 `--backend-token-file` 讀，不放在命令列（`ps`、systemd 設定都看不到）。換 token 時改這個檔和 R7 的設定，再重啟 `desktop-pet`。
-- 之後改成正式的開機自動啟動服務（排在 piscreen 之後啟動）。
 
 **相機常駐服務 picam（Pi，`/home/pi-user/picam`）**
 - 正式 systemd 服務 `picam.service`（已 enable，開機啟動、`Restart=always`），以 pi-user 身分執行。需要 `python3-picamera2`（已裝）。
@@ -558,8 +569,21 @@ flowchart LR
 - 狀態：`cat /run/picam/status.json`；日誌：`journalctl -u picam -f`。相機預覽到螢幕（測試用）：`~/camcast/start.sh`／`~/camcast/stop.sh`（會跟桌寵搶螢幕畫面）。
 
 **後端（R7，`C:\Users\<user>\desktop-pet`）**
-- 用 ComfyUI 內附的 Python 3.13 執行，埠 8090，日誌 `backend_out.log`／`backend_err.log`；目前重開機不會自動啟動。
-- 啟動：`backend\start_hidden.cmd`（背景執行、輸出寫進日誌；遠端時用 WMI 建立程序啟動，不影響 ComfyUI 和 llama-server）。
+- 用 ComfyUI 內附的 Python 3.13 執行，埠 8090，日誌 `backend_out.log`／`backend_err.log`。
+- **登入自動啟動**：工作排程器的工作 `DesktopPet Backend`（`backend\autostart\install_task.ps1` 建立），在 pi-user **登入時**啟動。
+  - 執行 `pythonw.exe backend\autostart\supervise.py`。pythonw 沒有視窗，完全背景執行。
+  - supervise.py 用 `CREATE_NO_WINDOW` 跑 `backend\start_hidden.cmd`。後端有自己隱藏的主控台，不會被別的視窗的 Ctrl+C 或關閉影響。
+  - 後端結束就 5 秒後重啟，連續失敗退避到最多 60 秒。重啟紀錄寫在 `backend_supervisor.log`。
+  - **防重複**：
+    - supervise.py 用 127.0.0.1:18090 當鎖：第二個 supervise.py 會直接結束。工作排程器也設成「已在執行就不啟動新的」。
+    - 8090 已經有人在聽（例如手動開的後端）時，supervise.py 不啟動新的，每 15 秒看一次，等它停了才接手。
+    - `start_hidden.cmd` 本身也會先檢查 8090，已在用就直接結束。
+  - 工作設定：不限執行時間（預設 72 小時會被停掉）、失敗時每 1 分鐘重試（最多 3 次）、用電池也執行。工作以使用者身分執行，不存密碼、不需要系統管理員。
+  - **限制**：要 pi-user 登入 Windows 才會啟動（開機停在登入畫面時後端不會跑）。要開機不用登入就跑，得改成「不論使用者是否登入都執行」，那需要存 Windows 密碼，這期不做。
+  - 停用：`powershell -File backend\autostart\uninstall_task.ps1`，或在工作排程器裡停用或刪除 `DesktopPet Backend`。
+    停掉正在跑的後端：結束 `supervise.py` 的 pythonw.exe，以及 8090 的 python.exe。
+  - 手動啟動（不經排程）：`backend\start_hidden.cmd`（前景，有視窗）。遠端用 WMI 建立程序時要注意：沒有 supervise 看著，掛了不會自動重啟。
+- 不影響 ComfyUI 和 llama-server（不會碰它們的程序）。
 - token 在 R7 的 `backend\config.json` 的 `server.api_token`（repo 裡的版本是空的）。**更新程式時不要覆蓋 R7 的 `config.json`**。
 - 照片存在 `backend\data\photos\<pet_id>\`（每張一個 .jpg＋.json），不進 repo。
 - LLM 由 llama-server 提供（埠 8080），需另外手動開；沒開時後端用備用台詞，寵物照常運作。
@@ -610,7 +634,7 @@ flowchart LR
 - 什麼條件決定走哪條耳朵系列（兔耳、未來的貓耳……）？
 - 成長線的推進方式（時間、互動或其他）和各階段的形態？
 - 要不要電池、可攜？
-- 裝置端與後端要不要開機自動啟動？
+- ~~裝置端與後端要不要開機自動啟動？~~ 已決定（2026-10-28）：要。Pi 用 systemd `desktop-pet.service`（開機），R7 用工作排程器（pi-user 登入時）。見「部署與維運」。
 - 要換成哪個 1～3B 小模型？
 - 實體輸入用什麼硬體（觸控、按鈕、相機）？
 - Wi‑Fi 設定頁的 PIN：等要帶出門時再決定。
