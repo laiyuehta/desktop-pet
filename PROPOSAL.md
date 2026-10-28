@@ -1,4 +1,4 @@
-# 桌寵專案 項目書 v2.4
+# 桌寵專案 項目書 v2.5
 
 > 最後更新：2026-10-28　｜　狀態：第一期規劃定稿，細節持續補充
 >
@@ -14,6 +14,7 @@
 > v2.0：後端設好 `api_token`（裝置用 token 檔帶上，`/health` 對外只回基本資訊）；拍照模組實作完成並在 Pi 實測（見該節「實作備註」）。
 > v2.1：新增「週邊常駐服務原則」：每個週邊由一個專門的常駐程式獨占、負責對接；新增相機常駐服務 picam，拍照改成多個觸發共用同一張照片、分送給每個請求者（取代冷卻與「相機忙碌」）。
 > v2.2：網頁遙控新增「螢幕畫面同步」：送到螢幕的每張畫面同步一份到網頁，方便遠端調整。
+> v2.5：新增「後端：多模態模型」與「後端：記憶系統」規格（**待核准，尚未實作**）：R7 現況調查、提議以 Qwen3-VL-8B 取代 qwen3-14b（含 A/B 與回退）、三層記憶（短期對話、長期事實、日記）存在後端 SQLite。
 > v2.4：裝置端（Pi `desktop-pet.service`）與後端（R7 工作排程器）改成開機／登入自動啟動，見「部署與維運」。
 > v2.3：picam 相機常駐服務、camera.snapshot 改成 picam client、camcast 改成訂閱 client、螢幕畫面同步都已實作並在 Pi 實測（見各節「實作備註」）。
 
@@ -258,7 +259,8 @@ flowchart LR
 **LLM 路由**
 - **本機小模型**：日常閒聊、表情反應等簡單任務，走內網的 OpenAI 相容服務（llama.cpp `llama-server`）。模型位址、名稱、逾時都寫在設定檔，之後換成 1～3B 的小模型只改設定。
 - **雲端 API**：複雜任務（查資料、長文、工具呼叫等，第二期）才送雲端。目前只有路由與接口，預設關閉、沒有金鑰。
-- **目前測試模型**：R7 上的 **qwen3-14b**（Qwen3 14B Q4_K_M，64K context），用 `/no_think` 關閉思考，要求只輸出 JSON，實測一句約 0.6 秒。
+- **目前測試模型**：R7 上的 **qwen3-14b**（Qwen3 14B Q4_K_M，64K context），用 `/no_think` 關閉思考，要求只輸出 JSON，實測一句約 0.6 秒。占顯存約 12.8 GB。v2.5 提議換成多模態的 Qwen3-VL-8B，見「後端：多模態模型」（待核准）。
+- **記憶**：目前只有存檔裡最近 20 筆互動（含最近 6 輪對話）。v2.5 規格見「後端：記憶系統」（待核准）。
 - **保底**：模型沒開、逾時或回覆格式不對時重試一次，再不行就用固定的備用台詞，對話一定有回應。
 
 **降級原則**：裝置送事件在背景執行，逾時很短；後端或網路掛掉時，寵物照常待機、眨眼、睡覺，只是不會說話也不會成長。
@@ -372,7 +374,7 @@ flowchart LR
 - 新 API：`POST /v1/pet/photo`，內容是 JPEG（附 `pet_id`、`reason`、拍攝時間），回傳 `{ok, photo_id}`。
 - 存在 `backend/data/photos/<pet_id>/`，檔名用時間；記錄在存檔的「最近照片」清單。保留數量可設定（預設最近 200 張），超過自動刪最舊的。
 - `GET /v1/pet/<id>/photos`（列表）、`GET /v1/pet/<id>/photos/<photo_id>`（取圖），給遙控頁或之後的工具看。
-- **之後**：接看得懂圖片的模型（本機或雲端）分析照片內容，例如認人、看主人在不在；現在的 qwen3-14b 只看得懂文字，所以這期只存不分析，接口先留。
+- **之後**：接看得懂圖片的模型（本機或雲端）分析照片內容，例如認人、看主人在不在；現在的 qwen3-14b 只看得懂文字，所以這期只存不分析，接口先留。v2.5 的規格見「後端：多模態模型」（待核准）。
 
 **隱私與安全**
 - 照片只存在後端（R7），不放進 repo、不寫進日誌。
@@ -423,6 +425,217 @@ flowchart LR
   - repo 在 `services/camcast/`，Pi 上在 `~/camcast/`，舊版留了 `.bak-20261028-214009`。
   - 不再自己開相機，picam 重啟會自動重連。多了 `--dry-run`（只收預覽、不送螢幕）。
   - 這次只用 `--dry-run` 短測（14 秒、25 秒各一次）就停掉，沒有實際送到螢幕，以免跟桌寵搶畫面。camcast 現在沒在跑。
+
+### 後端：多模態模型（v2.5 規格，**待核准，尚未實作**）
+目標：把 R7 上只看得懂文字的 qwen3-14b，換成**一個**同時看得懂文字和圖片的模型。這樣 camera.snapshot 拍的照片就能被描述、被問問題，而且顯存要能跟 ComfyUI 並存。
+
+**R7 現況（2026-10-28 唯讀調查）**
+- 顯示卡：RTX 5060 Ti 16 GB（16,311 MiB），驅動 621.01。另有 CPU 內建的 AMD 顯示晶片。系統記憶體 61.4 GB。
+- llama-server：llama.cpp **b10964**（commit b29c606e2，CUDA 13），位置 `%LOCALAPPDATA%\hermes\tools\llamacpp-cuda-10964-win32-x64\`。
+  - 由桌面的 `Start-Qwen3.bat` **手動開**（不會開機自動啟動）。今天 16:43 開的。
+  - 模型 `Qwen3-14B-Q4_K_M.gguf`（8.38 GB），`-c 65536`（yarn ×2），K 快取 q8_0、V 快取 q4_0，`-fa on -ngl 99 -np 1`。
+  - 埠 127.0.0.1:8080，別名 qwen3-14b。
+  - **實際占顯存約 12.8 GB**（Windows GPU 記憶體計數器）。整張卡用了 15.2 GB，只剩約 0.9 GB。
+- 這個版本**支援多模態**：有 `--mmproj`、`mtmd.dll`。Qwen3-VL 從 b6907 起支援。`/v1/chat/completions` 可以收 `image_url`（base64 data URL）。
+  - 目前沒載 mmproj，所以 `/props` 回 `vision: false`。
+- ComfyUI 0.42（`run_nvidia_gpu.bat`：`--fast --reserve-vram 1.5`，動態顯存載入）。調查時沒在跑。
+  - 平常跑 SDXL：模型 4.9 GB＋CLIP 1.56 GB＋VAE 0.16 GB，加上運算約 **7～8.5 GB**。
+  - 也有 Flux klein（4.9 GB）、11～20 GB 的大模型，這些跟任何 LLM 都無法並存。
+- 結論：**現在的 14B（12.8 GB）跟 ComfyUI SDXL 根本無法同時跑**。換成較小的多模態模型反而能並存。
+- 後端現在怎麼叫 LLM：
+  - `backend/llm.py`，OpenAI 相容格式，只用 urllib。`json_mode`，Qwen3 用 `/no_think`，逾時 8 秒、重試 1 次，失敗就用備用台詞。
+  - 對話上下文：人設＋目前狀態（狀態、階段、三個心情值），加上存檔 `memory` 裡最近 6 輪對話（`history_turns`）。
+  - 存檔 `data/<pet_id>.json` 的 `memory` 最多 20 筆，事件和對話混在一起，舊的會被擠掉。**沒有長期記憶**。
+  - 照片在 `data/photos/<pet_id>/`，`PhotoStore.register_hook` 目前沒掛任何東西。
+  - R7 內附的 Python 有 SQLite 3.50.4，FTS5（含 trigram 分詞）可以用。
+
+**選擇：Qwen3-VL-8B-Instruct（官方 GGUF，Q4_K_M＋mmproj）**
+| 檔案（Hugging Face `Qwen/Qwen3-VL-8B-Instruct-GGUF`） | 大小 |
+|---|---|
+| `Qwen3VL-8B-Instruct-Q4_K_M.gguf` | 5.03 GB（4.68 GiB） |
+| `mmproj-Qwen3VL-8B-Instruct-F16.gguf` | 1.16 GB（1.08 GiB） |
+| `mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf`（省顯存用） | 0.75 GB（0.70 GiB） |
+| 參考：`Qwen3VL-8B-Instruct-Q8_0.gguf` | 8.71 GB |
+
+- 預估顯存：權重 4.7 GiB＋mmproj 1.1 GiB＋KV 快取（16K context、q8_0/q4_0，約 1.0 GB）＋運算與看圖緩衝約 1 GB，合計 **約 7.5～8 GB**。
+  - 加上桌面程式約 2.3 GB、ComfyUI SDXL 約 7～8.5 GB，16 GB 剛好在邊緣。ComfyUI 有動態顯存載入和 `--reserve-vram 1.5`，可以放一部分到系統記憶體（較慢，但不會壞）。
+  - 驗收時要實測。
+- 理由：
+  - 一個模型同時處理聊天和看圖。中文能力好，非思考版（Instruct），不需要 `/no_think`，`no_think` 設成 false。
+  - 跟 qwen3-14b 同一家，人設與 JSON 格式不用大改。
+  - llama.cpp 原生支援。
+- 備案（顯存不夠時）：**Qwen3-VL-4B-Instruct**（`Qwen/Qwen3-VL-4B-Instruct-GGUF`），預估約 4～4.5 GB。
+  - `Qwen3VL-4B-Instruct-Q4_K_M.gguf` 2.50 GB＋`mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf` 0.45 GB。
+  - 再不夠：8B 改用 mmproj Q8_0、context 降到 8K（約 6.5 GB），或 4B 用 CPU 跑 mmproj（`--no-mmproj-offload`，看圖變慢）。
+  - Qwen2.5-VL-7B（Q4_K_M 4.68 GB＋mmproj Q8_0 0.85 GB）大小差不多但較舊，不選。
+- **聊天品質可能下降**：8B 比 14B 小，人設穩定度、台灣用語、JSON 遵守度可能變差，但寵物只說一句短話，差距應該不大。**要用 A/B 決定，不是直接換**（見下面）。
+
+**部署方式**
+- 不動現有的 `Start-Qwen3.bat` 和 14B 模型檔，保留回退。
+- repo 新增 `backend/llm_server/start_vl.cmd`（R7 的模型路徑放設定，不寫死），參數：
+  `-m Qwen3VL-8B-Instruct-Q4_K_M.gguf --mmproj mmproj-...gguf --host 127.0.0.1 --port 8080 -c 16384 -np 1 -ngl 99 -fa on --cache-type-k q8_0 --cache-type-v q4_0 --jinja --alias pet-vl`
+- 模型檔放 `%LOCALAPPDATA%\hermes\models\`（跟現有模型同一個地方），下載前要先經你同意。
+- 14B 和 8B **不同時跑**（顯存不夠）。A/B 時輪流開，正式換的時候關掉 14B、開 8B，埠一樣用 8080，後端只改設定。
+- 設定新增：
+  - `llm.local.model: "pet-vl"`、`llm.local.no_think: false`。
+  - `vision: {enabled, caption_on_upload, max_side: 640, timeout_s: 20, max_concurrent: 1}`。
+- llama-server 要不要登入自動啟動（像後端那樣用工作排程器），待你決定。
+
+**照片怎麼流進來**
+1. Pi 的 camera.snapshot 照舊上傳（`POST /v1/pet/photo`），Pi 端**不改**。
+2. 後端存檔後，透過 `register_hook` 把 photo_id 放進「看圖佇列」：背景單一執行緒、一次一張，不卡 API。
+3. 看圖：
+   - 先把照片縮到長邊 640（R7 的 Python 有 Pillow 就用，沒有就原圖送）。640×480 約 300 個圖片 token（每 32×32 像素一個），1280×960 約 1,200 個。
+   - 用 `image_url`（base64 data URL）叫同一個模型，要求只回 JSON：`{"caption": "一句 30 字內的描述", "tags": ["杯子","桌子"], "people": 0|1|2+}`。
+4. caption 存進照片的 .json 和記憶的「日記」（見下一節），之後可以用文字搜尋。
+5. 對話時「看一眼」（第三步驟才做）：
+   - 主人問「你看這是什麼？」時，`/v1/pet/talk` 帶 `look: true`（或後端判斷要看）。
+   - 後端先回一句「我看看～」，再回 `{"type":"skill","name":"camera.snapshot","reason":"look"}` 指令。
+   - 照片到了以後，用「問題＋照片」叫模型，答案放進待送指令佇列，下一次事件或心跳回應時送給裝置（`say`＋`emotion`）。
+6. 看圖失敗（模型沒開、逾時）：照片照存，caption 留空並標記「待補」，模型恢復後補做。
+
+**A/B 檢查（換模型前一定要做）**
+- 固定題組約 60 題：
+  - 日常聊天 30
+  - 人設陷阱 10（問它是不是 AI、要它說英文、成人或危險話題）
+  - 記憶回想 10（先講再問）
+  - 看圖 10：只有 8B 有，用 R7 上已有的照片
+- 14B、8B 各跑一輪，溫度固定。
+- 自動指標：
+  - JSON 合格率
+  - 字數 ≤ 30 的比例
+  - 簡體字比例（字表比對）
+  - 延遲 p50／p95
+  - 顯存峰值
+- 盲評：把兩邊回答打亂成表格，由你選「比較像種子」的那個。
+- 通過門檻（建議）：
+  - JSON 合格 ≥ 98%
+  - 簡體字 ≤ 1%
+  - 延遲 p95 ≤ 2 秒（純文字）、≤ 5 秒（看圖）
+  - 盲評 8B 至少拿到 40%（不明顯輸）
+- 沒過：先試 8B Q5_K_M（5.85 GB），或文字用 14B、看圖時才切換（會失去並存的好處），再找你決定。
+
+**替換與回退**
+- 換：關 14B → 執行 `start_vl.cmd` → 改 `config.json` 的 `llm.local.model`、`no_think` → 重啟後端（工作排程器的看門程式會自動重開）。
+- 回退：關 8B → 執行原本的 `Start-Qwen3.bat` → 設定改回 `qwen3-14b`、`no_think: true`、`vision.enabled: false`。
+  - 記憶資料庫和照片 caption 都保留，14B 一樣可以用文字記憶，只是不能看新照片。
+
+### 後端：記憶系統（v2.5 規格，**待核准，尚未實作**）
+原則：**記憶放在後端，LLM 只是無狀態的工具**。每次對話由後端挑出相關記憶放進提示詞，換模型不會失憶。記憶跟心情／成長分開。
+
+**三層記憶**
+1. **短期**：最近 N 輪對話原文（預設 6 輪，`history_turns`）。
+   - 改成存在記憶資料庫的 `turns` 表，不會再被事件擠掉。
+   - 存檔 JSON 的 `memory`（事件流水帳）保留原樣。
+2. **長期事實**：主人說過、值得記住的事，例如「主人叫小明」「喜歡草莓」「每天晚上 11 點睡」「家裡有一隻貓叫咪咪」。
+   - 一段對話結束後（沒說話 60 秒，或累積 6 輪），背景請 LLM 從最近的對話抽出事實，只回 JSON 操作：
+     `{"ops":[{"op":"add|update|forget","key":"owner.food.like","text":"主人喜歡吃草莓","category":"profile|preference|habit|relation|other","importance":1-3}]}`
+   - 只記主人說的事，不記寵物自己說的話。
+3. **日記（情節記憶）**：每天發生的事。
+   - 規則整理的事件摘要（「今天被摸了 5 次、聊了 3 次、睡了 2 次」，不用 LLM）。
+   - 每張照片一行 caption。
+   - 可選：每天晚上 LLM 寫一句當天小結。
+
+**儲存：SQLite**（`backend/data/memory/<pet_id>.db`，只用標準函式庫）
+- **一隻寵物一個資料庫檔**：隔離最簡單，刪除、匯出整隻寵物也簡單。所有 API 都用 pet_id 找檔案，沒有跨寵物查詢。
+- 表：
+  - `turns(id, ts, user_text, reply, emotion, source)`
+  - `facts(id, key, text, category, importance, confidence, status[active|superseded|forgotten], source_kind[talk|photo|manual], source_ref, created, updated, last_used, use_count, superseded_by)`
+  - `diary(id, day, ts, kind[events|photo|talk|summary], text, photo_id, tags)`
+  - 另有 `facts`、`diary` 的 FTS5 全文索引（trigram 分詞，支援中文）。
+- 每筆都有**來源**（哪一輪對話或哪張照片）和**時間**。
+
+**去重、更新、遺忘規則**
+- 同一個 `key` 再出現：
+  - 內容一樣 → 只更新時間、提高 confidence。
+  - 內容不同 → 新的變 active，舊的標成 superseded（保留，可在記憶頁看到歷史）。
+- 沒有 key、但文字幾乎一樣的（正規化後相同，或 trigram 相似度 ≥ 0.8）→ 當成重複。
+- 主人說「忘記…」「不要記…」→ `forget` 操作。標成 forgotten，之後不再放進提示詞。記憶 API 可以真的刪掉。
+- 上限：每隻寵物 500 條 active 事實。超過時，importance 低、而且最久沒用到的先降成 forgotten。
+- **不記的東西**（抽取提示詞加程式過濾雙重保險）：密碼、驗證碼、信用卡、身分證字號、帳號，以及長串數字。其他敏感類別待你決定。
+- 日記：caption 和事件摘要預設保留 365 天；照片本身照舊保留最近 200 張。
+
+**檢索（每次對話）**
+- 第一階段：**關鍵字＋時間**，不用向量模型。
+  - 從主人這句話取出詞：FTS5 trigram 比對；2 個字的中文詞改用 LIKE。
+  - 分數＝文字相符（bm25）＋重要度＋最近程度＋使用次數。
+  - 提到「今天／昨天／上次」時，直接取那天的日記。
+  - 每次一定帶上 importance=3 的核心事實（例如主人名字），最多 3 條。
+  - 被放進提示詞的事實更新 `last_used`。
+- 第二階段（可選）：加向量模型，例如小型多語 embedding 模型，用 llama-server `--embedding` 跑，約 0.6 GB。向量存在 SQLite，混合排序。
+  - 符合任一條件才加：
+    - 每隻寵物 active 事實超過約 300 條，或日記超過約 2,000 行。
+    - 「換句話問」的回想測試中，關鍵字找不到的比例超過 20%。
+    - 你回報「它常常想不起來」。
+
+**提示詞預算（每次對話，token 粗估：1 個中文字約 1 token）**
+| 區塊 | 上限 |
+|---|---|
+| 人設＋目前狀態（現有） | 約 450 |
+| 核心＋相關事實 | 8 條、250 |
+| 相關日記 | 4 行、250 |
+| 短期對話 | 6 輪、600 |
+| 照片（看一眼時） | 約 300（640×480） |
+| 主人這句話 | 200 |
+| 合計 | **≤ 2,100**（模型 context 16K 很夠用） |
+
+- 超過時的砍法：先砍日記，再砍相關事實（核心事實不砍），最後砍最舊的對話。
+- 延遲目標：純文字 p50 ≤ 1.5 秒，看圖 ≤ 5 秒。記憶抽取在背景做，不算進對話延遲。
+
+**心情／成長跟記憶分開**
+- 心情三值、成長值、階段、裝置狀態留在原本的寵物存檔 `data/<pet_id>.json`（由 MoodEngine 管），**不進記憶資料庫**。記憶系統不會改到心情或成長。
+- 對話提示詞照舊從存檔讀目前心情。
+- 裝置（Pi）的狀態機照舊決定畫面怎麼演，後端只送指令。
+  - 註：目前心情與成長值其實是在 R7 後端計算、存檔。要不要改成由 Pi 保存，列在待決定事項。
+
+**隱私**
+- 照片、caption、記憶**只存在 R7**，不進 repo、不寫日誌（日誌只記 id 和筆數），不送雲端。雲端路由（第二期）預設也不帶記憶。
+- 記憶 API **一定要 token**（跟照片 API 一樣：後端沒設 token 時一律 403）。
+- 可以查看、刪除、匯出。網頁記憶頁之後做，放哪裡待決定。
+- 刪除照片時，連同它的 caption 和日記那一行一起刪。
+
+**API（埠 8090，都要 `X-Pet-Token`）**
+| 方法 | 路徑 | 用途 |
+|---|---|---|
+| GET | `/v1/pet/<id>/memory/facts?q=&status=active&limit=50` | 列出／搜尋事實 |
+| POST | `/v1/pet/<id>/memory/facts` | 手動新增 `{text, key?, category?, importance?}` |
+| POST | `/v1/pet/<id>/memory/facts/<fid>` | 修改 `{text?, importance?, status?}` |
+| DELETE | `/v1/pet/<id>/memory/facts/<fid>` | 真的刪掉一條 |
+| GET | `/v1/pet/<id>/memory/diary?day=2026-10-28&q=&limit=50` | 列出／搜尋日記 |
+| DELETE | `/v1/pet/<id>/memory/diary/<did>` | 刪一行日記 |
+| GET | `/v1/pet/<id>/memory/turns?limit=20` | 最近對話 |
+| GET | `/v1/pet/<id>/memory/search?q=` | 一次搜尋事實＋日記（跟對話用同一套檢索，方便除錯） |
+| GET | `/v1/pet/<id>/memory/export` | 匯出 JSON（事實含歷史、日記、對話；照片只列 id） |
+| DELETE | `/v1/pet/<id>/memory?scope=facts\|diary\|turns\|all&confirm=<pet_id>` | 清空，要帶 confirm |
+| DELETE | `/v1/pet/<id>/photos/<photo_id>` | 刪照片＋caption＋日記行 |
+
+- `/v1/pet/talk` 回應多一個 `memory: {facts_used: [fid…], diary_used: [did…]}`（只有 id），方便除錯。
+- 設定：`memory: {enabled, history_turns, extract_idle_s: 60, extract_every_turns: 6, max_facts: 500, diary_keep_days: 365, budget: {...}}`。`enabled: false` 時行為跟現在完全一樣。
+
+**測試**
+- 用假 LLM（固定回傳操作 JSON）和暫存資料庫：
+  - 新增、更新（舊的變 superseded）、forget、去重、上限淘汰。
+  - 敏感資料過濾、預算裁切順序、核心事實一定帶上。
+  - 2 個字的中文詞搜得到、「昨天」取日記。
+- 隔離：寵物 A 的 API 和對話永遠看不到寵物 B 的資料。
+- API：沒 token 401、沒設 token 403、清空要 confirm、匯出格式。
+- 看圖：假模型、佇列一次一張、失敗標「待補」並補做、刪照片連動刪除。
+- 回退：`memory.enabled=false`、`vision.enabled=false` 時，現有測試全部照過。
+
+**驗收（R7 實機）**
+- 說「我叫小明，我最喜歡草莓」→ 重啟後端、隔天再問「我喜歡吃什麼？」→ 回答提到草莓。
+- 說「忘記我喜歡草莓」→ 記憶頁顯示 forgotten，之後不會再提。
+- 拍一張桌上杯子的照片 → 1 分鐘內日記有一行 caption → 問「你今天看到什麼？」會提到杯子。
+- 顯存：llama-server（8B＋mmproj）實測 ≤ 8.5 GB；同時跑一張 ComfyUI SDXL 不會記憶體不足。
+- 對話延遲 p95 ≤ 2 秒（純文字）；看圖期間寵物照常 20 fps（Pi 端不受影響）。
+
+**分步驟**
+1. **換模型**：A/B 題組與腳本 → 你看結果決定 → 換成 VL（或備案）。
+2. **照片 caption**：看圖佇列 → caption 存進照片 .json 與日記（只有規則式的日記）。
+3. **記憶核心**：SQLite、短期對話搬家、事實抽取、檢索與預算、查看／刪除／匯出 API。
+4. **看一眼**：對話帶 `look` → 拍照指令 → 看圖回答（待送指令佇列）。
+5. **記憶頁與保留**：網頁記憶頁、每日小結、保留期限清理。
+6. （可選）向量檢索，符合上面的條件才做。
 
 ### 外部控制器接口（預留）
 之後桌寵可能裝上會動的硬體，第一期**只定義接口、不接真的硬體**：
@@ -543,7 +756,8 @@ flowchart LR
 | 後端 token | 已設定 | 裝置用 token 檔；`/health` 對外只回基本資訊 |
 | 測試 | 151 個全過 | 含開機自動啟動設定（unit、supervise）、動畫包、播放器、Wi‑Fi（假 nmcli）、picam（假相機）、拍照（假 picam、假上傳）、照片 API、螢幕畫面同步測試 |
 | 開機自動啟動 | 已設定 | Pi `desktop-pet.service`（enable）；R7 工作排程器 `DesktopPet Backend`（登入時） |
-| 尚未做 | — | 成長推進規則、小模型替換、ESP32 原型、外殼 |
+| 多模態模型＋記憶系統 | 規格待核准 | v2.5 規格；尚未下載模型、尚未實作 |
+| 尚未做 | — | 成長推進規則、多模態模型、記憶系統、ESP32 原型、外殼 |
 
 ## 7. 部署與維運
 **裝置端（Pi 3B，`/home/pi-user/desktop-pet`）**
@@ -599,7 +813,7 @@ flowchart LR
 - 雲端 API 金鑰（第二期）只放在後端設定，不放在裝置端或 repo。
 
 ## 9. 測試與驗收
-- **自動測試**：每次改動在電腦上跑 `python -m pytest -q`（目前 146 個）。
+- **自動測試**：每次改動在電腦上跑 `python -m pytest -q`（目前 151 個）。
 - **效能量測**：`tools/bench.py` 與逐階段量測；每次大改在 Pi 上量各狀態 fps、CPU。
 - **實機驗收**：所有狀態 20 fps、說話 ≥ 18 fps、事件到畫面 ≤ 0.5 秒、連跑 30 分鐘不掉幀不漏記憶體、piscreen 錯誤與救援次數為 0。
 - **降級測試**：後端關掉、LLM 關掉、網路斷線時，寵物仍正常待機與睡覺。
@@ -612,12 +826,15 @@ flowchart LR
 | R7 關機或 LLM 沒開 | 不會說話、不會成長 | 備用台詞；裝置可獨立運作 |
 | 後端對外公開 | 被陌生人操作 | 已設 `api_token`；token 外洩時兩邊一起換 |
 | 動畫包變大 | 佔空間、更新慢 | 減少過渡片段、拉長切換點間隔 |
-| 小模型太笨 | 對話品質差 | 複雜任務走雲端；保留 14B 當比較基準 |
+| 小模型太笨 | 對話品質差 | 複雜任務走雲端；保留 14B 當比較基準；換 8B 前先 A/B |
+| 顯存不夠（LLM＋ComfyUI） | 生圖或對話變慢、記憶體不足 | 8B Q4（約 8 GB）取代 14B（12.8 GB）；備案 4B；實測後才定案 |
+| 記憶洩漏隱私 | 家人的事被看到或外流 | 只存 R7、API 一定要 token、可刪除／匯出、不記密碼與帳號類資料 |
 
 ## 11. 開發階段
 1. ~~確認角色方向與硬體~~（已完成：參考圖、Pi 3B、SmartCool 螢幕接口）
 2. ~~骨架格式與 runtime、狀態機、輸入模擬器~~（已完成）
 3. ~~樹莓派原型（接 piscreen，量 fps）~~（已完成：改預錄動畫後穩定 20 fps）
+   - 接著做（R7 後端）：多模態模型與記憶系統（v2.5 規格待核准；分步驟見「後端：記憶系統」的「分步驟」）
 4. ESP32 原型
 5. 比較兩平台（流暢度、耗電、成本、開發難度），選定平台
 6. 外殼與完整版
@@ -635,7 +852,18 @@ flowchart LR
 - 成長線的推進方式（時間、互動或其他）和各階段的形態？
 - 要不要電池、可攜？
 - ~~裝置端與後端要不要開機自動啟動？~~ 已決定（2026-10-28）：要。Pi 用 systemd `desktop-pet.service`（開機），R7 用工作排程器（pi-user 登入時）。見「部署與維運」。
-- 要換成哪個 1～3B 小模型？
+- 要換成哪個 1～3B 小模型？（v2.5 改提議：R7 先換成多模態 Qwen3-VL-8B，1～3B 留到 ESP32／離線再說）
+- **v2.5 多模態與記憶（待決定）**：
+  - 同意用 Qwen3-VL-8B 取代 qwen3-14b 嗎？要先 A/B 再換，A/B 由你盲評。同意下載模型檔（約 6.2 GB）嗎？
+  - 8080 的 llama-server 是 hermes 的工具開的。有沒有其他程式也在用 qwen3-14b？換掉會不會影響它們？
+  - llama-server 要不要也登入自動啟動？
+  - ComfyUI 平常會跟寵物對話同時用嗎？用的是 SDXL 還是更大的模型？這決定要 8B 還是 4B。
+  - 照片 caption 完成後原圖要留多久（目前最近 200 張）？caption 和日記留多久（提議 365 天）？
+  - 記憶網頁放哪裡：R7 後端提供（要輸入 token），還是 Pi 遙控頁（內網、沒有密碼）？
+  - 除了密碼、帳號、卡號這類，還有哪些不要記（地址、電話、健康、其他家人）？
+  - 「看一眼」可以讓後端／LLM 自己決定拍照嗎？還是只能在主人要求時拍？
+  - 心情與成長值目前在 R7 後端計算、存檔。要維持現狀，還是改成由 Pi 保存？
+  - 家裡有多人時，要不要分辨是誰在說話（目前不分，都當「主人」）？
 - 實體輸入用什麼硬體（觸控、按鈕、相機）？
 - Wi‑Fi 設定頁的 PIN：等要帶出門時再決定。
 - 拍照能力要用什麼觸發（按鈕、觸控、定時、後端決定）？
