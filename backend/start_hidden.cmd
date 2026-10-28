@@ -7,7 +7,8 @@ rem (see PROPOSAL.md "deploy"). Manual remote start without the supervisor:
 rem   Invoke-CimMethod Win32_Process -MethodName Create -Arguments @{CommandLine='cmd.exe /c "<repo>\backend\start_hidden.cmd"'}
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
-if "%PET_PY%"=="" set PET_PY=C:\path\to\python\python.exe
+rem Python: set the PET_PY environment variable (e.g. the ComfyUI embedded python.exe); default = python on PATH.
+if "%PET_PY%"=="" set PET_PY=python
 cd /d "%~dp0.."
 rem No duplicates: if something already listens on 8090, do not start a second backend.
 netstat -ano -p TCP | findstr /R /C:":8090 .*LISTENING" >nul && (echo start_hidden: port 8090 already in use, not starting a second backend & exit /b 0)

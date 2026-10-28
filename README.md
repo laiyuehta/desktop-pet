@@ -3,10 +3,13 @@
 放在桌上的實體電子寵物：圓球種子形態的小機器人，會隨成長長出腳、耳朵。第一期只做電子寵物，第二期才加入幫忙做事的能力（目前只預留接口）。
 
 - 項目書：[PROPOSAL.md](PROPOSAL.md)
-- 參考圖（只給美術參考，不是實際素材）：`assets/reference/`
 - 原型平台：樹莓派 3B + SmartCool 5 吋 USB 螢幕（透過 piscreen 服務顯示）
 
 ![示範動畫](preview/demo.gif)
+
+**部署到自己的裝置**：repo 裡的 service／polkit 檔只有佔位（`@USER@`、`@HOME@`、`@BACKEND_URL@`）。先 `cp deploy.env.example deploy.env`
+並填入實際值（`deploy.env` 不進 repo），再跑各自的 `install.sh`。後端的實際設定寫在本機 `backend/config.json`（不進 repo，預設值見
+`backend/config.example.json`）。授權：MIT（見 [LICENSE](LICENSE)）。
 
 ## 目前進度（第一版程式原型 v0.1）
 
@@ -122,7 +125,7 @@ curl localhost:8080/status
 - **自動嘗試**：桌寵程式裡的背景執行緒每 5 秒看一次 wlan0；沒連上時依優先順序試「掃描看得到的＋隱藏的」已記錄網路，
   每個 20 秒；全部失敗 60 秒後重掃再試。
 - **救援熱點**：連續 120 秒（`--wifi-hotspot-after`）都連不上已記錄的網路，開 `PetRescue-AP`（WPA2，密碼在 Pi 的
-  `/etc/desktop-pet/wifi-hotspot.conf`）；手機連上後開 `http://192.0.2.1:8080/` 設定，連上正式網路熱點就關。
+  `/etc/desktop-pet/wifi-hotspot.conf`）；手機連上後開熱點閘道的 `:8080`（NetworkManager 共用模式的閘道 IP；螢幕和網頁會顯示實際網址）設定，連上正式網路熱點就關。
   熱點開著時每 3 分鐘（2 分鐘內沒人用網頁時）關掉熱點重試一輪已記錄網路，連不上再開回來。
   **熱點救援只在桌寵程式（desktop-pet）跑的時候有效**。
 - **螢幕提示**：沒網路、正在連、連上、熱點模式時寵物用對話框說（熱點模式每 30 秒提醒一次熱點名稱與網址）。
@@ -217,7 +220,7 @@ tools/bench.py             量 fps（即時繪圖、分段毫秒 --stages、動�
 tests/                     unittest（含假 LLM 伺服器 tests/fake_llm.py）
 backend/                   後端（大腦）：server.py（HTTP API）、store.py（存檔）、mood.py（心情/成長）、
                            llm.py（OpenAI 相容客戶端、JSON 抽取驗證）、router.py（本機/雲端路由）、
-                           talk.py（人設與對話、備用台詞）、config.json、run_backend.bat
+                           talk.py（人設與對話、備用台詞）、config.example.json（本機 config.json 不進 repo）、run_backend.bat
 ```
 
 ## 骨架格式

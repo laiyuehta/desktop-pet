@@ -13,7 +13,7 @@ from .server import Brain, make_server
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="桌寵後端（大腦）")
-    p.add_argument("--config", default=None, help="設定檔（預設 backend/config.json）")
+    p.add_argument("--config", default=None, help="額外設定檔（預設 backend/config.example.json ＋ 本機 backend/config.json）")
     p.add_argument("--host", default=None)
     p.add_argument("--port", type=int, default=None)
     p.add_argument("-v", "--verbose", action="store_true")

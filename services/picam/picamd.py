@@ -2,7 +2,7 @@
 """picamd：相機常駐服務（systemd picam.service）。協定與設計見同目錄 README.md、PROPOSAL.md「相機常駐服務：picam」。
 
 - 開機就打開 Pi 相機（Picamera2 / libcamera）並一直占著；只有它碰相機，其他程式都當 client。
-- Unix socket /run/picam/picam.sock（群組 pi-user 0660），JSON 一行一個請求：snapshot / subscribe / status。
+- Unix socket /run/picam/picam.sock（執行使用者的主要群組 0660），JSON 一行一個請求：snapshot / subscribe / status。
 - 拍照合併：0.5 秒內（以及拍照中）到的請求只拍一次、同一個 photo_id；解析度取最大，較小的請求縮圖給。
 - 頻率上限：每秒最多 2 次實際拍照，多的請求併到下一張。
 - 有預覽訂閱時照樣可拍照：預覽暫停約 1 秒再自動恢復。
@@ -770,7 +770,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="picam 相機常駐服務")
     ap.add_argument("--socket", default=DEFAULT_SOCKET)
     ap.add_argument("--status", default=DEFAULT_STATUS)
-    ap.add_argument("--group", default="pi-user", help="socket 群組（0660）")
+    ap.add_argument("--group", default=None, help="socket 群組（0660；預設 = 執行使用者的主要群組）")
     ap.add_argument("--window", type=float, default=0.5, help="合併視窗秒數（預設 0.5）")
     ap.add_argument("--max-rate", type=float, default=2.0, help="每秒最多實際拍幾次（預設 2）")
     ap.add_argument("--idle-fps", type=float, default=5.0, help="閒置時相機串流 fps（0 = 停住但仍占著相機）")

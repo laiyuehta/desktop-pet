@@ -50,12 +50,12 @@ def parse_args(argv=None):
     p.add_argument("--idle-timeout", type=float, default=None,
                    help="覆寫閒置秒數（測試用，例如 10；預設用設定檔的 600）")
     p.add_argument("--duration", type=float, default=0, help="跑幾秒後自動結束（0 = 不限）")
-    p.add_argument("--backend", default=None,
-                   help="後端（大腦）網址，例如 http://192.0.2.100:8090；預設不接")
+    p.add_argument("--backend", default=os.environ.get("PET_BACKEND") or None,
+                   help="後端（大腦）網址，例如 http://192.0.2.100:8090；預設讀環境變數 PET_BACKEND，沒有就不接")
     p.add_argument("--pet-id", default="seed-001", help="寵物 ID（後端存檔用）")
     p.add_argument("--backend-token", default="", help="後端 api_token（不建議：會出現在 ps；請用 --backend-token-file）")
-    p.add_argument("--backend-token-file", default=None,
-                   help="從檔案讀後端 api_token（建議，例如 ~/.config/desktop-pet/backend-token，權限 600）")
+    p.add_argument("--backend-token-file", default=os.environ.get("PET_BACKEND_TOKEN_FILE") or None,
+                   help="從檔案讀後端 api_token（建議，例如 ~/.config/desktop-pet/backend-token，權限 600）；預設讀環境變數 PET_BACKEND_TOKEN_FILE")
     p.add_argument("--camera", choices=["auto", "on", "off"], default="auto",
                    help="拍照能力模組 camera.snapshot（picam 的 client；auto = 有 picam socket 或 rpicam-still 才開）")
     p.add_argument("--camera-socket", default=DEFAULT_PICAM_SOCKET, help="相機常駐服務 picam 的 socket")

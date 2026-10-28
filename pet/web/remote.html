@@ -168,7 +168,7 @@
   <h2 style="margin-top:12px">已記錄的網路（上面的先試）</h2>
   <div id="wf-saved" class="dim">—</div>
   <div class="dim" style="margin-top:8px">連不上任何已記錄的網路 2 分鐘後，會開設定熱點 <b id="wf-hs">PetRescue-AP</b>，
-    手機連上後開 <b>http://192.0.2.1:8080/</b> 設定。</div>
+    手機連上後開 <b id="wf-hsurl">熱點閘道的 :8080</b> 設定（熱點開著時這裡會顯示實際網址）。</div>
 </div>
 
 <div id="toast"></div>
@@ -241,6 +241,7 @@ async function wifiStatus() {
     $("#wf-wired").textContent = (s.wired || []).map(e => e.device + " " + (e.ip || e.state)).join("、") || "—";
     $("#wf-mode").textContent = MODE[s.mode] || s.mode;
     $("#wf-hs").textContent = (s.hotspot && s.hotspot.ssid) || "PetRescue-AP";
+    if (s.hotspot && s.hotspot.url) $("#wf-hsurl").textContent = s.hotspot.url;
     const op = s.op;
     if (op) {
       const cls = op.phase !== "done" ? "" : op.result === "ok" ? "good" : "bad";

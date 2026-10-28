@@ -3,13 +3,14 @@
 不碰相機（相機由 picam 獨占）、不碰 USB（螢幕由 piscreen 獨占）。picam 重啟時自動重連。
 python3 camcast.py [--fps 15] [--seconds N] [--dry-run]   （--dry-run：只收預覽、不送螢幕，測試用）"""
 import argparse
+import os
 import signal
 import sys
 import threading
 import time
 
-sys.path.insert(0, "/home/pi-user/picam")
-sys.path.insert(0, "/home/pi-user/piscreen")
+sys.path.insert(0, os.path.expanduser("~/picam"))
+sys.path.insert(0, os.path.expanduser("~/piscreen"))
 from picam_client import Subscriber  # noqa: E402
 
 

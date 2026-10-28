@@ -25,7 +25,10 @@ log = logging.getLogger("pet.wifi")
 
 DEFAULT_HOTSPOT_CONF = "/etc/desktop-pet/wifi-hotspot.conf"
 HOTSPOT_SSID = "PetRescue-AP"
-HOTSPOT_URL = "http://192.0.2.1:8080/"     # NetworkManager 共用模式（ipv4.method shared）預設閘道
+HOTSPOT_PORT = 8080
+# 熱點網址：熱點開著時用 wlan0 實際拿到的 IP（NetworkManager 共用模式的閘道）組出來，不寫死；
+# 查不到 IP 時才用 PET_HOTSPOT_URL（可不設）。
+HOTSPOT_URL_FALLBACK = os.environ.get("PET_HOTSPOT_URL", "")
 WIFI_TYPE = "802-11-wireless"
 PRIORITY_BASE = 200
 PRIORITY_STEP = 10
@@ -297,6 +300,25 @@ class WifiManager:
         out.sort(key=lambda n: (-int(n["active"]), -n["signal"]))
         return out
 
+    def _hotspot_ip(self) -> Optional[str]:
+        if self.mode != "hotspot":
+            return None
+        try:
+            return self.nm.device_ip(self.iface)
+        except NmError:
+            return None
+
+    def hotspot_url(self) -> Optional[str]:
+        """熱點網址（熱點開著時用實際 IP；否則 PET_HOTSPOT_URL，沒設就 None）。"""
+        ip = self._hotspot_ip()
+        if ip:
+            return f"http://{ip}:{HOTSPOT_PORT}/"
+        return HOTSPOT_URL_FALLBACK or None
+
+    def _hotspot_hostport(self) -> str:
+        ip = self._hotspot_ip()
+        return f"{ip}:{HOTSPOT_PORT}" if ip else f"熱點閘道:{HOTSPOT_PORT}"
+
     def status(self, cache_s: float = 1.5) -> dict:
         t, st = self._status_cache
         if st is not None and self.clock() - t < cache_s:
@@ -324,7 +346,7 @@ class WifiManager:
         except NmError as exc:
             wifi["error"] = str(exc)
         st = {"mode": self.mode, "wifi": wifi, "wired": wired, "pin_required": bool(self.pin),
-              "hotspot": {"ssid": self.hotspot_ssid, "active": self.mode == "hotspot", "url": HOTSPOT_URL,
+              "hotspot": {"ssid": self.hotspot_ssid, "active": self.mode == "hotspot", "url": self.hotspot_url(),
                           "enabled": self.hotspot_enabled, "configured": read_hotspot_conf(self.hotspot_conf) is not None}}
         self._status_cache = (self.clock(), st)
         return dict(st, op=dict(self.op) if self.op else None)
@@ -560,8 +582,8 @@ class WifiManager:
                 return False
         self.mode = "hotspot"
         self.hotspot_since = self.clock()
-        log.info("設定熱點 %s 已開啟（%s）", self.hotspot_ssid, HOTSPOT_URL)
-        self._say(f"設定熱點：{self.hotspot_ssid}，連上後開 192.0.2.1:8080", 10)
+        log.info("設定熱點 %s 已開啟（%s）", self.hotspot_ssid, self.hotspot_url())
+        self._say(f"設定熱點：{self.hotspot_ssid}，連上後開 {self._hotspot_hostport()}", 10)
         return True
 
     def _hotspot_off(self, reconnect: bool = True) -> None:
@@ -615,7 +637,7 @@ class WifiManager:
                 self.mode = "hotspot"
                 if self.hotspot_since is None:
                     self.hotspot_since = now
-                self._say(f"設定熱點：{self.hotspot_ssid}，連上後開 192.0.2.1:8080", 8, repeat_every=30)
+                self._say(f"設定熱點：{self.hotspot_ssid}，連上後開 {self._hotspot_hostport()}", 8, repeat_every=30)
                 # 定時關熱點試一下已記錄的網路（有人正在用網頁設定時不打擾）
                 if now - self.hotspot_since >= self.hotspot_retry and now - self.last_web >= 120 and self.saved():
                     log.info("熱點開了 %.0f 秒，先關掉試已記錄的網路", now - self.hotspot_since)

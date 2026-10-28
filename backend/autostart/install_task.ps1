@@ -1,13 +1,16 @@
 # Create/update the Task Scheduler task "DesktopPet Backend" (runs at logon of the current user, hidden).
-# Usage (as pi-user, no admin needed):  powershell -ExecutionPolicy Bypass -File backend\autostart\install_task.ps1
+# Usage (as the user who runs the backend, no admin needed):  powershell -ExecutionPolicy Bypass -File backend\autostart\install_task.ps1
 # Disable/remove:                          powershell -ExecutionPolicy Bypass -File backend\autostart\uninstall_task.ps1
-param([string]$PythonW = 'C:\path\to\python\pythonw.exe',
+# -PythonW: pythonw.exe to run supervise.py (e.g. the ComfyUI embedded one). Default: $env:PET_PYTHONW, then pythonw.exe on PATH.
+param([string]$PythonW = '',
       [string]$TaskName = 'DesktopPet Backend')
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sup = Join-Path $here 'supervise.py'
 $root = Split-Path -Parent (Split-Path -Parent $here)
-if (-not (Test-Path $PythonW)) { throw "pythonw.exe not found: $PythonW" }
+if (-not $PythonW) { $PythonW = $env:PET_PYTHONW }
+if (-not $PythonW) { $c = Get-Command pythonw.exe -ErrorAction SilentlyContinue; if ($c) { $PythonW = $c.Source } }
+if (-not $PythonW -or -not (Test-Path $PythonW)) { throw "pythonw.exe not found: $PythonW" }
 $user = "$env:USERDOMAIN\$env:USERNAME"
 $action = New-ScheduledTaskAction -Execute $PythonW -Argument "`"$sup`"" -WorkingDirectory $root
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user

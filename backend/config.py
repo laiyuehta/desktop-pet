@@ -1,4 +1,6 @@
-"""設定檔載入：config.json 與內建預設值深度合併（設定檔缺的欄位用預設）。"""
+"""設定檔載入：config.example.json（內建預設，進 repo）＋ config.json（本機設定，含 api_token，不進 repo）深度合併。
+
+設定檔缺的欄位用預設。本機 config.json 可以只寫要改的欄位，也可以是完整的舊版 config.json。"""
 
 from __future__ import annotations
 
@@ -8,7 +10,8 @@ import os
 from typing import Any, Dict, Optional
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_PATH = os.path.join(HERE, "config.json")
+DEFAULT_PATH = os.path.join(HERE, "config.example.json")
+LOCAL_PATH = os.path.join(HERE, "config.json")  # 本機設定（.gitignore），有就疊上去
 
 
 def deep_merge(base: Dict[str, Any], over: Dict[str, Any]) -> Dict[str, Any]:
@@ -22,10 +25,14 @@ def deep_merge(base: Dict[str, Any], over: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def load_config(path: Optional[str] = None, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """讀內建預設（backend/config.json），再疊上指定檔案與 overrides。"""
+    """讀內建預設（backend/config.example.json），疊上本機 backend/config.json（有的話），
+    再疊上指定檔案與 overrides。只讀不寫，不會建立、覆蓋或刪除任何設定檔。"""
     with open(DEFAULT_PATH, "r", encoding="utf-8") as fh:
         cfg = json.load(fh)
-    if path and os.path.abspath(path) != DEFAULT_PATH:
+    if os.path.isfile(LOCAL_PATH) and os.environ.get("PET_BACKEND_NO_LOCAL_CONFIG") != "1":
+        with open(LOCAL_PATH, "r", encoding="utf-8") as fh:
+            cfg = deep_merge(cfg, json.load(fh))
+    if path and os.path.abspath(path) not in (DEFAULT_PATH, LOCAL_PATH):
         with open(path, "r", encoding="utf-8") as fh:
             cfg = deep_merge(cfg, json.load(fh))
     if overrides:

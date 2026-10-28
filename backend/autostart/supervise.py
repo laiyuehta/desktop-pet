@@ -1,4 +1,4 @@
-"""R7 後端看門程式：工作排程器在 pi-user 登入時用 pythonw.exe 執行（沒有視窗）。
+"""R7 後端看門程式：工作排程器在執行後端的使用者登入時用 pythonw.exe 執行（沒有視窗）。
 
 - 用 CREATE_NO_WINDOW 跑 backend\\start_hidden.cmd（後端有自己隱藏的主控台，不受別的視窗 Ctrl+C／關閉影響）。
 - 後端結束 → 5 秒後重啟；跑不到 2 分鐘就掛的話退避加倍，最多 60 秒。
