@@ -27,14 +27,15 @@
    ```powershell
    backend\run_backend.bat
    ```
-   或直接 `py -3 -m backend`。看到「桌寵後端 v0.1.0 啟動：http://0.0.0.0:8090/health」就好了，Ctrl+C 結束。
+   或直接 `py -3 -m backend`；背景執行用 `backend\start_hidden.cmd`（輸出寫進 `backend_out.log`／`backend_err.log`）。看到「桌寵後端 v0.1.0 啟動：http://0.0.0.0:8090/health」就好了，Ctrl+C 結束。
 5. 在 R7 本機測試：
    ```powershell
    curl.exe http://127.0.0.1:8090/health
    $body = [Text.Encoding]::UTF8.GetBytes('{"pet_id":"seed-001","text":"你好"}')
    Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8090/v1/pet/talk -ContentType 'application/json; charset=utf-8' -Body $body
    ```
-   `/health` 裡 `llm.local.reachable` 是 `true` 代表連得到 llama-server；`/talk` 回覆的 `source` 是 `local` 代表是模型回的，`fallback` 代表用了備用台詞。
+   有設 `api_token` 時，`/v1/*` 要加標頭 `-Headers @{'X-Pet-Token'=...}`（token 從 config.json 讀，不要貼在命令列歷史裡）。
+   帶 token 的 `/health` 裡 `llm.local.reachable` 是 `true` 代表連得到 llama-server；`/talk` 回覆的 `source` 是 `local` 代表是模型回的，`fallback` 代表用了備用台詞。
 
 ### Windows 防火牆（讓 Pi 連得到 8090）
 
@@ -63,7 +64,8 @@ python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 | 欄位 | 說明 |
 |---|---|
 | `server.host` / `server.port` | 監聽位址，預設 `0.0.0.0:8090` |
-| `server.api_token` | 留空不檢查；設定後裝置要加 `--backend-token` |
+| `server.api_token` | 留空不檢查（照片 API 例外：沒設就一律 403）；設定後所有 `/v1/*` 要帶 `X-Pet-Token`，裝置用 `--backend-token-file <檔案>` 帶上 |
+| `photos.retention` / `recent_in_record` | 每隻寵物保留幾張照片（預設 200）／存檔裡記幾筆最近照片（預設 20） |
 | `data_dir` | 存檔資料夾（相對路徑以 `backend/` 為準） |
 | `llm.local.base_url` / `model` / `timeout_s` / `retries` | 本機模型；之後換 1~3B 小模型只改這裡。llama-server 預設埠之後可能改成 9931，記得同步改 |
 | `llm.local.no_think` | Qwen3 專用：加 `/no_think` 與 `enable_thinking=false`；換別的模型可設 `false` |
@@ -82,7 +84,10 @@ python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 | POST | `/v1/pet/event` | 裝置回報事件，回傳指令 |
 | POST | `/v1/pet/talk` | 對寵物說話，回傳 LLM（或備用）回覆 + 指令 |
 | GET | `/v1/pet/<id>/state` | 存檔內容（心情、成長、短期記憶） |
-| GET | `/health` | 服務與 LLM 狀態 |
+| GET | `/health` | 不帶 token 只回 `{ok, service, version}`；帶 token 才有 LLM 狀態 |
+| POST | `/v1/pet/photo?pet_id=&reason=&taken=` | 上傳 JPEG（body 是圖本身），回 `{ok, photo_id}`；一定要 token |
+| GET | `/v1/pet/<id>/photos[?limit=]` | 照片列表；一定要 token |
+| GET | `/v1/pet/<id>/photos/<photo_id>` | 取圖（image/jpeg）；一定要 token |
 
 事件範例：
 

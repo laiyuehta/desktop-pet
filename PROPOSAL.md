@@ -1,4 +1,4 @@
-# 桌寵專案 項目書 v1.9
+# 桌寵專案 項目書 v2.0
 
 > 最後更新：2026-10-28　｜　狀態：第一期規劃定稿，細節持續補充
 >
@@ -11,6 +11,7 @@
 > v1.7：網頁遙控新增「Wi‑Fi 設定」：掃描與連線、自動記錄連過的網路、斷線自動依序重試、都連不上時開設定熱點。
 > v1.8：Wi‑Fi 設定已實作並部署（見該節「實作備註」）：在桌寵程式內跑、polkit 規則開權限、熱點需關 PMF、多一個手動開關熱點的 API。
 > v1.9：新增第一個能力模組「拍照傳給後端」（camera.snapshot），觸發方式只留接口、之後再決定。
+> v2.0：後端設好 `api_token`（裝置用 token 檔帶上，`/health` 對外只回基本資訊）；拍照模組實作完成並在 Pi 實測（見該節「實作備註」）。
 
 ## 1. 專案目標
 做一隻放在桌上的實體桌寵：有小螢幕顯示表情動畫，能跟人互動。先在樹莓派上做出原型（之後也會試 ESP32），再比較哪個平台比較適合承載。
@@ -298,7 +299,7 @@ flowchart LR
 
 **隱私與安全**
 - 照片只存在後端（R7），不放進 repo、不寫進日誌。
-- 後端目前對外公開又沒密碼，**照片 API 等於任何人都能上傳或查看**；建議做這個能力時一起把 `api_token` 設好，至少照片相關 API 要帶 token。
+- 照片 API（上傳、列表、取圖）**一定要帶 token**；後端沒設 `api_token` 時照片 API 一律拒絕（403），不會變成公開。
 - 拍照不會在沒有觸發的情況下自己發生；預設沒有任何自動觸發。
 
 **驗收**
@@ -306,6 +307,20 @@ flowchart LR
 - 用事件和本機 API 觸發都能拍；冷卻時間內重複觸發會被擋下並回報。
 - 後端關掉時拍照：先存在 Pi 本機，後端恢復後自動補傳。
 - 相機被占用或沒接時，回報清楚的錯誤，寵物照常運作。
+
+**實作備註（2026-10-28，和上面規格不同或補充的地方）**
+- 程式：裝置端 `pet/extensions/camera.py`（`main.py --camera auto|on|off`，預設 auto＝有 `rpicam-still` 才開）；後端 `backend/photos.py`。
+- 相機：Pi 上是 ov5647（Camera v1），用 `rpicam-still -n -t 1000`（不開預覽，拍照時降低優先權），一張 1280×960 約 110 KB，從按下到後端收到約 2 秒。
+- 相機忙碌：掃描執行中的程式，有 camcast／rpicam／libcamera／raspivid／raspistill 就回「相機忙碌」，不搶、不殺。
+- 擋連拍有兩種回報：拍照中再按回 `in_progress`，拍完 5 秒內再按回 `cooldown`（附剩餘秒數），本機 API 都是 429。
+- 待傳資料夾在 Pi 的 `~/.local/share/desktop-pet/pending-photos/`（只有 pi-user 能讀），最多 20 張，滿了刪最舊的；每 30 秒和每次上傳成功後補傳。
+- 縮圖：遙控頁的縮圖由 Pi 本機提供（`GET /skill/camera.snapshot/last.jpg`，320×240，只在記憶體），不用跟後端要圖，所以遙控頁不需要知道 token。
+- `photo_id` 用拍攝時間（`年月日-時分秒-毫秒`），裝置端檔名和後端一致。
+- 寵物反應：瞇眼（squint）0.6 秒＋「喀嚓！」對話框，走動作請求，寵物在睡覺等狀態時由本體決定怎麼表現。
+- 結果事件：`{"type":"skill","name":"camera.snapshot.done"}`／`camera.snapshot.failed`（附 `error`、`kind`）。skill 事件不會進狀態機。
+- 分析接口：`PhotoStore.register_hook(fn)`，收到照片後呼叫；目前沒有掛任何分析。
+- 後端存檔的「最近照片」清單只記最近 20 筆（`photos.recent_in_record`），照片本身保留 200 張（`photos.retention`）。
+- 實測：按鈕／本機 API／事件觸發、相機忙碌、後端連不上→存本機→恢復後自動補傳、冷卻與拍照中阻擋都在 Pi 上實測通過，動畫維持 20 fps，piscreen 錯誤與救援 0。重試一次、20 張上限、沒接相機、後端指令觸發只用模擬測試。
 
 ### 外部控制器接口（預留）
 之後桌寵可能裝上會動的硬體，第一期**只定義接口、不接真的硬體**：
@@ -383,7 +398,9 @@ flowchart LR
 | 後端（R7） | 運作中 | qwen3-14b 對話約 0.5～1 秒；心情、成長、存檔正常 |
 | 網頁遙控 | 運作中 | `http://192.0.2.43:8080/`，內網使用；含 Wi‑Fi 設定（救援熱點 `PetRescue-AP`） |
 | 外部控制器 | 只有接口 | 記錄用假控制器 |
-| 測試 | 112 個全過 | 含動畫包、播放器與 Wi‑Fi（假 nmcli）測試 |
+| 拍照能力 | 運作中 | 遙控頁「📷 拍一張」；照片存在 R7 `backend/data/photos/<pet_id>/` |
+| 後端 token | 已設定 | 裝置用 token 檔；`/health` 對外只回基本資訊 |
+| 測試 | 129 個全過 | 含動畫包、播放器、Wi‑Fi（假 nmcli）、拍照（假相機、假上傳）與照片 API 測試 |
 | 尚未做 | — | 開機自動啟動、成長推進規則、小模型替換、ESP32 原型、外殼 |
 
 ## 7. 部署與維運
@@ -391,21 +408,29 @@ flowchart LR
 - 目前以臨時 systemd 服務 `desktop-pet` 執行（重開機不會自動啟動），只當 piscreen 的 client，不碰 USB、不重啟 piscreen 服務。
 - 停止：`sudo systemctl stop desktop-pet`；日誌：`journalctl -u desktop-pet -f`；螢幕狀態：`cat /run/piscreen/status.json`。
 - 更新流程：在電腦上改程式或骨架 → 跑測試 → `python3 tools/bake.py` 產生動畫包 → 連同程式複製到 Pi → 重啟 `desktop-pet`。
+- 目前啟動參數：`--sink piscreen --input web --web 0.0.0.0:8080 --backend https://pet.example.com --backend-token-file /home/pi-user/.config/desktop-pet/backend-token --pack /home/pi-user/desktop-pet/packs/seed`。
+- 後端 token 放在 `/home/pi-user/.config/desktop-pet/backend-token`（pi-user 擁有、權限 0600），用 `--backend-token-file` 讀，不放在命令列（`ps`、systemd 設定都看不到）。換 token 時改這個檔和 R7 的設定，再重啟 `desktop-pet`。
 - 之後改成正式的開機自動啟動服務（排在 piscreen 之後啟動）。
 
 **後端（R7，`C:\Users\<user>\desktop-pet`）**
 - 用 ComfyUI 內附的 Python 3.13 執行，埠 8090，日誌 `backend_out.log`／`backend_err.log`；目前重開機不會自動啟動。
+- 啟動：`backend\start_hidden.cmd`（背景執行、輸出寫進日誌；遠端時用 WMI 建立程序啟動，不影響 ComfyUI 和 llama-server）。
+- token 在 R7 的 `backend\config.json` 的 `server.api_token`（repo 裡的版本是空的）。**更新程式時不要覆蓋 R7 的 `config.json`**。
+- 照片存在 `backend\data\photos\<pet_id>\`（每張一個 .jpg＋.json），不進 repo。
 - LLM 由 llama-server 提供（埠 8080），需另外手動開；沒開時後端用備用台詞，寵物照常運作。
 - R7 沒有 GitHub 登入，程式用打包檔傳過去更新。
 - 存檔在 `backend/data/`（每隻寵物一個 JSON 檔），建議定期備份。
 
 ## 8. 安全
-- 後端目前經 DDNS 對外公開、**沒有密碼**，任何人知道網址就能跟寵物說話、改狀態。建議設定 `api_token`（裝置用 `--backend-token` 帶上），或只在內網開放。
+- 後端經 DDNS 對外公開，**已設定 `api_token`**：所有 `/v1/*` API 都要帶 `X-Pet-Token`，沒帶或錯的回 401；照片 API 在後端沒設 token 時也拒絕（403）。
+- token 只存在兩個地方：R7 的 `backend\config.json` 與 Pi 的 `~/.config/desktop-pet/backend-token`（0600）。不進 repo、不寫進日誌、不放命令列。
+- `/health` 不帶 token 只回 `{ok, service, version}`；帶 token 才回 LLM 狀態等細節。
+- 照片只存在 R7，不進 repo，日誌只記檔名與大小。
 - 網頁遙控沒有密碼，只適合內網使用，不要對外轉發。
 - 雲端 API 金鑰（第二期）只放在後端設定，不放在裝置端或 repo。
 
 ## 9. 測試與驗收
-- **自動測試**：每次改動在電腦上跑 `python -m pytest -q`（目前 90 個）。
+- **自動測試**：每次改動在電腦上跑 `python -m pytest -q`（目前 129 個）。
 - **效能量測**：`tools/bench.py` 與逐階段量測；每次大改在 Pi 上量各狀態 fps、CPU。
 - **實機驗收**：所有狀態 20 fps、說話 ≥ 18 fps、事件到畫面 ≤ 0.5 秒、連跑 30 分鐘不掉幀不漏記憶體、piscreen 錯誤與救援次數為 0。
 - **降級測試**：後端關掉、LLM 關掉、網路斷線時，寵物仍正常待機與睡覺。
@@ -416,7 +441,7 @@ flowchart LR
 | Pi 3B 效能不足 | 即時繪圖只有 10～14 fps | 已改預錄動畫；多核心流水線當備案 |
 | 螢幕卡死 | 沒畫面 | 交給 piscreen 自動救援；桌寵只當 client |
 | R7 關機或 LLM 沒開 | 不會說話、不會成長 | 備用台詞；裝置可獨立運作 |
-| 後端對外公開 | 被陌生人操作 | 設 `api_token` 或改內網 |
+| 後端對外公開 | 被陌生人操作 | 已設 `api_token`；token 外洩時兩邊一起換 |
 | 動畫包變大 | 佔空間、更新慢 | 減少過渡片段、拉長切換點間隔 |
 | 小模型太笨 | 對話品質差 | 複雜任務走雲端；保留 14B 當比較基準 |
 
@@ -440,7 +465,6 @@ flowchart LR
 - 什麼條件決定走哪條耳朵系列（兔耳、未來的貓耳……）？
 - 成長線的推進方式（時間、互動或其他）和各階段的形態？
 - 要不要電池、可攜？
-- 後端要設 `api_token`，還是改成只在內網？
 - 裝置端與後端要不要開機自動啟動？
 - 要換成哪個 1～3B 小模型？
 - 實體輸入用什麼硬體（觸控、按鈕、相機）？
