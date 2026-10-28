@@ -4,10 +4,10 @@ After=local-fs.target systemd-udevd.service
 
 [Service]
 Type=simple
-User=pi-user
-Group=pi-user
+User=@USER@
+Group=@USER@
 SupplementaryGroups=video
-ExecStart=/usr/bin/python3 /home/pi-user/picam/picamd.py
+ExecStart=/usr/bin/python3 @HOME@/picam/picamd.py
 Restart=always
 RestartSec=3
 TimeoutStopSec=15

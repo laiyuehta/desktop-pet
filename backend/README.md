@@ -34,7 +34,7 @@
    $body = [Text.Encoding]::UTF8.GetBytes('{"pet_id":"seed-001","text":"你好"}')
    Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8090/v1/pet/talk -ContentType 'application/json; charset=utf-8' -Body $body
    ```
-   有設 `api_token` 時，`/v1/*` 要加標頭 `-Headers @{'X-Pet-Token'=...}`（token 從 config.json 讀，不要貼在命令列歷史裡）。
+   有設 `api_token` 時，`/v1/*` 要加標頭 `-Headers @{'X-Pet-Token'=...}`（token 從本機 backend/config.json 讀，不要貼在命令列歷史裡）。
    帶 token 的 `/health` 裡 `llm.local.reachable` 是 `true` 代表連得到 llama-server；`/talk` 回覆的 `source` 是 `local` 代表是模型回的，`fallback` 代表用了備用台詞。
 
 ### Windows 防火牆（讓 Pi 連得到 8090）
@@ -59,7 +59,10 @@ python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 網頁遙控（`http://192.0.2.43:8080/`）多了「跟寵物說話」輸入框；寵物說的話會以對話框顯示在螢幕上。
 對話框需要中文字型：`sudo apt install fonts-wqy-microhei`（小）或 `fonts-noto-cjk`，也可以用 `--font 路徑` 指定。
 
-## 設定（backend/config.json）
+## 設定（backend/config.example.json ＋ 本機 backend/config.json）
+
+repo 只放預設值 `config.example.json`。實際設定（例如 `server.api_token`）寫在本機的 `backend/config.json`（已列入 `.gitignore`，不會進 repo），
+可以只寫要改的欄位，例如 `{"server": {"api_token": "..."}}`；後端啟動時先讀 example 再疊上本機 config.json。程式不會建立、覆蓋或刪除 config.json。
 
 | 欄位 | 說明 |
 |---|---|

@@ -7,12 +7,13 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=pi-user
-Group=pi-user
-WorkingDirectory=/home/pi-user/desktop-pet
+# @USER@ / @HOME@ / @BACKEND_URL@ 是佔位，install.sh 依 deploy.env 換成實際值（見 deploy.env.example）
+User=@USER@
+Group=@USER@
+WorkingDirectory=@HOME@/desktop-pet
 Environment=PYTHONUNBUFFERED=1
-# 參數跟之前手動跑的一樣；後端 token 從檔案讀（0600），不放命令列
-ExecStart=/usr/bin/python3 /home/pi-user/desktop-pet/main.py --sink piscreen --input web --web 0.0.0.0:8080 --fps 20 --backend https://pet.example.com --pack /home/pi-user/desktop-pet/packs/seed --backend-token-file /home/pi-user/.config/desktop-pet/backend-token
+# 後端 token 從檔案讀（0600），不放命令列
+ExecStart=/usr/bin/python3 @HOME@/desktop-pet/main.py --sink piscreen --input web --web 0.0.0.0:8080 --fps 20 --backend @BACKEND_URL@ --pack @HOME@/desktop-pet/packs/seed --backend-token-file @HOME@/.config/desktop-pet/backend-token
 Restart=always
 RestartSec=3
 TimeoutStopSec=15

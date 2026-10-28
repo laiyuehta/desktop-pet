@@ -30,7 +30,7 @@
 
 > 本章的圖片都只是**錨定／參考圖**，用來定外型方向，不是程式實際使用的素材。實際素材之後會另外做成適合 800×480 螢幕的版本。顏色、細節以文字設定為準，圖之間的差異（例如眼睛顏色）不代表設定。
 
-![初始形象](assets/reference/initial-form.png)
+> 參考圖已從公開 repo 移除，外型以下方文字設定為準。
 
 - **初始形態**：圓球狀的「種子」，金屬感的淡藍色球體，球身有分割線
 - **頭頂**：兩根呆毛天線（將來第二期可以用來表示「收到訊號／有事要說」）
@@ -41,8 +41,8 @@
 ### 成長階段
 | 階段 | 圖 | 外型變化 |
 |---|---|---|
-| 1. 種子 | ![種子](assets/reference/initial-form.png) | 圓球、兩根呆毛天線、黃色燈眼、小三角嘴 |
-| 2. 長腳 | ![長腳 A](assets/reference/stage2-legs.png) ![長腳 B](assets/reference/stage2-legs-b.png) | 主要變化：**長出兩隻短腳**。其他細節（側邊模組、眼睛紋路、底座等）參考圖之間不一致，以後再定 |
+| 1. 種子 | （參考圖未公開） | 圓球、兩根呆毛天線、黃色燈眼、小三角嘴 |
+| 2. 長腳 | （參考圖未公開） | 主要變化：**長出兩隻短腳**。其他細節（側邊模組、眼睛紋路、底座等）參考圖之間不一致，以後再定 |
 | 3. 長耳朵（兔耳路線） | 見下方「第三階段兔耳路線」 | 長出兔耳，分初期、中期、末期；目前有 A、B、C 三個版本的參考圖 |
 | 4+ | 待定 | |
 
@@ -51,10 +51,10 @@
 
 | 版本 | 初期 | 中期 | 末期 |
 |---|---|---|---|
-| 未分版 | ![兔耳初期](assets/reference/stage3-ears-bunny.png) | | |
-| A | | ![A 中期](assets/reference/stage3-mid-bunny.png) | ![A 末期](assets/reference/stage3-late-bunny.png) |
-| B | | ![B 中期](assets/reference/stage3-mid-bunny-b.png) | ![B 末期](assets/reference/stage3-late-bunny-b.png) |
-| C | ![C 初期](assets/reference/stage3-early-bunny-c.png) | | ![C 版](assets/reference/stage3-late-bunny-c.png) ![C 末期](assets/reference/stage3-late-bunny-c2.png) |
+| 未分版 | （參考圖未公開） | | |
+| A | | （參考圖未公開） | （參考圖未公開） |
+| B | | （參考圖未公開） | （參考圖未公開） |
+| C | （參考圖未公開） | | （參考圖未公開） |
 
 - **A 版**：中期側邊有星星圓形模組；末期內耳是黃色、額頭有白色十字
 - **B 版**：中期身體扁圓、白色臉部、額頭有黃色標誌；末期頭上有粉紅小球
@@ -189,7 +189,7 @@ flowchart TB
 
 **主程式 ↔ 前端後台的接口**
 - 兩條 Unix socket，放在 `/run/desktop-pet/`：
-  - systemd 的 `RuntimeDirectory=desktop-pet`、`RuntimeDirectoryPreserve=yes`，權限 0750，群組 pi-user。
+  - systemd 的 `RuntimeDirectory=desktop-pet`、`RuntimeDirectoryPreserve=yes`，權限 0750，群組 @USER@。
   - 主程式建立 socket；後台連不上就每 2 秒重試。
   - 不開 TCP 埠，內網其他機器碰不到。
 - **控制 API**：`control.sock`，用 HTTP/1.1＋JSON（Python 標準庫就能做，除錯可直接用 `curl --unix-socket`）。
@@ -225,7 +225,7 @@ flowchart TB
   - `status` 回應帶 `proto` 與 `version`。
   - 不相容的修改升主版本，舊版本保留一段時間。
 - **socket**：`/run/<名稱>/<名稱>.sock`，JSON 一行一個請求（需要時接二進位資料）。
-  - 權限 0660，群組可設定（這個專案用 pi-user）。
+  - 權限 0660，群組可設定（這個專案用 @USER@）。
   - 每個都有 `status` 與 `subscribe`（事件推送）。
 - **狀態檔** `/run/<名稱>/status.json`，共同欄位：`name, version, proto, pid, started, uptime, clients, errors, last_error, last_error_ts`，再加各自的欄位。
 - **日誌**：stdout／stderr 交給 journald，第一個字是等級，一行一件事。
@@ -280,7 +280,7 @@ flowchart TB
   - 熱點密碼移到 `/etc/piwifi/hotspot.conf`（root:piwifi 0640），**密碼不會出現在 socket 回應、日誌、repo**。
   - `password` 只在 `connect` 請求裡經過 socket，傳給 nmcli 後就丟掉，不寫日誌。
 - 開機就跑，排在 NetworkManager 之後（`After=NetworkManager.service`，只用 `Wants=`）。所以就算桌寵主程式、後台都沒起來，救援熱點照樣會開。
-  - 熱點網址 `http://192.0.2.1:8080/` 由後台提供。
+  - 熱點網址（熱點閘道 IP 的 `:8080`，執行時從 wlan0 實際 IP 取得）由後台提供。
 
 **遷移步驟（從現在的狀態開始；每一步都不能讓救援熱點或螢幕壞掉）**
 - 現在：網頁遙控、Wi‑Fi 管理、螢幕畫面同步都是 desktop-pet 裡的執行緒。
@@ -302,7 +302,7 @@ flowchart TB
    - 在 Pi 上先以 `--observe` 模式跑（只讀狀態、不下任何指令），跟後台裡的 Python 版並行比對 1 天。
    - 切換：建 `piwifi` 使用者、polkit 規則、搬熱點設定檔 → 後台停掉內建 Wi‑Fi 管理、改當 piwifi client → piwifi 改成正式模式。這也是**同一次操作**完成。
    - 主程式改成直接訂閱 piwifi 的狀態來顯示提示，`/v1/notice` 保留給其他用途。
-   - 舊的 polkit 規則（給 pi-user）在穩定 1 週後才移除。
+   - 舊的 polkit 規則（給 @USER@）在穩定 1 週後才移除。
    - 回退：停 piwifi，後台改回內建 Wi‑Fi 管理。
 3. **整理現有守護程式**
    - picam 補 `PROTOCOL.md`、`CHANGELOG.md`、`"v":1` 與共同狀態欄位，維持相容。
@@ -501,7 +501,7 @@ flowchart LR
 ### 相機常駐服務：picam
 **負責**：開機就打開 Pi 相機並一直占著，替所有 client 拍照、提供預覽畫面。
 
-**協定（Unix socket `/run/picam/picam.sock`，群組 pi-user 可讀寫，JSON 一行一個請求）**
+**協定（Unix socket `/run/picam/picam.sock`，群組 @USER@ 可讀寫，JSON 一行一個請求）**
 - `{"cmd": "snapshot", "width": 1280, "height": 960, "quality": 85, "client": "desktop-pet", "reason": "manual"}` → 回 `{"ok": true, "photo_id": "...", "ts": ..., "size": ...}` 後接 `[4 byte big-endian 長度][JPEG]`。
 - `{"cmd": "subscribe", "fps": 15, "width": 800, "height": 480}` → 持續送預覽 JPEG（給 camcast 這類 client），直到斷線。
 - `{"cmd": "status"}` → 相機型號、目前模式、client 數、拍照次數、錯誤數。
@@ -530,11 +530,11 @@ flowchart LR
 
 **實作備註（2026-10-28）**
 - 程式在 repo 的 `services/picam/`：`picamd.py`（daemon）、`picam_client.py`（client 函式庫）、`picam.service`、`install.sh`、`README.md`（協定）。
-  Pi 上裝在 `/home/pi-user/picam/`（跟 `~/piscreen` 同樣的放法）。systemd `picam.service` 已 enable（開機啟動、`Restart=always`）。
+  Pi 上裝在 `@HOME@/picam/`（跟 `~/piscreen` 同樣的放法）。systemd `picam.service` 已 enable（開機啟動、`Restart=always`）。
 - **用 Picamera2**（`sudo apt install --no-install-recommends python3-picamera2`，約 170 個套件，大多是 numpy、ffmpeg、mesa 函式庫）。
   原因：一個程式可以長期持有相機，並在同一個程式裡切換「閒置／預覽／拍照」三種設定，還能用硬體 MJPEG 編碼。
   如果用 `rpicam-*` 指令，拍照和預覽要不同的程式，每次切換都要放開再重開相機，等於又回到搶相機。
-- **服務身分**：以 pi-user 身分、加 video 群組執行，不需要 root。socket 是 `/run/picam/picam.sock`（pi-user:pi-user 0660），狀態在 `/run/picam/status.json`。
+- **服務身分**：以 @USER@ 身分、加 video 群組執行，不需要 root。socket 是 `/run/picam/picam.sock`（@USER@:@USER@ 0660），狀態在 `/run/picam/status.json`。
 - **閒置**：相機用 640×480、5 fps 低速串流，讓曝光和白平衡一直保持收斂，拍照不用暖機。picam 閒置 CPU 約 1.2%，RSS 約 54 MB。
 - **拍照**：切到 still 設定、丟 2 格再拍，然後切回原本的設定。
   - 1280×960 從請求到拿到照片約 1.0 秒（含 0.5 秒合併視窗），2592×1944 約 1.3 秒。
@@ -602,7 +602,7 @@ flowchart LR
 - 相機：Pi 上是 ov5647（Camera v1），用 `rpicam-still -n -t 1000`（不開預覽，拍照時降低優先權），一張 1280×960 約 110 KB，從按下到後端收到約 2 秒。
 - 相機忙碌：掃描執行中的程式，有 camcast／rpicam／libcamera／raspivid／raspistill 就回「相機忙碌」，不搶、不殺。
 - 擋連拍有兩種回報：拍照中再按回 `in_progress`，拍完 5 秒內再按回 `cooldown`（附剩餘秒數），本機 API 都是 429。
-- 待傳資料夾在 Pi 的 `~/.local/share/desktop-pet/pending-photos/`（只有 pi-user 能讀），最多 20 張，滿了刪最舊的；每 30 秒和每次上傳成功後補傳。
+- 待傳資料夾在 Pi 的 `~/.local/share/desktop-pet/pending-photos/`（只有 @USER@ 能讀），最多 20 張，滿了刪最舊的；每 30 秒和每次上傳成功後補傳。
 - 縮圖：遙控頁的縮圖由 Pi 本機提供（`GET /skill/camera.snapshot/last.jpg`，320×240，只在記憶體），不用跟後端要圖，所以遙控頁不需要知道 token。
 - `photo_id` 用拍攝時間（`年月日-時分秒-毫秒`），裝置端檔名和後端一致。
 - 寵物反應：瞇眼（squint）0.6 秒＋「喀嚓！」對話框，走動作請求，寵物在睡覺等狀態時由本體決定怎麼表現。
@@ -900,7 +900,7 @@ flowchart LR
     - 檢查 script 沒有重複宣告，用 node 檢查語法。
     - 用假 DOM 跑整段 script：確認會設定 MJPEG 來源，MJPEG 沒畫面時會改成輪詢。
   - 實測：Windows 上的 Edge（headless）打開 `http://192.0.2.43:8080/` 有畫面，模式是串流、觀看 1/3。觀看人數滿的時候也會自動改用輪詢顯示畫面。
-  - 網址都是相對路徑，從熱點 `192.0.2.1:8080` 打開也一樣可以用。
+  - 網址都是相對路徑，從熱點閘道的 `:8080` 打開也一樣可以用。
 
 ### 網頁遙控：Wi‑Fi 設定
 讓使用者不用接螢幕鍵盤或 SSH，就能用手機替桌寵換 Wi‑Fi。
@@ -940,11 +940,11 @@ flowchart LR
 **實作備註（v1.8，2026-10-28 實作）**
 - **在桌寵程式裡跑**（`pet/wifi.py` 的背景執行緒，每 5 秒檢查一次），不另開服務；所以**熱點救援只在 desktop-pet 跑的時候有效**。
   之後若要開機就有救援，再把 desktop-pet 做成開機服務（或拆成獨立的小服務），程式不用改。
-- **權限**：polkit 規則 `/etc/polkit-1/rules.d/50-desktop-pet-wifi.rules`，只給 pi-user 四個 NetworkManager 動作
+- **權限**：polkit 規則 `/etc/polkit-1/rules.d/50-desktop-pet-wifi.rules`，只給 @USER@ 四個 NetworkManager 動作
   （wifi.scan、network-control、settings.modify.system、wifi.share.protected）；桌寵程式本身不用 sudo。
   polkit 沒辦法限制到「只有 wlan0」，後兩項技術上也能改有線設定，所以「只動 Wi‑Fi」由程式保證（指令只對 wlan0 與 Wi‑Fi 設定下）。
-- **熱點**：`PetRescue-AP`（WPA2-PSK、2.4 GHz、NetworkManager 共用模式，網址 `http://192.0.2.1:8080/`）；
-  密碼在 Pi 的 `/etc/desktop-pet/wifi-hotspot.conf`（root:pi-user 0640，部署時用 `tools/wifi/install.sh` 隨機產生）。
+- **熱點**：`PetRescue-AP`（WPA2-PSK、2.4 GHz、NetworkManager 共用模式，網址是熱點閘道 IP 的 `:8080`，執行時取得、螢幕會顯示）；
+  密碼在 Pi 的 `/etc/desktop-pet/wifi-hotspot.conf`（root:@USER@ 0640，部署時用 `tools/wifi/install.sh` 隨機產生）。
   Pi 3B 的 Wi‑Fi 晶片實測**必須關閉 PMF** 熱點才開得起來。熱點開著時每 3 分鐘（2 分鐘內沒人用網頁時）關掉熱點重試一輪已記錄網路。
 - **判斷「沒網路」只看 Wi‑Fi**（有線網路接著也一樣會開熱點），照規格字面。
 - 多一個 `POST /wifi/hotspot {"on": true|false}`：手動開關熱點（測試與救援用）。
@@ -973,31 +973,32 @@ flowchart LR
 | 尚未做 | — | 前端後台拆分、piwifi（Rust）、成長推進規則、多模態模型、記憶系統、ESP32 原型、外殼 |
 
 ## 7. 部署與維運
-**裝置端（Pi 3B，`/home/pi-user/desktop-pet`）**
+**裝置端（Pi 3B，`@HOME@/desktop-pet`）**
 - **開機自動啟動**：正式 systemd 服務 `desktop-pet.service`（repo 的 `services/desktop-pet/`，`install.sh` 安裝），已 enable。
-  - 以 pi-user 身分執行，`Restart=always`（3 秒後重啟，不限次數）。
+  - 以 @USER@ 身分執行，`Restart=always`（3 秒後重啟，不限次數）。
   - 啟動順序：`After=piscreen.service picam.service network-online.target`。
   - 依賴只用 `Wants=`，**不用 `Requires=`／`BindsTo=`**：桌寵停止、重啟或失敗都不會連帶停止或重啟 piscreen。
     piscreen 或 picam 沒在跑時，桌寵照樣啟動；螢幕 socket 與相機都會自動重連。
   - network-online 最多等 NetworkManager-wait-online 的逾時時間（約 60 秒）。沒網路也會照樣啟動，之後由 Wi‑Fi 管理器重試，必要時開救援熱點。
-  - Wi‑Fi 權限走 polkit 規則 `/etc/polkit-1/rules.d/50-desktop-pet-wifi.rules`。規則看的是使用者（pi-user），不是登入工作階段，所以在 systemd 服務裡照樣有效。
+  - Wi‑Fi 權限走 polkit 規則 `/etc/polkit-1/rules.d/50-desktop-pet-wifi.rules`。規則看的是使用者（@USER@），不是登入工作階段，所以在 systemd 服務裡照樣有效。
   - 只當 piscreen 的 client，不碰 USB、不重啟 piscreen 服務。
 - 停用自動啟動：`sudo systemctl disable --now desktop-pet`（`--now` 會順便停掉）。
   恢復：`sudo systemctl enable --now desktop-pet`。
 - 停止：`sudo systemctl stop desktop-pet`（`Restart=always` 不會在手動 stop 後重啟）。
 - 日誌：`journalctl -u desktop-pet -f`；螢幕狀態：`cat /run/piscreen/status.json`。
 - 更新流程：在電腦上改程式或骨架 → 跑測試 → `python3 tools/bake.py` 產生動畫包 → 連同程式複製到 Pi → 重啟 `desktop-pet`。
-- 啟動參數（寫在 unit 裡，改參數就改 `services/desktop-pet/desktop-pet.service` 再跑 `install.sh`）：`--sink piscreen --input web --web 0.0.0.0:8080 --fps 20 --backend https://pet.example.com --backend-token-file /home/pi-user/.config/desktop-pet/backend-token --pack /home/pi-user/desktop-pet/packs/seed`。
-- 後端 token 放在 `/home/pi-user/.config/desktop-pet/backend-token`（pi-user 擁有、權限 0600），用 `--backend-token-file` 讀，不放在命令列（`ps`、systemd 設定都看不到）。換 token 時改這個檔和 R7 的設定，再重啟 `desktop-pet`。
+- 部署值（執行使用者 `PET_USER`、家目錄 `PET_HOME`、後端網址 `PET_BACKEND_URL`）放在 repo 根目錄的 `deploy.env`（不進 repo，範本 `deploy.env.example`）。`install.sh` 把 unit 裡的 `@USER@`／`@HOME@`／`@BACKEND_URL@` 換成這些值，只讀不寫 `deploy.env`。
+- 其他啟動參數（寫在 unit 裡，改參數就改 `services/desktop-pet/desktop-pet.service` 再跑 `install.sh`）：`--sink piscreen --input web --web 0.0.0.0:8080 --fps 20 --pack @HOME@/desktop-pet/packs/seed`。
+- 後端 token 放在 `@HOME@/.config/desktop-pet/backend-token`（@USER@ 擁有、權限 0600），用 `--backend-token-file` 讀，不放在命令列（`ps`、systemd 設定都看不到）。換 token 時改這個檔和 R7 的設定，再重啟 `desktop-pet`。
 
-**相機常駐服務 picam（Pi，`/home/pi-user/picam`）**
-- 正式 systemd 服務 `picam.service`（已 enable，開機啟動、`Restart=always`），以 pi-user 身分執行。需要 `python3-picamera2`（已裝）。
+**相機常駐服務 picam（Pi，`@HOME@/picam`）**
+- 正式 systemd 服務 `picam.service`（已 enable，開機啟動、`Restart=always`），以 @USER@ 身分執行。需要 `python3-picamera2`（已裝）。
 - 更新：把 repo 的 `services/picam/` 複製到 Pi，執行 `sh services/picam/install.sh`（複製到 `~/picam`、裝 unit、enable、restart）。可以隨時重啟，client 會自動重連。
 - 狀態：`cat /run/picam/status.json`；日誌：`journalctl -u picam -f`。相機預覽到螢幕（測試用）：`~/camcast/start.sh`／`~/camcast/stop.sh`（會跟桌寵搶螢幕畫面）。
 
 **後端（R7，`C:\Users\<user>\desktop-pet`）**
 - 用 ComfyUI 內附的 Python 3.13 執行，埠 8090，日誌 `backend_out.log`／`backend_err.log`。
-- **登入自動啟動**：工作排程器的工作 `DesktopPet Backend`（`backend\autostart\install_task.ps1` 建立），在 pi-user **登入時**啟動。
+- **登入自動啟動**：工作排程器的工作 `DesktopPet Backend`（`backend\autostart\install_task.ps1` 建立），在執行後端的 Windows 使用者**登入時**啟動。
   - 執行 `pythonw.exe backend\autostart\supervise.py`。pythonw 沒有視窗，完全背景執行。
   - supervise.py 用 `CREATE_NO_WINDOW` 跑 `backend\start_hidden.cmd`。後端有自己隱藏的主控台，不會被別的視窗的 Ctrl+C 或關閉影響。
   - 後端結束就 5 秒後重啟，連續失敗退避到最多 60 秒。重啟紀錄寫在 `backend_supervisor.log`。
@@ -1006,12 +1007,12 @@ flowchart LR
     - 8090 已經有人在聽（例如手動開的後端）時，supervise.py 不啟動新的，每 15 秒看一次，等它停了才接手。
     - `start_hidden.cmd` 本身也會先檢查 8090，已在用就直接結束。
   - 工作設定：不限執行時間（預設 72 小時會被停掉）、失敗時每 1 分鐘重試（最多 3 次）、用電池也執行。工作以使用者身分執行，不存密碼、不需要系統管理員。
-  - **限制**：要 pi-user 登入 Windows 才會啟動（開機停在登入畫面時後端不會跑）。要開機不用登入就跑，得改成「不論使用者是否登入都執行」，那需要存 Windows 密碼，這期不做。
+  - **限制**：要執行後端的使用者登入 Windows 才會啟動（開機停在登入畫面時後端不會跑）。要開機不用登入就跑，得改成「不論使用者是否登入都執行」，那需要存 Windows 密碼，這期不做。
   - 停用：`powershell -File backend\autostart\uninstall_task.ps1`，或在工作排程器裡停用或刪除 `DesktopPet Backend`。
     停掉正在跑的後端：結束 `supervise.py` 的 pythonw.exe，以及 8090 的 python.exe。
   - 手動啟動（不經排程）：`backend\start_hidden.cmd`（前景，有視窗）。遠端用 WMI 建立程序時要注意：沒有 supervise 看著，掛了不會自動重啟。
 - 不影響 ComfyUI 和 llama-server（不會碰它們的程序）。
-- token 在 R7 的 `backend\config.json` 的 `server.api_token`（repo 裡的版本是空的）。**更新程式時不要覆蓋 R7 的 `config.json`**。
+- token 在 R7 的 `backend\config.json` 的 `server.api_token`。這個檔是本機設定、已列入 `.gitignore`，repo 只放預設值 `backend\config.example.json`（後端先讀 example，再疊上本機 config.json）。**更新程式時不要覆蓋或刪除 R7 的 `config.json`**。
 - 照片存在 `backend\data\photos\<pet_id>\`（每張一個 .jpg＋.json），不進 repo。
 - LLM 由 llama-server 提供（埠 8080），需另外手動開；沒開時後端用備用台詞，寵物照常運作。
 - R7 沒有 GitHub 登入，程式用打包檔傳過去更新。
@@ -1065,14 +1066,14 @@ flowchart LR
 - 什麼條件決定走哪條耳朵系列（兔耳、未來的貓耳……）？
 - 成長線的推進方式（時間、互動或其他）和各階段的形態？
 - 要不要電池、可攜？
-- ~~裝置端與後端要不要開機自動啟動？~~ 已決定（2026-10-28）：要。Pi 用 systemd `desktop-pet.service`（開機），R7 用工作排程器（pi-user 登入時）。見「部署與維運」。
+- ~~裝置端與後端要不要開機自動啟動？~~ 已決定（2026-10-28）：要。Pi 用 systemd `desktop-pet.service`（開機），R7 用工作排程器（使用者登入時）。見「部署與維運」。
 - 要換成哪個 1～3B 小模型？（v2.5 改提議：R7 先換成多模態 Qwen3-VL-8B，1～3B 留到 ESP32／離線再說）
 - **v2.6 整體架構（待決定）**：
   - 名稱可以嗎？前端後台叫 `desktop-pet-admin`，Wi‑Fi 守護程式叫 `piwifi`，之後是 `pitouch`、`piwheels`、`pigimbal`、`pimic`。
   - 遷移每一步要實測救援熱點：Wi‑Fi 會斷線約 1～2 分鐘，Pi 經有線維持可連。可以接受嗎？
   - 守護程式先放在這個 repo 的 `services/<名稱>/`（隨時可拆出），還是現在就各開一個 GitHub repo？
   - 在 box 用 rustup 安裝 Rust 工具鏈（需要下載）可以嗎？編好的執行檔要不要放 GitHub Releases？
-  - piwifi 用專用使用者 `piwifi` 跑，還是沿用 pi-user？
+  - piwifi 用專用使用者 `piwifi` 跑，還是沿用 @USER@？
   - 前端後台的網頁仍然沒有密碼（只限內網），PIN 照舊延後嗎？
 - **v2.5 多模態與記憶（擱置中，問題暫緩）**：
   - 同意用 Qwen3-VL-8B 取代 qwen3-14b 嗎？要先 A/B 再換，A/B 由你盲評。同意下載模型檔（約 6.2 GB）嗎？

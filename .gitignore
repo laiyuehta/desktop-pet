@@ -4,3 +4,24 @@ __pycache__/
 preview/live/
 backend/data/
 packs/
+
+# 本機設定與機密（不要進 repo）
+.env
+.env.*
+deploy.env
+*.pem
+*.key
+backend-token
+secrets*
+backend/config.json
+backend/config.local.json
+
+# 執行產物
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# 虛擬環境
+venv/
+.venv/

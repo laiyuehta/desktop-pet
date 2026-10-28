@@ -2,9 +2,9 @@
 
 照 PROPOSAL.md「週邊常駐服務原則」：**只有 picam 打開相機、一直占著**，其他程式（桌寵、camcast、工具）都當 client，透過 Unix socket 要照片或預覽，不直接碰相機，也不會互搶。
 
-- `picamd.py`：常駐 daemon（systemd `picam.service`，開機啟動、`Restart=always`，以 pi-user 身分、video 群組執行，不需要 root）。
+- `picamd.py`：常駐 daemon（systemd `picam.service`，開機啟動、`Restart=always`，以執行使用者（deploy.env 的 PET_USER）身分、video 群組執行，不需要 root）。
 - `picam_client.py`：client 函式庫（只用標準函式庫）。桌寵的 `camera.snapshot` 模組與 camcast 都用它。
-- `install.sh`：在 Pi 上安裝／更新（複製到 `/home/pi-user/picam/`、裝 systemd unit、enable、restart）。
+- `install.sh`：在 Pi 上安裝／更新（複製到 `~/picam/`、裝 systemd unit、enable、restart）。
 - 需要 `python3-picamera2`：`sudo apt install --no-install-recommends python3-picamera2`。
 
 ## 為什麼用 Picamera2
@@ -25,7 +25,7 @@ Picamera2 讓一個程式長期持有相機，並在同一個程式裡切換「�
 - 照片內容不寫日誌，只記 photo_id、尺寸、請求數、client 名稱。
 
 ## Socket 協定
-`/run/picam/picam.sock`（pi-user:pi-user 0660）。每個請求是一行 JSON，以 `\n` 結尾。回應先是一行 JSON，有圖片時後面接 `[4 byte big-endian 長度][JPEG]`。同一條連線可以送很多個 snapshot／status；subscribe 之後這條連線只用來送預覽。
+`/run/picam/picam.sock`（@USER@:@USER@ 0660）。每個請求是一行 JSON，以 `\n` 結尾。回應先是一行 JSON，有圖片時後面接 `[4 byte big-endian 長度][JPEG]`。同一條連線可以送很多個 snapshot／status；subscribe 之後這條連線只用來送預覽。
 
 | 請求 | 回應 |
 |---|---|
@@ -42,7 +42,7 @@ Picamera2 讓一個程式長期持有相機，並在同一個程式裡切換「�
 ```sh
 cat /run/picam/status.json                         # 狀態
 journalctl -u picam -f                             # 日誌
-python3 -c "import sys; sys.path.insert(0,'/home/pi-user/picam'); import picam_client as p; m,d=p.snapshot(); open('/tmp/a.jpg','wb').write(d); print(m)"
+python3 -c "import sys; sys.path.insert(0,__import__('os').path.expanduser('~/picam')); import picam_client as p; m,d=p.snapshot(); open('/tmp/a.jpg','wb').write(d); print(m)"
 ```
 Python：
 ```python

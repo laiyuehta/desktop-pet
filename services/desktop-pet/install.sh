@@ -5,7 +5,15 @@
 set -eu
 cd "$(dirname "$0")"
 UNIT=/etc/systemd/system/desktop-pet.service
-sudo install -m 644 desktop-pet.service "$UNIT"
+# 部署值從 repo 根目錄的 deploy.env 讀（不進 repo；只讀不寫）
+PET_REPO_ROOT="$(cd ../.. && pwd)"
+. "$PET_REPO_ROOT/tools/deploy/common.sh"
+load_deploy_env
+[ -n "$PET_BACKEND_URL" ] || { echo "deploy.env 沒設 PET_BACKEND_URL（cp deploy.env.example deploy.env 再改）"; exit 1; }
+tmp=$(mktemp)
+render_template desktop-pet.service > "$tmp" || { rm -f "$tmp"; exit 1; }
+sudo install -m 644 "$tmp" "$UNIT"
+rm -f "$tmp"
 echo "== systemd-analyze verify"
 sudo systemd-analyze verify "$UNIT" && echo "verify OK"
 frag=$(systemctl show -p FragmentPath --value desktop-pet 2>/dev/null || true)

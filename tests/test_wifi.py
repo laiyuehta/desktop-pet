@@ -323,6 +323,9 @@ def test_hotspot_after_timeout_and_off_when_back(env):
     assert nm.conns[hs]["mode"] == "ap" and nm.conns[hs]["psk"] == "hotspotpw123" and nm.active == hs
     assert any("PetRescue-AP" in n for n in notes)
     assert mgr.saved()[0]["name"] == "HomeAP"        # 熱點不在已記錄清單
+    # 熱點網址用 wlan0 實際拿到的 IP（不寫死）
+    assert any("192.0.2.1:8080" in n for n in notes)
+    assert mgr.status(cache_s=0)["hotspot"]["url"] == "http://192.0.2.1:8080/"
     # 在熱點模式下從網頁設定新網路 → 熱點自動關掉
     nm.air["Cafe"] = {"password": "cafepass1"}
     mgr.start_connect(ssid="Cafe", password="cafepass1", background=False)
