@@ -27,6 +27,78 @@
       "eyes": "sleep",
       "effects": ["zzz"],
       "timers": []
+    },
+    "happy_1": {
+      "label": "微笑",
+      "animation": "happy_1",
+      "eyes": "happy",
+      "timers": [{"after": 4.7, "event": "happy_1_done", "reset_on_input": false}]
+    },
+    "happy_2": {
+      "label": "開心",
+      "animation": "happy_2",
+      "eyes": "happy",
+      "timers": [{"after": 3.5, "event": "happy_2_done", "reset_on_input": false}]
+    },
+    "happy_3": {
+      "label": "超開心",
+      "animation": "happy_3",
+      "eyes": "happy",
+      "timers": [{"after": 3.9, "event": "happy_3_done", "reset_on_input": false}]
+    },
+    "surprised_1": {
+      "label": "愣一下",
+      "animation": "surprised_1",
+      "eyes": "surprised",
+      "timers": [{"after": 2.3, "event": "surprised_1_done", "reset_on_input": false}]
+    },
+    "surprised_2": {
+      "label": "往後縮",
+      "animation": "surprised_2",
+      "eyes": "surprised",
+      "timers": [{"after": 2.3, "event": "surprised_2_done", "reset_on_input": false}]
+    },
+    "surprised_3": {
+      "label": "嚇到彈起",
+      "animation": "surprised_3",
+      "eyes": "surprised",
+      "timers": [{"after": 2.3, "event": "surprised_3_done", "reset_on_input": false}]
+    },
+    "sad_1": {
+      "label": "垂眼",
+      "animation": "sad_1",
+      "eyes": "sad",
+      "timers": [{"after": 6.3, "event": "sad_1_done", "reset_on_input": false}]
+    },
+    "sad_2": {
+      "label": "低頭縮小",
+      "animation": "sad_2",
+      "eyes": "sad",
+      "timers": [{"after": 6.3, "event": "sad_2_done", "reset_on_input": false}]
+    },
+    "sad_3": {
+      "label": "哭哭",
+      "animation": "sad_3",
+      "eyes": "sad",
+      "timers": [{"after": 4.7, "event": "sad_3_done", "reset_on_input": false}]
+    },
+    "shy": {
+      "label": "害羞",
+      "animation": "shy",
+      "eyes": "squint",
+      "timers": [{"after": 6.3, "event": "shy_done", "reset_on_input": false}]
+    },
+    "annoyed_1": {
+      "label": "皺眉",
+      "animation": "annoyed_1",
+      "eyes": "squint",
+      "timers": [{"after": 4.7, "event": "annoyed_1_done", "reset_on_input": false}]
+    },
+    "annoyed_2": {
+      "label": "生氣",
+      "animation": "annoyed_2",
+      "eyes": "squint",
+      "timers": [{"after": 4.7, "event": "annoyed_2_done", "reset_on_input": false}]
     }
   },
   "transitions": [
@@ -51,6 +123,19 @@
     {"from": "sleep", "event": "poke",         "to": "idle"},
     {"from": "sleep", "event": "press",        "to": "idle"},
     {"from": "sleep", "event": "morning",      "to": "idle"},
+
+    {"from": "happy_1",     "event": "happy_1_done",     "to": "idle"},
+    {"from": "happy_2",     "event": "happy_2_done",     "to": "idle"},
+    {"from": "happy_3",     "event": "happy_3_done",     "to": "idle"},
+    {"from": "surprised_1", "event": "surprised_1_done", "to": "idle"},
+    {"from": "surprised_2", "event": "surprised_2_done", "to": "idle"},
+    {"from": "surprised_3", "event": "surprised_3_done", "to": "idle"},
+    {"from": "sad_1",       "event": "sad_1_done",       "to": "idle"},
+    {"from": "sad_2",       "event": "sad_2_done",       "to": "idle"},
+    {"from": "sad_3",       "event": "sad_3_done",       "to": "idle"},
+    {"from": "shy",         "event": "shy_done",         "to": "idle"},
+    {"from": "annoyed_1",   "event": "annoyed_1_done",   "to": "idle"},
+    {"from": "annoyed_2",   "event": "annoyed_2_done",   "to": "idle"},
 
     {"from": "*",     "event": "wake",         "to": "idle"},
     {"from": "*",     "event": "sleep",        "to": "sleep"}
