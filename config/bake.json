@@ -26,6 +26,98 @@
         {"name": "blink", "weight": 2, "blinks": [1.2, 4.8, 8.6]}
       ]
     },
-    "sleep": {"cut_every": 5, "variants": [{"name": "base"}]}
+    "sleep": {"cut_every": 5, "variants": [{"name": "base"}]},
+    "happy_1": {
+      "cut_every": 48,
+      "variants": [
+        {"name": "base", "weight": 2},
+        {"name": "look_l", "weight": 1, "looks": [[0.6, -0.6, 0.0], [1.8, 0.0, 0.0]]},
+        {"name": "look_r", "weight": 1, "looks": [[0.6, 0.6, 0.0], [1.8, 0.0, 0.0]]}
+      ]
+    },
+    "happy_2": {
+      "cut_every": 24,
+      "variants": [
+        {"name": "base", "weight": 2},
+        {"name": "look_l", "weight": 1, "looks": [[0.15, -0.5, 0.0], [0.65, 0.0, 0.0]]},
+        {"name": "look_r", "weight": 1, "looks": [[0.15, 0.5, 0.0], [0.65, 0.0, 0.0]]}
+      ]
+    },
+    "happy_3": {
+      "cut_every": 40,
+      "variants": [
+        {"name": "base", "weight": 2},
+        {"name": "look_up", "weight": 1, "looks": [[0.3, 0.0, -0.8], [1.2, 0.0, 0.0]]}
+      ]
+    },
+    "surprised_1": {
+      "cut_every": 48,
+      "variants": [
+        {"name": "base", "weight": 1},
+        {"name": "blink", "weight": 2, "blinks": [1.8, 2.0]},
+        {"name": "look_l", "weight": 1, "looks": [[0.75, -0.8, 0.0], [1.6, 0.0, 0.0]]}
+      ]
+    },
+    "surprised_2": {
+      "cut_every": 48,
+      "variants": [
+        {"name": "base", "weight": 1},
+        {"name": "blink", "weight": 2, "blinks": [1.7]},
+        {"name": "look_r", "weight": 1, "looks": [[0.7, 0.7, -0.2], [1.6, 0.0, 0.0]]}
+      ]
+    },
+    "surprised_3": {
+      "cut_every": 48,
+      "variants": [
+        {"name": "base", "weight": 1},
+        {"name": "blink", "weight": 2, "blinks": [1.5, 1.7]}
+      ]
+    },
+    "sad_1": {
+      "cut_every": 64,
+      "variants": [
+        {"name": "base", "weight": 1},
+        {"name": "blink", "weight": 2, "blinks": [1.4]},
+        {"name": "look_l", "weight": 1, "looks": [[0.4, -0.7, 0.2], [2.2, 0.0, 0.0]]}
+      ]
+    },
+    "sad_2": {
+      "cut_every": 64,
+      "variants": [
+        {"name": "base", "weight": 1},
+        {"name": "blink", "weight": 2, "blinks": [1.0, 2.2]},
+        {"name": "look_r", "weight": 1, "looks": [[0.4, 0.6, 0.3], [2.2, 0.0, 0.0]]}
+      ]
+    },
+    "sad_3": {
+      "cut_every": 48,
+      "variants": [
+        {"name": "base", "weight": 1},
+        {"name": "blink", "weight": 2, "blinks": [0.55, 1.6]}
+      ]
+    },
+    "shy": {
+      "cut_every": 64,
+      "variants": [
+        {"name": "base", "weight": 1},
+        {"name": "away", "weight": 2, "blinks": [2.5], "looks": [[0.3, -0.9, 0.4], [2.2, 0.0, 0.0]]},
+        {"name": "peek", "weight": 1, "blinks": [2.6], "looks": [[0.5, -0.8, 0.3], [1.3, 0.6, 0.0], [1.9, -0.8, 0.3], [2.6, 0.0, 0.0]]}
+      ]
+    },
+    "annoyed_1": {
+      "cut_every": 48,
+      "variants": [
+        {"name": "base", "weight": 1},
+        {"name": "blink", "weight": 1, "blinks": [1.9]},
+        {"name": "side_eye", "weight": 2, "looks": [[0.55, 0.9, 0.0], [1.8, 0.0, 0.0]]}
+      ]
+    },
+    "annoyed_2": {
+      "cut_every": 32,
+      "variants": [
+        {"name": "base", "weight": 2},
+        {"name": "glare", "weight": 1, "looks": [[0.3, 0.0, -0.4], [1.2, 0.0, 0.0]]}
+      ]
+    }
   }
 }

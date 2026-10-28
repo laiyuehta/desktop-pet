@@ -71,3 +71,12 @@ jobs:
           # 加鹽雜湊（家裡 Wi‑Fi 名稱、電腦名稱、正式網址），只存在 Actions secret，不進 repo
           PERSONAL_HASHES: ${{ secrets.PERSONAL_HASHES }}
         run: python tools/ci/check_personal.py --tree --history --rev-range=--all
+      - name: PNG metadata check (no prompt/workflow text chunks)
+        env:
+          DIFF_RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '' }}
+        run: |
+          if [ -n "$DIFF_RANGE" ]; then
+            python tools/ci/check_png_metadata.py --tree --diff "$DIFF_RANGE"
+          else
+            python tools/ci/check_png_metadata.py --tree
+          fi
