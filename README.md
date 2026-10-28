@@ -251,4 +251,9 @@ python3 -m unittest discover -s tests -v     # 不需要額外套件（pytest �
 
 ## 效能
 
-`python3 tools/bench.py` 量純繪圖與「繪圖 + JPEG 編碼」的 fps。開發機（Intel Xeon 雲端主機，Python 3.13、Pillow 13）上：idle／happy／sleep 約 370–390 fps（純繪圖）、280–300 fps（含 JPEG，每格約 18 KB）；bored（滾動，每格都要轉分割線和燈眼）約 220 fps／190 fps，是最吃效能的狀態。**Pi 3B 還沒量**，要到 Pi 上跑同一支程式才知道。
+`python3 tools/bench.py` 量純繪圖與「繪圖 + JPEG 編碼」的 fps。開發機（Intel Xeon 雲端主機，Python 3.13、Pillow 13）上：idle／happy／sleep 約 370–390 fps（純繪圖）、280–300 fps（含 JPEG，每格約 18 KB）；bored（滾動，每格都要轉分割線和燈眼）約 220 fps／190 fps，是最吃效能的狀態。
+
+**Pi 3B 實測（2026-10-28）**
+- 即時骨架繪圖（`tools/bench.py --stages`）：每格繪圖 40~47 ms（滾動 77 ms，其中零件變形佔大部分）＋ JPEG 編碼約 11 ms → 待機 13~14 fps、滾動 10~11 fps，吃滿 1 顆核心。
+- 動畫包播放（`tools/bench.py --pack packs/seed`）：每格約 0.17 ms；實際跑 20.0 fps、CPU 約 1 核的 2.3%；有對話框時每格約 20 ms（解碼＋畫框＋編碼），20.0 fps、約 41%。
+- 連跑 30 分鐘：平均 20.0 fps，記憶體沒有增加，piscreen 錯誤／救援都是 0。
