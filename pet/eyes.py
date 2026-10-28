@@ -15,7 +15,7 @@ from typing import Dict, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFilter
 
-from .skeleton import Affine, mat_apply, mat_scale_factor
+from .skeleton import Affine, mat_apply, mat_rotation_deg, mat_scale_factor
 
 # 顏色（燈眼黃）
 CORE = (255, 232, 96)
@@ -146,7 +146,7 @@ class EyeController:
 class FaceRenderer:
     """畫燈眼、額頭菱形、嘴巴。座標都是臉部骨頭的局部座標。"""
 
-    def __init__(self, face_cfg: dict, cache_size: int = 96):
+    def __init__(self, face_cfg: dict, cache_size: int = 400):
         self.cfg = face_cfg
         self.eye_r = float(face_cfg.get("eye_radius", 42))
         self.eye_pos = [tuple(p) for p in face_cfg.get("eyes", [[-66, 8], [66, 8]])]
@@ -255,6 +255,15 @@ class FaceRenderer:
             return self._glowify(core, glow_q / 10.0, blur=s * 0.3, core=(255, 226, 120))
         return self._cached(("diamond", s, glow_q), make)
 
+    ROT_STEP = 2   # 旋轉角量化（度），讓旋轉後的小圖可以快取
+
+    def _rotated(self, key, sprite: Image.Image, angle_q: int) -> Image.Image:
+        """跟著身體轉（滾動時燈眼、嘴、菱形一起轉）。"""
+        if angle_q % 360 == 0:
+            return sprite
+        return self._cached(("rot", key, angle_q),
+                            lambda: sprite.rotate(-angle_q, resample=Image.BICUBIC, expand=True))
+
     @staticmethod
     def _paste_center(frame: Image.Image, sprite: Image.Image, x: float, y: float) -> None:
         w, h = sprite.size
@@ -267,14 +276,18 @@ class FaceRenderer:
         open_q = int(round(st.open * 20))
         dx = st.look_x * self.look_px
         dy = st.look_y * self.look_px * 0.6
+        # 位置用臉部骨頭的矩陣換算（含旋轉），小圖本身也依同一角度轉
+        angle_q = int(round(mat_rotation_deg(face_world) / self.ROT_STEP)) * self.ROT_STEP
         # 額頭菱形
+        ds = max(4, int(round(12 * scale)))
         x, y = mat_apply(face_world, self.diamond_pos[0] + dx * 0.3, self.diamond_pos[1])
-        self._paste_center(frame, self._diamond_sprite(max(4, int(round(12 * scale))), glow_q), x, y)
+        self._paste_center(frame, self._rotated(("diamond", ds, glow_q), self._diamond_sprite(ds, glow_q), angle_q), x, y)
         # 兩顆燈眼
-        eye = self._eye_sprite(st.shape, open_q, glow_q, r)
+        eye = self._rotated(("eye", st.shape, open_q, glow_q, r), self._eye_sprite(st.shape, open_q, glow_q, r), angle_q)
         for ex, ey in self.eye_pos:
             x, y = mat_apply(face_world, ex + dx, ey + dy)
             self._paste_center(frame, eye, x, y)
         # 嘴巴
+        ms = max(3, int(round(13 * scale)))
         x, y = mat_apply(face_world, self.mouth_pos[0] + dx * 0.6, self.mouth_pos[1] + dy * 0.4)
-        self._paste_center(frame, self._mouth_sprite(st.mouth, glow_q, max(3, int(round(13 * scale)))), x, y)
+        self._paste_center(frame, self._rotated(("mouth", st.mouth, glow_q, ms), self._mouth_sprite(st.mouth, glow_q, ms), angle_q), x, y)

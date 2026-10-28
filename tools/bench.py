@@ -39,7 +39,7 @@ def run(seconds: float, jpeg: bool, state: str) -> float:
 def main():
     secs = float(sys.argv[1]) if len(sys.argv) > 1 else 4.0
     print(f"Python {sys.version.split()[0]}，每項量 {secs:.0f} 秒")
-    for state in ("idle", "happy", "sleep"):
+    for state in ("idle", "happy", "bored", "sleep"):
         f1, _ = run(secs, False, state)
         f2, sz = run(secs, True, state)
         print(f"{state:6s} 純繪圖 {f1:6.1f} fps | 繪圖+JPEG {f2:6.1f} fps（每格 {sz / 1024:.0f} KB）")

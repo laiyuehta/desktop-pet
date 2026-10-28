@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """產生第一階段「種子」的零件圖（可重複產生，結果固定）。
 
-輸出：assets/parts/seed/body.png、antenna_l.png、antenna_r.png
+輸出：assets/parts/seed/body.png（球體光影）、seams.png（分割線）、antenna_l.png、antenna_r.png
 用法：python3 tools/gen_seed_parts.py
 只需要 Pillow，不需要 numpy。
 """
@@ -26,7 +26,8 @@ def lerp(a, b, t):
     return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
 
 
-def make_body() -> Image.Image:
+def make_body():
+    """回傳 (shell, seams)：shell 是有光影的球（不跟著滾動轉），seams 是分割線（滾動時會轉）。"""
     size = (R + PAD) * 2 * SS
     c = size / 2
     rad = R * SS
@@ -85,8 +86,9 @@ def make_body() -> Image.Image:
     hl = ImageChops.subtract(hl, seams)
     hl_layer = Image.new("RGBA", (size, size), (200, 228, 250, 0))
     hl_layer.putalpha(hl.point(lambda v: int(v * 0.45)))
-    img.alpha_composite(hl_layer)
-    img.alpha_composite(seam_layer)
+    seam_img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    seam_img.alpha_composite(hl_layer)
+    seam_img.alpha_composite(seam_layer)
 
     # 柔和的深色外框
     alpha = img.getchannel("A")
@@ -94,7 +96,8 @@ def make_body() -> Image.Image:
     edge_layer = Image.new("RGBA", (size, size), (28, 52, 86, 0))
     edge_layer.putalpha(edge.point(lambda v: int(v * 0.7)))
     img.alpha_composite(edge_layer)
-    return img.resize((size // SS, size // SS), Image.LANCZOS)
+    small = (size // SS, size // SS)
+    return img.resize(small, Image.LANCZOS), seam_img.resize(small, Image.LANCZOS)
 
 
 def make_antenna() -> Image.Image:
@@ -123,8 +126,9 @@ def make_antenna() -> Image.Image:
 
 def main():
     os.makedirs(OUT, exist_ok=True)
-    body = make_body()
+    body, seams = make_body()
     body.save(os.path.join(OUT, "body.png"))
+    seams.save(os.path.join(OUT, "seams.png"))
     ant = make_antenna()
     ant.save(os.path.join(OUT, "antenna_l.png"))
     ant.transpose(Image.FLIP_LEFT_RIGHT).save(os.path.join(OUT, "antenna_r.png"))

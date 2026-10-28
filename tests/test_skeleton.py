@@ -129,3 +129,76 @@ class SeedAssetTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BoredRollingTest(unittest.TestCase):
+    """無聊＝滾動：不打滑、留在畫面內、循環接得上、淡出不跳。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sk = Skeleton.load(os.path.join(ROOT, "assets", "skeletons", "seed.json"), load_images=False)
+        cls.anim = cls.sk.animations["bored"]
+
+    def times(self, step=0.02):
+        n = int(self.anim.duration / step)
+        return [i * step for i in range(n + 1)]
+
+    def test_rolling_without_slipping(self):
+        import math
+        for t in self.times():
+            p = self.anim.sample(t)
+            x, rot = p["root"]["x"], p["spin"]["rot"]
+            self.assertAlmostEqual(rot, x / 150.0 * 180.0 / math.pi, delta=0.01, msg=f"t={t}")
+
+    def test_actually_rolls_both_ways(self):
+        xs = [self.anim.sample(t)["root"]["x"] for t in self.times()]
+        self.assertGreater(max(xs), 100)
+        self.assertLess(min(xs), -100)
+
+    def test_loop_seamless(self):
+        a, b = self.anim.sample(0.0), self.anim.sample(self.anim.duration - 1e-6)
+        for bone, chans in a.items():
+            for ch, v in chans.items():
+                self.assertAlmostEqual(v, b[bone][ch], places=3, msg=f"{bone}.{ch}")
+        self.assertAlmostEqual(a["spin"]["rot"], 0.0)
+        self.assertAlmostEqual(a["root"]["x"], 0.0)
+
+    def test_stays_on_screen(self):
+        W, H = self.sk.canvas
+        for t in self.times(0.05):
+            w = self.sk.world_transforms(self.anim.sample(t))
+            cx, cy = mat_apply(w["body"], 0, 0)
+            r = 150 * 1.03
+            self.assertTrue(r <= cx <= W - r and r <= cy <= H - r + 20, f"球出界 t={t} ({cx:.0f},{cy:.0f})")
+            for name in ("antenna_l", "antenna_r"):
+                bone = self.sk.bones[name]
+                ax, ay = bone.part.anchor
+                # 零件圖四個角都要在畫面內（天線尖端最遠）
+                for px, py in ((0, 0), (44, 0), (0, 118), (44, 118)):
+                    x, y = mat_apply(w[name], px - ax, py - ay)
+                    self.assertTrue(0 <= x <= W and 0 <= y <= H, f"{name} 出界 t={t} ({x:.0f},{y:.0f})")
+
+    def test_face_rotates_with_body(self):
+        import math
+        t = 1.5
+        p = self.anim.sample(t)
+        w = self.sk.world_transforms(p)
+        ang = math.degrees(math.atan2(w["face"][3], w["face"][0]))
+        # root 有輕微非等比縮放（呼吸），角度會差一點點
+        self.assertAlmostEqual(ang, p["spin"]["rot"], delta=2.0)
+        self.assertGreater(abs(ang), 10)
+
+    def test_crossfade_out_keeps_ratio(self):
+        """bored → sleep 的淡出期間，位移和旋轉一起線性混合 → 還是不打滑地滾回來。"""
+        import math
+        pl = AnimationPlayer(self.sk)
+        pl.play("bored")
+        pl.update(2.0)                 # 滾到右邊附近
+        pl.play("sleep")
+        self.assertGreaterEqual(pl.cur_fade, 1.0)  # 用 bored 的 fade_out
+        for _ in range(10):
+            pl.update(0.1)
+            p = pl.pose()
+            x, rot = p["root"].get("x", 0), p["spin"].get("rot", 0)
+            self.assertAlmostEqual(rot, x / 150.0 * 180.0 / math.pi, delta=0.05)
+        self.assertAlmostEqual(pl.pose()["root"].get("x", 0), 0.0, places=6)

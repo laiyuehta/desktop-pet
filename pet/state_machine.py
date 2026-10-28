@@ -96,7 +96,9 @@ class StateMachine:
     def _reset_timers(self) -> None:
         self._timers = []
         for t in self.states[self.state].get("timers", []):
-            after = float(self.timer_overrides.get(t["event"], t["after"]))
+            # 覆寫順序：「狀態.事件」 > 「事件」 > 設定檔
+            key = f"{self.state}.{t['event']}"
+            after = float(self.timer_overrides.get(key, self.timer_overrides.get(t["event"], t["after"])))
             self._timers.append({"after": after, "event": t["event"], "elapsed": 0.0,
                                  "fired": False, "reset_on_input": t.get("reset_on_input", True)})
 

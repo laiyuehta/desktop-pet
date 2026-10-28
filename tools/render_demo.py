@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """離線算出示範動畫（模擬時鐘，結果可重現），不需要螢幕。
 
-流程：idle → 摸頭 → happy → 回 idle → 閒置逾時 → bored → sleep → 摸頭 → 醒來 idle
+流程：idle → 摸頭 → happy → 回 idle → 閒置逾時 → bored（左右滾動一整圈）→ sleep → 摸頭 → 醒來 idle
 輸出：
   preview/demo.gif（400×240，10 fps）
-  preview/idle.png、preview/happy.png、preview/sleep.png（800×480 原尺寸）
+  preview/idle.png、preview/happy.png、preview/bored.png（滾動中）、preview/sleep.png（800×480 原尺寸）
 用法：python3 tools/render_demo.py
 """
 
@@ -22,14 +22,15 @@ from pet.outputs import GifSink  # noqa: E402
 
 FPS = 20
 IDLE_TIMEOUT = 3.0   # 示範用：閒置 3 秒就逾時（正式設定是 600 秒）
+BORED_TIMEOUT = 10.5  # 示範用：無聊滾完一整圈（10 秒）再睡
 
 # (時間, 事件)
 SCRIPT = [
     (2.0, make_event("touch", "pat", source="demo")),
-    (14.5, make_event("touch", "pat", source="demo")),
+    (22.0, make_event("touch", "pat", source="demo")),
 ]
-STILLS = {"idle.png": 1.0, "happy.png": 2.6, "sleep.png": 13.0}
-END = 17.5
+STILLS = {"idle.png": 1.0, "happy.png": 2.6, "bored.png": 9.4, "sleep.png": 21.0}
+END = 25.0
 
 
 def font(size):
@@ -42,7 +43,7 @@ def font(size):
 def main():
     out_dir = os.path.join(ROOT, "preview")
     os.makedirs(out_dir, exist_ok=True)
-    app = PetApp(timer_overrides={"idle_timeout": IDLE_TIMEOUT}, use_clock=False, eye_seed=7)
+    app = PetApp(timer_overrides={"idle_timeout": IDLE_TIMEOUT, "bored.idle_timeout": BORED_TIMEOUT}, use_clock=False, eye_seed=7)
     app.start()
     # 每格先縮成 400×240 再加字幕，所以 GifSink 不再縮放；每 2 格留 1 格 → 10 fps
     gif = GifSink(os.path.join(out_dir, "demo.gif"), fps=FPS, keep_every=2, scale=None)

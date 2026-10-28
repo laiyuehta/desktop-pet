@@ -22,7 +22,8 @@ JSON 格式（詳見 README「骨架格式」）：
 - rest：靜止姿勢的旋轉（度）與縮放。
 - part：掛在骨頭上的零件圖，anchor 是圖片中對齊骨頭原點的像素。
 - 動畫通道：x、y（位移，加在 pivot 上）、rot（旋轉，加在 rest.rot 上）、
-  sx、sy（縮放，乘在 rest 上）。關鍵幀格式 [時間, 數值, 緩動]，
+  sx、sy（縮放，乘在 rest 上）。
+- 動畫可選 fade_in / fade_out：切換時的交叉淡入秒數（預設 0.25）。關鍵幀格式 [時間, 數值, 緩動]，
   緩動是「從這一幀到下一幀」的插值方式：linear（預設）、ease、step。
 """
 
@@ -71,6 +72,11 @@ def mat_inverse(m: Affine) -> Affine:
         raise ValueError("矩陣不可逆")
     ia, ib, id_, ie = e / det, -b / det, -d / det, a / det
     return (ia, ib, -(ia * c + ib * f), id_, ie, -(id_ * c + ie * f))
+
+
+def mat_rotation_deg(m: Affine) -> float:
+    """矩陣的旋轉角（度，y 朝下座標系中順時針為正）。"""
+    return math.degrees(math.atan2(m[3], m[0]))
 
 
 def mat_scale_factor(m: Affine) -> float:
@@ -146,6 +152,8 @@ class Animation:
     duration: float
     loop: bool
     tracks: Dict[str, Dict[str, List[list]]] = field(default_factory=dict)
+    fade_in: Optional[float] = None    # 切進這個動畫的淡入秒數（None = 用預設）
+    fade_out: Optional[float] = None   # 從這個動畫切走的淡出秒數（例如滾動中要慢慢滾回來）
 
     def sample(self, t: float) -> Dict[str, Dict[str, float]]:
         """回傳 {骨頭: {通道: 值}}（值是相對 rest 的偏移／倍率）。"""
@@ -208,8 +216,9 @@ class Skeleton:
                     if ch not in CHANNELS:
                         raise ValueError(f"動畫 {name} 有未知通道 {ch}")
                     tracks[bone][ch] = sorted(keys, key=lambda k: k[0])
-            self.animations[name] = Animation(name, float(a.get("duration", 1.0)),
-                                              bool(a.get("loop", True)), tracks)
+            self.animations[name] = Animation(
+                name, float(a.get("duration", 1.0)), bool(a.get("loop", True)), tracks,
+                fade_in=a.get("fade_in"), fade_out=a.get("fade_out"))
         self.face = data.get("face", {})
         self.effects = data.get("effects", {})
 
@@ -258,6 +267,7 @@ class AnimationPlayer:
         self.prev: Optional[str] = None
         self.prev_time = 0.0
         self.fade_t = 1.0
+        self.cur_fade = fade
 
     def play(self, name: str, restart: bool = False) -> None:
         if name not in self.skeleton.animations:
@@ -267,12 +277,19 @@ class AnimationPlayer:
         self.prev, self.prev_time = self.current, self.time
         self.current, self.time = name, 0.0
         self.fade_t = 0.0 if self.prev else 1.0
+        # 這次切換的淡入時間：取預設、新動畫 fade_in、舊動畫 fade_out 中最長的
+        anims = self.skeleton.animations
+        cands = [self.fade, anims[name].fade_in]
+        if self.prev in anims:
+            cands.append(anims[self.prev].fade_out)
+        self.cur_fade = max(float(c) for c in cands if c is not None)
 
     def update(self, dt: float) -> None:
         self.time += dt
         self.prev_time += dt
-        if self.fade > 0:
-            self.fade_t = min(1.0, self.fade_t + dt / self.fade)
+        fade = getattr(self, "cur_fade", self.fade)
+        if fade > 0:
+            self.fade_t = min(1.0, self.fade_t + dt / fade)
         else:
             self.fade_t = 1.0
 

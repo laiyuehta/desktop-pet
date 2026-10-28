@@ -4,78 +4,97 @@
   "version": 1,
   "canvas": [800, 480],
   "comment": "第一階段「種子」。零件圖由 tools/gen_seed_parts.py 產生；燈眼、嘴巴、額頭菱形由程式繪製。",
+  "face": {"bone": "face", "eye_radius": 44, "eyes": [[-66, 10], [66, 10]], "diamond": [0, -60], "mouth": [0, 72], "look_px": 16},
+  "shadow": {"bone": "root", "width": 250, "height": 34, "comment": "陰影跟著 root 的 x 移動"},
   "bones": [
     {"name": "root", "parent": null, "pivot": [400, 440]},
-    {"name": "body", "parent": "root", "pivot": [0, -158], "z": 10,
-     "part": {"image": "../parts/seed/body.png", "anchor": [156, 156]}},
-    {"name": "face", "parent": "body", "pivot": [0, 0]},
-    {"name": "antenna_l", "parent": "body", "pivot": [-34, -136], "rest": {"rot": -14}, "z": 5,
-     "part": {"image": "../parts/seed/antenna_l.png", "anchor": [22, 112]}},
-    {"name": "antenna_r", "parent": "body", "pivot": [34, -136], "rest": {"rot": 14}, "z": 5,
-     "part": {"image": "../parts/seed/antenna_r.png", "anchor": [22, 112]}}
+    {"name": "body", "parent": "root", "pivot": [0, -158], "z": 10, "part": {"image": "../parts/seed/body.png", "anchor": [156, 156]}},
+    {"name": "spin", "parent": "body", "pivot": [0, 0], "z": 11, "part": {"image": "../parts/seed/seams.png", "anchor": [156, 156]}},
+    {"name": "face", "parent": "spin", "pivot": [0, 0]},
+    {"name": "antenna_l", "parent": "spin", "pivot": [-34, -136], "rest": {"rot": -14}, "z": 5, "part": {"image": "../parts/seed/antenna_l.png", "anchor": [22, 112]}},
+    {"name": "antenna_r", "parent": "spin", "pivot": [34, -136], "rest": {"rot": 14}, "z": 5, "part": {"image": "../parts/seed/antenna_r.png", "anchor": [22, 112]}}
   ],
-  "face": {
-    "bone": "face",
-    "eye_radius": 44,
-    "eyes": [[-66, 10], [66, 10]],
-    "diamond": [0, -60],
-    "mouth": [0, 72],
-    "look_px": 16
-  },
-  "shadow": {"bone": "root", "width": 250, "height": 34},
   "animations": {
     "idle": {
-      "duration": 3.2, "loop": true,
+      "duration": 3.2,
+      "loop": true,
       "tracks": {
         "root": {
           "sy": [[0, 1.0, "ease"], [1.6, 0.982, "ease"], [3.2, 1.0]],
           "sx": [[0, 1.0, "ease"], [1.6, 1.012, "ease"], [3.2, 1.0]]
         },
-        "body": {"y": [[0, 0, "ease"], [1.6, -7, "ease"], [3.2, 0]]},
-        "antenna_l": {"rot": [[0, 0, "ease"], [0.8, 6, "ease"], [2.4, -5, "ease"], [3.2, 0]]},
-        "antenna_r": {"rot": [[0, 0, "ease"], [1.2, -6, "ease"], [2.6, 5, "ease"], [3.2, 0]]}
+        "body": {
+          "y": [[0, 0, "ease"], [1.6, -7, "ease"], [3.2, 0]]
+        },
+        "antenna_l": {
+          "rot": [[0, 0, "ease"], [0.8, 6, "ease"], [2.4, -5, "ease"], [3.2, 0]]
+        },
+        "antenna_r": {
+          "rot": [[0, 0, "ease"], [1.2, -6, "ease"], [2.6, 5, "ease"], [3.2, 0]]
+        }
       }
     },
     "happy": {
-      "duration": 0.7, "loop": true,
+      "duration": 0.7,
+      "loop": true,
       "tracks": {
         "root": {
-          "y":  [[0, 0, "ease"], [0.25, -38, "ease"], [0.5, 0], [0.7, 0]],
+          "y": [[0, 0, "ease"], [0.25, -38, "ease"], [0.5, 0], [0.7, 0]],
           "sy": [[0, 0.92, "ease"], [0.12, 1.05, "ease"], [0.3, 1.0, "linear"], [0.5, 1.0, "ease"], [0.56, 0.9, "ease"], [0.7, 0.92]],
           "sx": [[0, 1.07, "ease"], [0.12, 0.97, "ease"], [0.3, 1.0, "linear"], [0.5, 1.0, "ease"], [0.56, 1.09, "ease"], [0.7, 1.07]]
         },
-        "antenna_l": {"rot": [[0, -12, "ease"], [0.175, 14, "ease"], [0.35, -12, "ease"], [0.525, 14, "ease"], [0.7, -12]]},
-        "antenna_r": {"rot": [[0, 12, "ease"], [0.175, -14, "ease"], [0.35, 12, "ease"], [0.525, -14, "ease"], [0.7, 12]]}
+        "antenna_l": {
+          "rot": [[0, -12, "ease"], [0.175, 14, "ease"], [0.35, -12, "ease"], [0.525, 14, "ease"], [0.7, -12]]
+        },
+        "antenna_r": {
+          "rot": [[0, 12, "ease"], [0.175, -14, "ease"], [0.35, 12, "ease"], [0.525, -14, "ease"], [0.7, 12]]
+        }
       }
     },
     "bored": {
-      "duration": 4.0, "loop": true,
+      "duration": 10.0,
+      "loop": true,
+      "fade_in": 0.4,
+      "fade_out": 1.0,
+      "comment": "無聊：在螢幕上左右滾來滾去。spin 的旋轉 = root 的位移 / 半徑 150 × 180/π（不打滑），兩條軌道關鍵幀時間與緩動相同，所以任何時刻都成立。",
       "tracks": {
         "root": {
-          "sy": [[0, 0.965, "ease"], [2.0, 0.955, "ease"], [4.0, 0.965]],
-          "sx": [[0, 1.02, "ease"], [2.0, 1.028, "ease"], [4.0, 1.02]]
+          "x": [[0, 0, "ease"], [2.2, 130, "ease"], [2.45, 138, "ease"], [2.7, 125, "ease"], [2.9, 133, "ease"], [3.1, 130, "ease"], [3.6, 130, "ease"], [6.6, -130, "ease"], [6.85, -138, "ease"], [7.1, -125, "ease"], [7.3, -133, "ease"], [7.5, -130, "ease"], [8.0, -130, "ease"], [10.0, 0]],
+          "sy": [[0, 0.975, "ease"], [5.0, 0.965, "ease"], [10.0, 0.975]],
+          "sx": [[0, 1.015, "ease"], [5.0, 1.022, "ease"], [10.0, 1.015]]
         },
         "body": {
-          "y":   [[0, 6, "ease"], [2.0, 9, "ease"], [4.0, 6]],
-          "rot": [[0, -4, "ease"], [2.0, -7, "ease"], [4.0, -4]]
+          "y": [[0, 5, "ease"], [5.0, 7, "ease"], [10.0, 5]]
         },
-        "antenna_l": {"rot": [[0, -24, "ease"], [2.0, -30, "ease"], [4.0, -24]]},
-        "antenna_r": {"rot": [[0, 22, "ease"], [2.0, 28, "ease"], [4.0, 22]]}
+        "spin": {
+          "rot": [[0, 0.0, "ease"], [2.2, 49.656, "ease"], [2.45, 52.712, "ease"], [2.7, 47.746, "ease"], [2.9, 50.802, "ease"], [3.1, 49.656, "ease"], [3.6, 49.656, "ease"], [6.6, -49.656, "ease"], [6.85, -52.712, "ease"], [7.1, -47.746, "ease"], [7.3, -50.802, "ease"], [7.5, -49.656, "ease"], [8.0, -49.656, "ease"], [10.0, 0.0]]
+        },
+        "antenna_l": {
+          "rot": [[0, -22, "ease"], [2.5, -28, "ease"], [5.0, -22, "ease"], [7.5, -28, "ease"], [10.0, -22]]
+        },
+        "antenna_r": {
+          "rot": [[0, 20, "ease"], [2.5, 26, "ease"], [5.0, 20, "ease"], [7.5, 26, "ease"], [10.0, 20]]
+        }
       }
     },
     "sleep": {
-      "duration": 4.5, "loop": true,
+      "duration": 4.5,
+      "loop": true,
       "tracks": {
         "root": {
           "sy": [[0, 0.97, "ease"], [2.25, 0.95, "ease"], [4.5, 0.97]],
           "sx": [[0, 1.018, "ease"], [2.25, 1.03, "ease"], [4.5, 1.018]]
         },
         "body": {
-          "y":   [[0, 12, "ease"], [2.25, 15, "ease"], [4.5, 12]],
+          "y": [[0, 12, "ease"], [2.25, 15, "ease"], [4.5, 12]],
           "rot": [[0, 3, "ease"], [2.25, 4, "ease"], [4.5, 3]]
         },
-        "antenna_l": {"rot": [[0, -40, "ease"], [2.25, -44, "ease"], [4.5, -40]]},
-        "antenna_r": {"rot": [[0, 38, "ease"], [2.25, 42, "ease"], [4.5, 38]]}
+        "antenna_l": {
+          "rot": [[0, -40, "ease"], [2.25, -44, "ease"], [4.5, -40]]
+        },
+        "antenna_r": {
+          "rot": [[0, 38, "ease"], [2.25, 42, "ease"], [4.5, 38]]
+        }
       }
     }
   }

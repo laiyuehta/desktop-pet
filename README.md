@@ -13,7 +13,7 @@
 | 項目 | 狀態 |
 |---|---|
 | 自訂 2D 骨架格式 + runtime（關鍵幀、linear/ease/step、切換淡入） | ✅ |
-| 種子形態零件（程式產生）＋ idle／happy／bored／sleep 動畫 | ✅ |
+| 種子形態零件（程式產生）＋ idle（呼吸）／happy（彈跳）／bored（**滾動**：左右滾來滾去）／sleep（閉眼呼吸＋Z）動畫 | ✅ |
 | 燈眼／嘴巴／額頭菱形程式繪製（發光、眨眼、瞇眼笑、半睜、閉眼睡、看左右） | ✅ |
 | 事件驅動狀態機（JSON 對應表、閒置計時、晚上／早上時鐘事件） | ✅ |
 | 成長值／階段資料結構與 `set_stage()` 換骨架接口 | ✅（推進規則未做；只有種子骨架） |
@@ -85,7 +85,7 @@ curl localhost:8080/status
 main.py                    主程式（主迴圈、選輸出端與輸入）
 config/states.json         狀態機設定：狀態 → 動畫/表情/計時，(狀態, 事件) → 下一狀態，成長階段 → 骨架
 assets/skeletons/seed.json 種子骨架 + 動畫
-assets/parts/seed/*.png    種子零件圖（由 tools/gen_seed_parts.py 產生）
+assets/parts/seed/*.png    種子零件圖：body（球體光影，不轉）、seams（分割線，滾動時轉）、天線（由 tools/gen_seed_parts.py 產生）
 pet/skeleton.py            骨架格式、插值、動畫播放器、零件合成（含快取）
 pet/eyes.py                EyeController（表情、眨眼、眼神）+ FaceRenderer（燈眼/嘴/菱形）
 pet/renderer.py            背景、陰影、零件、臉、Z 特效 → 800×480 RGB
@@ -113,8 +113,10 @@ tests/                     unittest
     {"name": "root", "parent": null, "pivot": [400, 440]},
     {"name": "body", "parent": "root", "pivot": [0, -158], "z": 10,
      "part": {"image": "../parts/seed/body.png", "anchor": [156, 156]}},
-    {"name": "face", "parent": "body", "pivot": [0, 0]},
-    {"name": "antenna_l", "parent": "body", "pivot": [-34, -136], "rest": {"rot": -14}, "z": 5,
+    {"name": "spin", "parent": "body", "pivot": [0, 0], "z": 11,
+     "part": {"image": "../parts/seed/seams.png", "anchor": [156, 156]}},
+    {"name": "face", "parent": "spin", "pivot": [0, 0]},
+    {"name": "antenna_l", "parent": "spin", "pivot": [-34, -136], "rest": {"rot": -14}, "z": 5,
      "part": {"image": "../parts/seed/antenna_l.png", "anchor": [22, 112]}}
   ],
   "face": {"bone": "face", "eye_radius": 44, "eyes": [[-66, 10], [66, 10]], "diamond": [0, -60], "mouth": [0, 72]},
@@ -134,6 +136,9 @@ tests/                     unittest
 - 關鍵幀 `[時間, 數值, 緩動]`，緩動是這一幀到下一幀的插值：`linear`（預設）、`ease`、`step`。
 - 切換動畫時自動 0.25 秒交叉淡入。
 - 眼睛、嘴巴不是貼圖：`face` 只給位置，由 `pet/eyes.py` 依表情畫出來。
+- 動畫可加 `fade_in` / `fade_out`（秒）覆寫切換淡入時間；例如 bored 的 `fade_out: 1.0` 讓球離開無聊時慢慢滾回中間。
+- 種子的骨頭：`root`（地面點，整顆球左右移動）→ `body`（球心，上下浮動，掛球體光影，光影不跟著轉）→ `spin`（滾動旋轉，掛分割線）→ `face`、天線。臉部燈眼的位置與小圖都會跟著 `face` 的旋轉一起轉。
+- **bored＝滾動**：`root.x` 在 ±130 px 間來回（球和天線都留在 800×480 內），`spin.rot = x ÷ 150（半徑）× 180/π`，不打滑；兩邊各晃一晃、停一下再滾回來；10 秒一循環，循環起點 x=0、rot=0，接得上。陰影跟著球的 x 走。
 - 新的成長階段只要做新的骨架 JSON + 零件圖，動畫名稱照用 idle/happy/bored/sleep，狀態機不用改。
 
 ## 狀態機設定
@@ -168,4 +173,4 @@ python3 -m unittest discover -s tests -v     # 不需要額外套件（pytest �
 
 ## 效能
 
-`python3 tools/bench.py` 量純繪圖與「繪圖 + JPEG 編碼」的 fps。開發機（Intel Xeon 雲端主機，Python 3.13、Pillow 13）上約 600 fps（純繪圖）／ 410 fps（含 JPEG，每格約 18 KB）。**Pi 3B 還沒量**，要到 Pi 上跑同一支程式才知道。
+`python3 tools/bench.py` 量純繪圖與「繪圖 + JPEG 編碼」的 fps。開發機（Intel Xeon 雲端主機，Python 3.13、Pillow 13）上：idle／happy／sleep 約 370–390 fps（純繪圖）、280–300 fps（含 JPEG，每格約 18 KB）；bored（滾動，每格都要轉分割線和燈眼）約 220 fps／190 fps，是最吃效能的狀態。**Pi 3B 還沒量**，要到 Pi 上跑同一支程式才知道。
