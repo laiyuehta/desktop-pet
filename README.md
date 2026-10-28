@@ -21,6 +21,8 @@
 | 外部控制器接口（輪子、雲台）：LoggingActuator / NullActuator stub | ✅（沒有真的驅動） |
 | 擴充模組接口（事件匯流排、模組註冊、動作請求）＋空範例 | ✅（第二期才做功能） |
 | 輸出：piscreen（Unix socket + JPEG）、預覽 PNG / GIF | ✅（piscreen 尚未在 Pi 實測） |
+| 後端（大腦）：成長／心情／存檔 API、本機 LLM 對話（qwen3-14b）、備用台詞、雲端路由接口 | ✅（見 [backend/README.md](backend/README.md)；還沒在 R7 實跑） |
+| 裝置接後端：背景送事件、套用指令、螢幕對話框、網頁遙控「跟寵物說話」 | ✅（`--backend`，預設不接） |
 
 ## 安裝
 
@@ -40,7 +42,7 @@ python3 tools/render_demo.py
 python3 main.py --sink preview --input keyboard,web --web 127.0.0.1:8080 --idle-timeout 10
 ```
 
-鍵盤模擬器（在終端機輸入後按 Enter）：`p` 摸頭、`o` 戳、`b` 按鈕、`v` 有人靠近、`w` 叫醒、`s` 睡覺、`1`/`2`/`3` 成長階段、`state sleep` 強制切狀態、`n` 點頭、`h` 搖頭、`q` 結束。
+鍵盤模擬器（在終端機輸入後按 Enter）：`t 文字` 對寵物說話、`p` 摸頭、`o` 戳、`b` 按鈕、`v` 有人靠近、`w` 叫醒、`s` 睡覺、`1`/`2`/`3` 成長階段、`state sleep` 強制切狀態、`n` 點頭、`h` 搖頭、`q` 結束。
 
 ## 在樹莓派上跑（接 piscreen）
 
@@ -56,11 +58,32 @@ python3 main.py --sink piscreen --input web --web 0.0.0.0:8080 --fps 20
 - 程式每 5 秒在 log 印出實際 fps；piscreen 連不上時會自動重試並丟格，不會當掉。
 - 常用參數：`--fps`（預設 20）、`--jpeg-quality`（預設 85）、`--socket`、`--idle-timeout`、`--duration`、`-v`。
 
+## 接後端（大腦）
+
+後端跑在家裡的 Windows 桌機 R7（`192.0.2.100:8090`），負責成長、心情、存檔和對話（本機 LLM）。
+怎麼在 R7 上啟動、防火牆設定、API 說明都在 **[backend/README.md](backend/README.md)**。
+
+Pi 端：
+
+```bash
+python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
+# 選用：--pet-id seed-001  --backend-token <token>  --font /usr/share/fonts/truetype/wqy/wqy-microhei.ttc
+```
+
+- 事件（摸頭、計時、狀態改變…）在背景執行緒送給後端，逾時 2 秒，主迴圈不等網路；每 60 秒送一次心跳。
+- 後端回的指令（`say`、`emotion`、`set_state`、`set_stage`、`actuator`）轉成事件丟回事件匯流排照原流程處理。
+- `say` 會在螢幕上顯示對話框（圓角白框，跟著球移動）。需要中文字型：`sudo apt install fonts-wqy-microhei` 或 `fonts-noto-cjk`。
+- 後端沒開／連不上：寵物照常運作；事件會退避後丟掉，網頁遙控顯示「離線」，說話時寵物回「嗯…？（大腦在休息）」。
+- 在電腦上可以一起跑：`python3 -m backend --port 8090` + `python3 main.py --sink preview --input keyboard,web --web 127.0.0.1:8080 --backend http://127.0.0.1:8090`，鍵盤輸入 `t 你好` 跟寵物說話。
+
+![對話框](preview/say.png)
+
 ## 網頁遙控（內部控制器）
 
 `--input web` 時由 `main.py` 一起開（Python 標準函式庫 `http.server`，不用另外裝東西）。手機友善的單頁，繁體中文介面：
 
-- **目前狀態**：狀態、成長階段、成長值、表情、fps、最後事件（每秒輪詢 `GET /status`）
+- **目前狀態**：狀態、成長階段、成長值、表情、fps、最後事件、大腦（後端）連線、寵物說的話（每秒輪詢 `GET /status`）
+- **跟寵物說話**：輸入框 → `POST /talk` → 裝置轉給後端 `/v1/pet/talk`
 - **互動事件**：摸頭、戳一下、按按鈕、有人靠近、叫醒、去睡覺、模擬閒置、模擬晚上
 - **強制切換狀態**：待機／開心／無聊／睡覺
 - **成長階段**：1 種子／2 長腳／3 長耳朵（目前只有種子骨架，其他階段沿用種子外型）
@@ -72,6 +95,7 @@ HTTP API（也可以當事件模擬器用）：
 curl -X POST localhost:8080/event    -d '{"type":"touch","name":"pat"}'
 curl -X POST localhost:8080/control  -d '{"cmd":"set_state","state":"sleep"}'
 curl -X POST localhost:8080/control  -d '{"cmd":"set_stage","stage":2}'
+curl -X POST localhost:8080/talk     -d '{"text":"你好"}'
 curl -X POST localhost:8080/actuator -d '{"motion":"nod","times":2}'
 curl -X POST localhost:8080/actuator -d '{"motion":"wheels","action":"forward","speed":0.5,"duration":1}'
 curl localhost:8080/status
@@ -92,6 +116,8 @@ pet/renderer.py            背景、陰影、零件、臉、Z 特效 → 800×48
 pet/state_machine.py       StateMachine、Growth、ClockEvents
 pet/events.py              標準事件格式
 pet/app.py                 PetApp：事件路由、動作請求（ActionRouter）、換骨架、狀態輸出
+pet/backend_client.py      後端客戶端（背景執行緒、離線降級、指令 → 事件）
+pet/bubble.py              對話框與中文字型尋找
 pet/inputs/                InputAdapter、KeyboardInput、WebRemoteInput、Touch/Button/Vision stub
 pet/web/remote.html        網頁遙控頁面
 pet/outputs/               OutputSink、PiscreenSink、FileSink、GifSink、NullSink
@@ -100,7 +126,10 @@ pet/extensions/            EventBus、Extension、ExtensionManager、ExampleExte
 tools/gen_seed_parts.py    產生零件圖
 tools/render_demo.py       產生預覽 GIF / PNG
 tools/bench.py             量 fps
-tests/                     unittest
+tests/                     unittest（含假 LLM 伺服器 tests/fake_llm.py）
+backend/                   後端（大腦）：server.py（HTTP API）、store.py（存檔）、mood.py（心情/成長）、
+                           llm.py（OpenAI 相容客戶端、JSON 抽取驗證）、router.py（本機/雲端路由）、
+                           talk.py（人設與對話、備用台詞）、config.json、run_backend.bat
 ```
 
 ## 骨架格式
@@ -168,7 +197,7 @@ tests/                     unittest
 ## 測試
 
 ```bash
-python3 -m unittest discover -s tests -v     # 不需要額外套件（pytest 也能跑）
+python3 -m unittest discover -s tests -v     # 不需要額外套件（pytest 也能跑）；後端測試用假 LLM，不需要真的模型
 ```
 
 ## 效能
