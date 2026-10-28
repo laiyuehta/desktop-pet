@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>桌寵遙控</title>
+<style>
+  :root { --bg:#0f1626; --card:#1a2438; --fg:#e8f0ff; --dim:#8fa3c4; --acc:#ffd84d; --blue:#7fb6e6; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+         background:var(--bg); color:var(--fg); padding: 12px; padding-bottom: 40px; }
+  h1 { font-size: 1.25rem; margin: 4px 0 12px; }
+  h2 { font-size: 1rem; color: var(--dim); margin: 0 0 8px; font-weight: 600; }
+  .card { background: var(--card); border-radius: 14px; padding: 12px; margin-bottom: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+  button { font: inherit; font-size: 1rem; min-height: 48px; border: 0; border-radius: 10px;
+           background: #2a3a58; color: var(--fg); padding: 8px; cursor: pointer; touch-action: manipulation; }
+  button:active { transform: scale(0.97); background: #36507a; }
+  button.acc { background: #5c4b12; color: var(--acc); }
+  button.on { outline: 2px solid var(--acc); }
+  .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 320px; margin: 0 auto; }
+  .pad .stop { background: #6a2330; }
+  .status { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 0.95rem; }
+  .status b { color: var(--acc); font-weight: 600; }
+  .dim { color: var(--dim); font-size: 0.85rem; }
+  #toast { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); background: #000c; padding: 8px 14px;
+           border-radius: 20px; font-size: 0.9rem; opacity: 0; transition: opacity .2s; pointer-events:none; }
+  #log { font-family: ui-monospace, monospace; font-size: 0.78rem; color: var(--dim); white-space: pre-wrap; max-height: 9em; overflow: auto; }
+</style>
+</head>
+<body>
+<h1>🟦 桌寵遙控</h1>
+
+<div class="card">
+  <h2>目前狀態</h2>
+  <div class="status">
+    <span>狀態</span><b id="st-state">—</b>
+    <span>成長階段</span><b id="st-stage">—</b>
+    <span>成長值</span><span id="st-growth">—</span>
+    <span>表情</span><span id="st-eyes">—</span>
+    <span>畫面 FPS</span><span id="st-fps">—</span>
+    <span>最後事件</span><span id="st-last">—</span>
+  </div>
+  <div class="dim" id="st-conn">連線中…</div>
+</div>
+
+<div class="card">
+  <h2>互動事件</h2>
+  <div class="grid">
+    <button data-ev='{"type":"touch","name":"pat"}'>🤚 摸頭</button>
+    <button data-ev='{"type":"touch","name":"poke"}'>👉 戳一下</button>
+    <button data-ev='{"type":"button","name":"press"}'>🔘 按按鈕</button>
+    <button data-ev='{"type":"vision","name":"person_near"}'>👀 有人靠近</button>
+    <button data-ev='{"type":"sim","name":"wake"}'>☀️ 叫醒</button>
+    <button data-ev='{"type":"sim","name":"sleep"}'>🌙 去睡覺</button>
+    <button data-ev='{"type":"time","name":"idle_timeout"}'>⏱ 模擬閒置</button>
+    <button data-ev='{"type":"time","name":"night"}'>🌃 模擬晚上</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>強制切換狀態</h2>
+  <div class="grid" id="states">
+    <button data-state="idle">待機</button>
+    <button data-state="happy">開心</button>
+    <button data-state="bored">無聊</button>
+    <button data-state="sleep">睡覺</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>成長階段（切換外型）</h2>
+  <div class="grid" id="stages">
+    <button data-stage="1">1 種子</button>
+    <button data-stage="2">2 長腳</button>
+    <button data-stage="3">3 長耳朵</button>
+  </div>
+  <div class="dim">目前只有「種子」的骨架；其他階段會沿用種子外型並記錄階段。</div>
+</div>
+
+<div class="card">
+  <h2>外部控制器測試（雲台）</h2>
+  <div class="grid">
+    <button class="acc" data-act='{"motion":"nod","times":2}'>點頭</button>
+    <button class="acc" data-act='{"motion":"shake","times":2}'>搖頭</button>
+    <button class="acc" data-act='{"motion":"center"}'>回正</button>
+  </div>
+  <h2 style="margin-top:12px">外部控制器測試（輪子）</h2>
+  <div class="pad">
+    <span></span><button class="acc" data-act='{"motion":"wheels","action":"forward","speed":0.5,"duration":1}'>⬆️ 前進</button><span></span>
+    <button class="acc" data-act='{"motion":"wheels","action":"left","speed":0.5,"duration":0.5}'>⬅️ 左轉</button>
+    <button class="stop" data-act='{"motion":"wheels","action":"stop"}'>⏹ 停止</button>
+    <button class="acc" data-act='{"motion":"wheels","action":"right","speed":0.5,"duration":0.5}'>➡️ 右轉</button>
+    <span></span><button class="acc" data-act='{"motion":"wheels","action":"backward","speed":0.5,"duration":1}'>⬇️ 後退</button><span></span>
+  </div>
+  <div class="dim">目前接的是 LoggingActuator（只記錄，不動硬體）。</div>
+  <div id="log"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.style.opacity = 1; clearTimeout(t._h); t._h = setTimeout(() => t.style.opacity = 0, 1200); }
+async function post(path, body, label) {
+  try {
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    toast(j.ok ? "已送出：" + label : "錯誤：" + j.error);
+    setTimeout(poll, 150);
+  } catch (e) { toast("送出失敗"); }
+}
+document.querySelectorAll("[data-ev]").forEach(b => b.onclick = () => post("/event", JSON.parse(b.dataset.ev), b.textContent.trim()));
+document.querySelectorAll("[data-state]").forEach(b => b.onclick = () => post("/control", { cmd: "set_state", state: b.dataset.state }, b.textContent.trim()));
+document.querySelectorAll("[data-stage]").forEach(b => b.onclick = () => post("/control", { cmd: "set_stage", stage: +b.dataset.stage }, b.textContent.trim()));
+document.querySelectorAll("[data-act]").forEach(b => b.onclick = () => post("/actuator", JSON.parse(b.dataset.act), b.textContent.trim()));
+async function poll() {
+  try {
+    const s = await (await fetch("/status", { cache: "no-store" })).json();
+    $("#st-state").textContent = (s.state_label || "") + "（" + s.state + "）";
+    $("#st-stage").textContent = s.stage + " " + (s.stage_name || "");
+    $("#st-growth").textContent = s.growth ? s.growth.value : "—";
+    $("#st-eyes").textContent = s.eyes || "—";
+    $("#st-fps").textContent = s.fps != null ? s.fps.toFixed(1) : "—";
+    $("#st-last").textContent = s.last_event ? (s.last_event.type + ":" + s.last_event.name) : "—";
+    $("#log").textContent = (s.actuator_log || []).slice(-6).reverse().join("\n");
+    document.querySelectorAll("[data-state]").forEach(b => b.classList.toggle("on", b.dataset.state === s.state));
+    document.querySelectorAll("[data-stage]").forEach(b => b.classList.toggle("on", +b.dataset.stage === s.stage));
+    $("#st-conn").textContent = "已連線 · 每秒更新";
+  } catch (e) { $("#st-conn").textContent = "連不到桌寵（重試中…）"; }
+}
+poll(); setInterval(poll, 1000);
+</script>
+</body>
+</html>
