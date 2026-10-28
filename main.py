@@ -3,8 +3,8 @@
 
 電腦上預覽：
     python3 main.py --sink preview --input keyboard,web
-樹莓派（piscreen 服務已在跑）：
-    python3 main.py --sink piscreen --input web --web 0.0.0.0:8080
+樹莓派（piscreen 服務已在跑；有 packs/seed 動畫包時自動播放預錄動畫）：
+    python3 main.py --sink piscreen --input web --web 0.0.0.0:8080 --pack packs/seed
 接後端（大腦，跑在 R7）：
     python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 """
@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import sys
 import time
 
 from pet.app import PetApp
 from pet.inputs import KeyboardInput, WebRemoteInput
+from pet.pack import AnimationPack, PackDriver
 from pet.outputs import FileSink, NullSink, PiscreenSink
 from pet.outputs.piscreen import DEFAULT_SOCKET
 
@@ -27,12 +29,15 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="桌寵第一期原型")
     p.add_argument("--sink", choices=["piscreen", "preview", "null"], default="preview",
                    help="畫面輸出：piscreen（Pi 上的螢幕服務）、preview（寫 PNG）、null（只量 fps）")
-    p.add_argument("--fps", type=float, default=20.0, help="目標 fps（預設 20）")
+    p.add_argument("--fps", type=float, default=None,
+                   help="目標 fps（預設：動畫包的 fps；即時繪圖 20）")
+    p.add_argument("--pack", default="auto",
+                   help="預錄動畫包資料夾；auto = packs/<骨架名稱> 存在就用；none = 只用即時繪圖")
     p.add_argument("--input", default="keyboard",
                    help="輸入轉接器，逗號分隔：keyboard、web、none（預設 keyboard）")
     p.add_argument("--web", default="0.0.0.0:8080", help="網頁遙控監聽位址（--input 含 web 時，預設 0.0.0.0:8080）")
     p.add_argument("--socket", default=DEFAULT_SOCKET, help="piscreen Unix socket 路徑")
-    p.add_argument("--jpeg-quality", type=int, default=85)
+    p.add_argument("--jpeg-quality", type=int, default=80, help="即時繪圖／對話框重新編碼的 JPEG 品質（預設 80）")
     p.add_argument("--preview-dir", default="preview/live", help="preview 輸出資料夾（latest.png）")
     p.add_argument("--preview-every", type=int, default=2, help="preview 每幾格寫一次檔")
     p.add_argument("--config", default=None, help="狀態機設定檔（預設 config/states.json）")
@@ -65,6 +70,19 @@ def main(argv=None) -> int:
     app = PetApp(args.config, timer_overrides=overrides, backend_url=args.backend, pet_id=args.pet_id,
                  backend_token=args.backend_token, font_path=args.font)
     sink = make_sink(args)
+    pack_dir = args.pack
+    if pack_dir == "auto":
+        pack_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs", app.renderer.skeleton.name)
+    pack = AnimationPack.try_load(pack_dir) if pack_dir and pack_dir != "none" else None
+    if args.pack not in ("auto", "none") and pack is None:
+        log.warning("找不到動畫包 %s，改用即時繪圖", args.pack)
+    driver = PackDriver(pack, app, sink, quality=args.jpeg_quality) if pack else None
+    if args.fps is None:
+        args.fps = pack.fps if pack else 20.0
+    elif pack and abs(args.fps - pack.fps) > 0.01:
+        log.warning("--fps %g 跟動畫包的 %g fps 不同，動畫速度會跟著變", args.fps, pack.fps)
+    if not pack:
+        log.info("畫面：即時骨架繪圖")
     stop = {"flag": False}
 
     def request_stop(*_):
@@ -99,12 +117,17 @@ def main(argv=None) -> int:
             dt = min(0.25, now - last)       # 卡頓時不要一次跳太多
             last = now
             app.step(dt)
-            sink.send(app.render())
+            if driver:
+                driver.emit()
+            else:
+                sink.send(app.render())
             frames += 1
             fps_n += 1
             if now - fps_t0 >= 5.0:
                 app.fps = fps_n / (now - fps_t0)
-                log.info("fps %.1f（目標 %.0f）狀態 %s", app.fps, args.fps, app.fsm.state)
+                ri = app.render_info or {}
+                log.info("fps %.1f（目標 %.0f）狀態 %s 畫面 %s %s", app.fps, args.fps, app.fsm.state,
+                         ri.get("mode", "live"), ri.get("clip") or "")
                 fps_t0, fps_n = now, 0
             if args.duration and now - t_start >= args.duration:
                 break
@@ -119,6 +142,8 @@ def main(argv=None) -> int:
             i.stop()
         sink.close()
         app.stop()
+        if pack:
+            pack.close()
         log.info("結束，共 %d 格，平均 %.1f fps", frames, frames / max(1e-6, time.monotonic() - t_start))
     return 0
 

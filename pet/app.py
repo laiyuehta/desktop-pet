@@ -51,6 +51,8 @@ class PetApp:
         self.fps = 0.0
         self.started = time.time()
         self._status: dict = {}
+        self.state_changed_ts = time.time()   # 最近一次狀態改變的事件時間（量反應延遲用）
+        self.render_info: Optional[dict] = None   # 畫面來源（動畫包／即時繪圖），由 main 迴圈更新
         self._status_lock = threading.Lock()
 
         # 後端（大腦）：可選，沒設定或連不上時寵物照常運作
@@ -103,6 +105,13 @@ class PetApp:
 
     # -- 事件路由 ---------------------------------------------------------------
     def _route(self, ev: dict) -> None:
+        self._routing_ts = ev.get("ts")          # 原始事件時間（強制切換會另外產生事件，時間要用這個）
+        try:
+            self._route_inner(ev)
+        finally:
+            self._routing_ts = None
+
+    def _route_inner(self, ev: dict) -> None:
         t = ev.get("type")
         if t == "pet":
             self._forward(ev)                       # 狀態改變通知後端
@@ -167,6 +176,7 @@ class PetApp:
             log.warning("未知的動作請求：%s", name)
 
     def _on_state_change(self, old: str, new: str, ev: Optional[dict]) -> None:
+        self.state_changed_ts = float(getattr(self, "_routing_ts", None) or (ev or {}).get("ts") or time.time())
         self._apply_state(ev, replay=(old == new))
         for act in self.fsm.info.get("on_enter", []):
             self.bus.publish(make_event("action", act["name"], source=f"state:{new}", params=act.get("params", {})))
@@ -221,6 +231,7 @@ class PetApp:
             "backend": self.backend.status() if self.backend else None,
             "bubble": self.renderer.bubble.text if self.renderer._bubble is not None else None,
             "last_say": getattr(self, "last_say", None),
+            "render": dict(self.render_info) if self.render_info else {"mode": "live"},
         }
         with self._status_lock:
             self._status = st

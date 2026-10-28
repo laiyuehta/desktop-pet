@@ -42,6 +42,8 @@ class Renderer:
         self.set_skeleton(skeleton)
         self.effects = set()          # 例如 {"zzz"}
         self.effect_time = 0.0
+        self.zzz_period = 2.4         # Z 飄一輪的秒數（動畫包產生工具會調成能整除片段長度）
+        self.last_bubble_anchor = (self.size[0] / 2, 120.0)   # 上一格對話框尾巴指向的點（動畫包存每格的值）
         self._shadow_cache: Dict[int, Image.Image] = {}
 
     def set_skeleton(self, skeleton: Skeleton) -> None:
@@ -79,7 +81,7 @@ class Renderer:
 
     def _draw_zzz(self, frame: Image.Image, x: float, y: float) -> None:
         d = ImageDraw.Draw(frame)
-        period = 2.4
+        period = self.zzz_period
         for i in range(3):
             u = ((self.effect_time + i * period / 3) % period) / period  # 0..1 往上飄
             size = 10 + 14 * u
@@ -118,8 +120,9 @@ class Renderer:
             if "zzz" in self.effects:
                 x, y = mat_apply(world[face_bone], 120, -120)
                 self._draw_zzz(frame, x, y)
+        # 泡泡尾巴指向球的上緣（跟著球左右移動）
+        bx, by = mat_apply(world.get("body", world[sk.draw_order()[0].name]), 0, 0)
+        self.last_bubble_anchor = (bx, by - 150)
         if self._bubble is not None and self._bubble.active:
-            # 泡泡尾巴指向球的上緣（跟著球左右移動）
-            bx, by = mat_apply(world.get("body", world[sk.draw_order()[0].name]), 0, 0)
             self._bubble.draw(frame, bx, by - 150)
         return frame

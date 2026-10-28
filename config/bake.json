@@ -1,0 +1,31 @@
+{
+  "comment": "動畫包產生設定（tools/bake.py）。每個狀態可以有多個變化版（隨機播放）；沒列出的狀態自動產生 base（圓眼的再加一個 blink 版）。時間單位秒。",
+  "look": "seed",
+  "skeleton": "assets/skeletons/seed.json",
+  "fps": 20,
+  "quality": 80,
+  "cut_every": 4,
+  "transitions": true,
+  "transition_min_frames": 8,
+  "expressions": ["normal", "happy", "surprised", "sleepy", "bored", "sad", "squint"],
+  "states": {
+    "idle": {
+      "variants": [
+        {"name": "base", "weight": 1},
+        {"name": "blink", "weight": 3, "blinks": [1.3]},
+        {"name": "blink2", "weight": 1, "blinks": [0.7, 1.05]},
+        {"name": "look_l", "weight": 1, "blinks": [2.4], "looks": [[0.3, -0.8, 0.0], [1.7, 0.0, 0.0]]},
+        {"name": "look_r", "weight": 1, "blinks": [2.4], "looks": [[0.3, 0.8, -0.1], [1.7, 0.0, 0.0]]}
+      ]
+    },
+    "happy": {"variants": [{"name": "base"}]},
+    "bored": {
+      "cut_every": 8,
+      "variants": [
+        {"name": "base", "weight": 1},
+        {"name": "blink", "weight": 2, "blinks": [1.2, 4.8, 8.6]}
+      ]
+    },
+    "sleep": {"cut_every": 5, "variants": [{"name": "base"}]}
+  }
+}

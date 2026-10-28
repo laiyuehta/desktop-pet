@@ -22,7 +22,7 @@ log = logging.getLogger("pet.piscreen")
 DEFAULT_SOCKET = "/run/piscreen/piscreen.sock"
 
 
-def encode_jpeg(frame: Image.Image, quality: int = 85) -> bytes:
+def encode_jpeg(frame: Image.Image, quality: int = 80) -> bytes:
     """baseline JPEG（progressive=False），4:2:0 取樣，速度優先。"""
     if frame.mode != "RGB":
         frame = frame.convert("RGB")
@@ -38,7 +38,7 @@ def pack_frame(jpeg: bytes) -> bytes:
 class PiscreenSink(OutputSink):
     name = "piscreen"
 
-    def __init__(self, path: str = DEFAULT_SOCKET, quality: int = 85, size=(800, 480),
+    def __init__(self, path: str = DEFAULT_SOCKET, quality: int = 80, size=(800, 480),
                  retry_min: float = 0.5, retry_max: float = 5.0, timeout: float = 2.0):
         self.path = path
         self.quality = quality
@@ -81,6 +81,20 @@ class PiscreenSink(OutputSink):
             self.dropped += 1
             return
         data = encode_jpeg(frame, self.quality)
+        self.last_jpeg_size = len(data)
+        try:
+            self.sock.sendall(pack_frame(data))
+            self.sent += 1
+        except OSError as exc:
+            log.warning("送畫面失敗（%s），之後重連", exc)
+            self.dropped += 1
+            self.close()
+
+    def send_jpeg(self, data: bytes) -> None:
+        """動畫包的幀已經是 800×480 baseline JPEG：直接送，不解碼、不重新編碼。"""
+        if self.sock is None and not self._connect():
+            self.dropped += 1
+            return
         self.last_jpeg_size = len(data)
         try:
             self.sock.sendall(pack_frame(data))

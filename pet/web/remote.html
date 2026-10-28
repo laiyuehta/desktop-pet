@@ -44,6 +44,7 @@
     <span>成長值</span><span id="st-growth">—</span>
     <span>表情</span><span id="st-eyes">—</span>
     <span>畫面 FPS</span><span id="st-fps">—</span>
+    <span>畫面來源</span><span id="st-render">—</span>
     <span>最後事件</span><span id="st-last">—</span>
     <span>大腦（後端）</span><span id="st-backend">—</span>
     <span>寵物說</span><span id="st-say">—</span>
@@ -145,6 +146,9 @@ async function poll() {
     $("#st-growth").textContent = s.growth ? s.growth.value : "—";
     $("#st-eyes").textContent = s.eyes || "—";
     $("#st-fps").textContent = s.fps != null ? s.fps.toFixed(1) : "—";
+    const r = s.render || {};
+    $("#st-render").textContent = r.mode === "pack" ? "動畫包 " + (r.pack || "") + "（" + (r.clip || "") + "）"
+      : r.mode === "bubble" ? "動畫包＋對話框（" + (r.clip || "") + "）" : "即時繪圖";
     $("#st-last").textContent = s.last_event ? (s.last_event.type + ":" + s.last_event.name) : "—";
     const b = s.backend;
     $("#st-backend").textContent = !b ? "未設定" : (b.online === true ? "已連線" : b.online === false ? "離線（" + (b.last_error || "") + "）" : "連線中…");

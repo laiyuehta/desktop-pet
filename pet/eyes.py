@@ -82,6 +82,11 @@ class EyeController:
             raise KeyError(f"未知的表情 {name}")
         self._override = (name, seconds)
 
+    @property
+    def active_override(self) -> Optional[str]:
+        """目前暫時表情的名稱（沒有就是 None）；動畫包播放器用來挑對應的表情片段。"""
+        return self._override[0] if self._override else None
+
     def look(self, x: float, y: float = 0.0) -> None:
         self._look_target = (max(-1.0, min(1.0, x)), max(-1.0, min(1.0, y)))
         self._next_look = self.rng.uniform(2.0, 4.0)
