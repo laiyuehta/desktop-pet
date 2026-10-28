@@ -1,0 +1,4 @@
+# 執行只需要 Pillow（Pi OS bookworm 內建的 python3-pil 9.x 也可以）
+Pillow>=9.0
+# 測試只用標準函式庫 unittest；想用 pytest 也可以（選用）：
+# pytest>=7
