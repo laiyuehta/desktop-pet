@@ -15,3 +15,48 @@
 8. **不要放進 repo**：密碼、token、正式網址、區網 IP、Wi‑Fi 名稱、Windows 使用者路徑、照片、`deploy.env`、`backend/config.json`。CI 會掃。
 
 本機測試：`python -m pip install -r requirements.txt pytest && python -m pytest -q`（遙控頁的 script 測試需要 node）。
+
+## Antigravity（AI 開發 agent）
+
+Antigravity 是使用者在自己的 Windows 電腦上跑的 AI 開發 agent，跟三個 bot 一樣是這個 repo 的開發者，**只透過 PR 貢獻**。分工見 PROPOSAL.md「15. 開發流程」的「負責範圍」。
+
+**負責**
+- Rust 守護程式：現在是 `services/piwifi/`，之後還有 `pitouch`、`piwheels`、`pigimbal`、`pimic`。
+- 網頁介面：`desktop-pet-admin` 的頁面、R7 後端控制網頁。
+- 主程式的功能與重構，例如拆出前端後台：`main.py`、`pet/`、`backend/` 的程式。
+- 測試（`tests/`）與 CI 修正（`.github/workflows/`、`tools/ci/`）。
+
+**不碰**
+- 美術與動畫：`packs/`、`assets/`、`preview/`、動畫規格（桌寵專案機器人2 負責）。
+- 機器上的設定：`deploy.env`、`backend/config.json`。
+- Pi 與 R7 上的任何東西，包括 piscreen。不改 piscreen 的程式，也不改 `piscreen.service`。
+- **不用 ssh 連 Pi 或 R7，不部署，不需要任何密碼、token 或金鑰。**
+- 部署與實機驗收由桌寵專案機器人1 在合併後負責。要在機器上量的東西寫進 PR 的「部署影響」，請它測。
+
+**流程**
+1. 動手前先讀 PROPOSAL.md 相關章節：一定要讀「整體架構」（含「主程式 ↔ 前端後台的接口」「守護程式的共同規範」「Rust 怎麼編給 Pi 3B」「piwifi」「遷移步驟」）和「15. 開發流程」，再讀任務 Issue 指定的章節。
+2. 一個 Issue 一個分支：`feat/<名稱>` 或 `fix/<名稱>`，從最新的 `origin/main` 開。
+3. commit 作者名稱用 `Antigravity`，例如 `git -c user.name="Antigravity" commit …`。commit 要小，訊息照 `<type>(<scope>): <摘要>`。
+4. 開 PR 要用範本，寫 `Closes #n` 和對應的規格章節。CI 要綠燈，紅了就修到綠。
+5. **不 push 到 main，不 force push**，也不合併。PR 開好、CI 綠燈就停，等使用者審查與合併。
+6. 規格不清楚或要改規格時，在 Issue 提出，由桌寵專案機器人1 開 `spec/` PR，不要自己改規格。
+
+**在 Windows 上跑測試**
+- 有些測試用 Unix socket（`socket.AF_UNIX`），原生 Windows 的 Python 沒有這個功能，實際在 Windows 原生 Python 3.13 跑過：test_io、test_pack、test_picam、test_mirror、test_camera 等約 16 個失敗，test_remote_page 卡住。
+- **請用 WSL2（Ubuntu）**，跟 CI 和 Pi 一樣是 Linux：
+  ```bash
+  sudo apt install python3 python3-venv python3-pip nodejs   # 要 Python 3.11 以上，CI 用 3.13
+  python3 -m venv .venv && . .venv/bin/activate
+  pip install -r requirements.txt pytest
+  python -m pytest -q
+  ```
+- CI（Ubuntu、Python 3.13、node 22）是最後標準：本機沒辦法跑的測試，以 PR 上的 CI 結果為準。
+
+**Rust**
+- 編譯目標與做法寫在 PROPOSAL.md「整體架構」→「Rust 怎麼編給 Pi 3B」：
+  - 目標 `aarch64-unknown-linux-musl`，靜態連結。
+  - 每個守護程式用自己的 `rust-toolchain.toml` 與 `.cargo/config.toml`。
+  - 用 release 設定。
+  - 執行檔不進 git。
+- 在 WSL2 裡：`rustup target add aarch64-unknown-linux-musl`，連結器用 `rust-lld` 或 `gcc-aarch64-linux-gnu`。
+- 單元測試在本機用 host 目標跑（`cargo test`）。

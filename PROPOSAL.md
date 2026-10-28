@@ -1094,7 +1094,7 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
 | 整體架構 | 規格 v2.6 | 三層＋前端拆分＋守護程式規範＋Rust；尚未實作（遷移第 1 步：拆出前端後台） |
 | 多模態模型＋記憶系統 | 擱置中 | v2.5 規格待核准，問題暫緩；尚未下載模型、尚未實作 |
 | 後端控制網頁、API 金鑰 | 規格 v2.7 | 尚未實作 |
-| 開發流程 | v2.8 | git 為主：分支＋PR＋CI，squash merge，semver tag；分支保護要等升級或公開 |
+| 開發流程 | v2.8 | git 為主：分支＋PR＋CI，squash merge，semver tag；repo 已公開，main 有 ruleset 保護；Antigravity 加入開發 |
 | 公開專案 | 檢查中 | 歷史已改寫、佔位化、MIT；剩下的見「14. 專案公開前的檢查」 |
 | 尚未做 | — | 前端後台拆分、piwifi（Rust）、後端控制網頁、API 金鑰、成長推進規則、多模態模型、記憶系統、ESP32 原型、外殼 |
 
@@ -1209,7 +1209,8 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
 - **v2.8（待決定）**：
   - repo 合併設定要不要改成只允許 squash、合併後自動刪分支？
   - 要不要讓 bot 改用獨立的 GitHub 帳號（machine user）或 GitHub App，讓 CODEOWNERS 與核准真的生效？
-  - 要不要升級 GitHub Pro（或公開後）打開分支保護（設定見第 15 節）？
+  - ~~分支保護~~ 已決定（2026-10-29）：repo 公開，main 套用 ruleset（見第 15 節）。
+  - ruleset 的合併方式要不要只留 squash？
   - 合併後是否打第一個 tag `v2.8.0`？
 - **v2.7（待決定）**：
   - 後端控制網頁用 8091，只綁 127.0.0.1 和 R7 的區網 IP，加 Windows 防火牆規則（只允許本機子網路）。可以嗎？
@@ -1290,14 +1291,14 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
 
   | 前綴 | 用途 | 通常由誰開 |
   |---|---|---|
-  | `feat/` | 新功能 | 桌寵專案機器人1 |
-  | `fix/` | 修 bug | 誰發現誰修（改到別人範圍要對方確認） |
-  | `spec/` | 改項目書規格（版本號 +0.1） | 提案的人；使用者核准 |
+  | `feat/` | 新功能 | Antigravity |
+  | `fix/` | 修 bug | 程式的 bug 交給 Antigravity；其他誰負責誰修（改到別人範圍要對方確認） |
+  | `spec/` | 改項目書規格（版本號 +0.1） | 桌寵專案機器人1 整理；使用者核准 |
   | `anim/` | 動畫、美術、動畫包、動畫規格 | 桌寵專案機器人2 |
   | `chore/` | 整理、工具、CI、文件、相依套件 | 任何人 |
 
 - **main 只能透過 PR 改**，而且 CI 要全綠（`tests`、`secrets & personal-info scan`）。不直接 push 到 main。
-  目前帳號方案還不能用 GitHub 強制（見「分支保護」），所以先靠大家遵守；能開的時候再打開。
+  GitHub 會強制（main 的 ruleset，見「分支保護」）。
 - **一個 PR 一件事**，盡量小。PR 用範本：規格、`Closes #n`、測試、部署影響、回退方式。
 - **由使用者合併**。bot 可以開 PR、修到 CI 綠燈、回覆意見，但不自己合併。
 
@@ -1334,18 +1335,19 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
 | 範圍 | 負責 |
 |---|---|
 | `packs/`、`assets/`、`preview/`、動畫規格（`docs/emotion-levels.md` 等）、`config/bake.json`、素材工具（`tools/bake.py`、`tools/gen_seed_parts.py`、`tools/render_demo.py`）、`tests/test_emotion_levels.py` | 桌寵專案機器人2 |
-| `main.py`、`pet/`、`backend/`、`services/`、`tools/`（素材工具以外）、`tests/`、`config/states.json`、`requirements.txt`、`deploy.env.example` | 桌寵專案機器人1 |
+| Rust 守護程式（`services/piwifi/`，之後 `services/pitouch/`、`piwheels/`、`pigimbal/`、`pimic/`）、網頁介面（`desktop-pet-admin` 的頁面、R7 後端控制網頁）、主程式的功能與重構（`main.py`、`pet/`，例如拆出前端後台）、`backend/` 的程式、`tests/`、CI 修正（`.github/workflows/`、`tools/ci/`）、`requirements.txt` | Antigravity（使用者在自己的 Windows 電腦上跑的 AI 開發 agent；只開 PR，不部署、不連 Pi／R7，見 `CONTRIBUTING.md`） |
+| 部署到 Pi 與 R7、實機驗收、部署相關檔案（`services/*/install.sh`、systemd unit、`tools/deploy/`、`tools/wifi/`、`deploy.env.example`）、規格（`spec/` PR）、跨 bot 協調 | 桌寵專案機器人1 |
 | `PROPOSAL.md`、`CHANGELOG.md`、`CONTRIBUTING.md`、`.github/`、`.gitleaks.toml`、`LICENSE`、`README.md`、`.gitignore` | 使用者核准（公開前整理與歷史改寫是桌寵專案機器人3 做的；之後這類工作也由它提案） |
 
 - 寫在 `.github/CODEOWNERS`。
-- **限制（老實說）**：使用者和三個 bot 用的是同一個 GitHub 帳號。CODEOWNERS 只能填 GitHub 帳號，所以每一行都是同一個帳號。
+- **限制（老實說）**：使用者、三個 bot 和 Antigravity 用的是同一個 GitHub 帳號。CODEOWNERS 只能填 GitHub 帳號，所以每一行都是同一個帳號。
   GitHub 不會要 PR 作者審查自己的 PR，因此：
   - CODEOWNERS 現在**不會自動加審查者**，也**不能當合併條件**，只是文件。
   - 「需要 1 個核准」也做不到：作者本人不能核准自己的 PR。
   - 所以目前的「審查」是：使用者看過 PR 並合併；改到別人範圍時，負責的 bot 在 PR 留言確認。
   - 要真的生效：讓 bot 改用另一個 GitHub 帳號（machine user，GitHub 允許每人一個免費的）或 GitHub App 推送與開 PR，使用者用自己的帳號審查。到時把 CODEOWNERS 換成那些帳號，就能「需要 code owner 核准」。
 
-### 三個 bot 怎麼配合
+### 三個 bot 與 Antigravity 怎麼配合
 - **開工前**：`git fetch origin`，從最新的 `origin/main` 開新分支（`git switch -c <分支> origin/main`）。
 - 還沒 push 的分支可以 `git rebase origin/main` 跟上 main。**已經 push 的分支不 rebase**，改用 `git merge origin/main`（因為不能 force push）。
 - **一個任務一個分支、一個 worktree**。不在別人的分支或 worktree 裡改東西。
@@ -1404,10 +1406,9 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
 - 部署紀錄（時間、tag、結果）寫在目標機器本機，不寫個人資訊。
 
 ### 分支保護（目前狀態）
-- 這個 repo 是私人的，帳號是免費方案：分支保護和 rulesets 都要 GitHub Pro 或公開 repo 才能用（API 回「Upgrade to GitHub Pro or make this repository public」）。所以現在無法強制，只能靠流程。
-- 升級 Pro 或公開後建議的設定（main）：
-  - 要 PR 才能合併，**需要的核准數 0**（共用帳號，作者不能核准自己）。
-  - 必須通過 CI：`tests (Python 3.13)`、`secrets & personal-info scan`，且分支要跟 main 同步。
+- 2026-10-29 repo 改成公開，main 套用 ruleset `protect-main`（沒有 bypass，管理員也一樣）：
+  - 一定要 PR 才能合併，需要的核准數 0（共用帳號，作者不能核准自己）。
+  - 必須通過 `tests (Python 3.13)` 與 `secrets & personal-info scan`，而且分支要跟 main 同步。
   - 禁止 force push、禁止刪除。
-  - 管理員也要遵守（ruleset 不設 bypass）。
+- 合併方式目前三種都允許；流程規定用 squash，要不要在 ruleset 只留 squash 由使用者決定。
 - 等 bot 有獨立帳號後，再把核准數改成 1，並要求 code owner 核准。
