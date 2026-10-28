@@ -31,6 +31,14 @@
   .talk button { flex: none; padding: 8px 16px; }
   #st-say { color: var(--fg); }
   #log { font-family: ui-monospace, monospace; font-size: 0.78rem; color: var(--dim); white-space: pre-wrap; max-height: 9em; overflow: auto; }
+  .wifi-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #25324d; }
+  .wifi-row .n { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .wifi-row button { min-height:40px; padding:6px 10px; font-size:0.9rem; flex:none; }
+  .wifi-form { display:grid; gap:8px; margin-top:8px; }
+  .wifi-form input[type=text], .wifi-form input[type=password] { font: inherit; font-size: 1rem; padding: 10px 12px;
+    border-radius: 10px; border: 1px solid #36507a; background: #0f1626; color: var(--fg); min-width:0; }
+  button.stop { background:#6a2330; }
+  .bad { color:#ff8a8a; } .good { color:#8fe39a; }
 </style>
 </head>
 <body>
@@ -114,6 +122,30 @@
   <div id="log"></div>
 </div>
 
+<div class="card" id="wifi-card">
+  <h2>Wi‑Fi 設定</h2>
+  <div class="status">
+    <span>Wi‑Fi</span><b id="wf-now">—</b>
+    <span>訊號 / IP</span><span id="wf-ip">—</span>
+    <span>有線網路</span><span id="wf-wired">—</span>
+    <span>模式</span><span id="wf-mode">—</span>
+  </div>
+  <div class="dim" id="wf-op"></div>
+  <h2 style="margin-top:12px">附近的網路 <button id="wf-scan" style="min-height:36px;padding:4px 12px;font-size:0.9rem">🔄 掃描</button></h2>
+  <div id="wf-list" class="dim">按「掃描」找附近的網路</div>
+  <form class="wifi-form" id="wf-form">
+    <input type="text" id="wf-ssid" placeholder="網路名稱（SSID）" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <input type="password" id="wf-pw" placeholder="密碼（開放網路留空）" autocomplete="off">
+    <label class="dim"><input type="checkbox" id="wf-hidden"> 隱藏網路（掃描看不到）</label>
+    <label class="dim"><input type="checkbox" id="wf-show"> 顯示密碼</label>
+    <button type="submit" class="acc">連線</button>
+  </form>
+  <h2 style="margin-top:12px">已記錄的網路（上面的先試）</h2>
+  <div id="wf-saved" class="dim">—</div>
+  <div class="dim" style="margin-top:8px">連不上任何已記錄的網路 2 分鐘後，會開設定熱點 <b id="wf-hs">PetRescue-AP</b>，
+    手機連上後開 <b>http://192.0.2.1:8080/</b> 設定。</div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -160,6 +192,105 @@ async function poll() {
   } catch (e) { $("#st-conn").textContent = "連不到桌寵（重試中…）"; }
 }
 poll(); setInterval(poll, 1000);
+
+// ---- Wi‑Fi 設定 ----
+const esc = (t) => String(t == null ? "" : t).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const MODE = { connected: "已連線", disconnected: "沒有網路（自動嘗試中）", connecting: "連線中…", hotspot: "設定熱點開著",
+               unavailable: "Wi‑Fi 介面不可用", unknown: "檢查中…" };
+let wfOp = null, wfOpDone = null;
+async function wjson(path, body) {
+  const opt = body === undefined ? { cache: "no-store" } :
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  const j = await r.json();
+  if (!r.ok && j && j.error) throw new Error(j.error);
+  return j;
+}
+function fmtTime(t) { if (!t) return "沒連過"; const d = new Date(t); return isNaN(d) ? t : d.toLocaleString("zh-TW", { hour12: false }); }
+async function wifiStatus() {
+  try {
+    const s = await wjson("/wifi/status");
+    const w = s.wifi || {};
+    $("#wf-now").textContent = w.hotspot ? "熱點 " + (s.hotspot.ssid || "") : (w.ssid || "未連線");
+    $("#wf-ip").textContent = (w.signal != null ? w.signal + "% · " : "") + (w.ip || "—");
+    $("#wf-wired").textContent = (s.wired || []).map(e => e.device + " " + (e.ip || e.state)).join("、") || "—";
+    $("#wf-mode").textContent = MODE[s.mode] || s.mode;
+    $("#wf-hs").textContent = (s.hotspot && s.hotspot.ssid) || "PetRescue-AP";
+    const op = s.op;
+    if (op) {
+      const cls = op.phase !== "done" ? "" : op.result === "ok" ? "good" : "bad";
+      $("#wf-op").innerHTML = '<span class="' + cls + '">' + esc((op.ssid || "") + "：" + op.message) + "</span>";
+      if (op.phase === "done" && wfOpDone !== op.id) { wfOpDone = op.id; if (wfOp === op.id) toast(op.message); wifiSaved(); }
+    }
+  } catch (e) { $("#wf-mode").textContent = "讀不到（" + e.message + "）"; }
+}
+async function wifiScan() {
+  $("#wf-list").textContent = "掃描中…";
+  try {
+    const j = await wjson("/wifi/scan");
+    const nets = j.networks || [];
+    if (!nets.length) { $("#wf-list").textContent = "沒找到網路"; return; }
+    $("#wf-list").innerHTML = nets.map((n, i) =>
+      '<div class="wifi-row"><span class="n">' + (n.active ? "✅ " : "") + (n.secured ? "🔒 " : "") + esc(n.ssid) +
+      ' <span class="dim">' + n.signal + "%" + (n.saved ? " · 已記錄" : "") + '</span></span>' +
+      '<button data-i="' + i + '">' + (n.saved ? "連線" : "選擇") + "</button></div>").join("");
+    $("#wf-list").querySelectorAll("button").forEach(b => b.onclick = () => {
+      const n = nets[+b.dataset.i];
+      if (n.saved) return wifiConnect({ uuid: n.uuid }, n.ssid);
+      $("#wf-ssid").value = n.ssid; $("#wf-hidden").checked = false; $("#wf-pw").value = "";
+      if (n.secured) $("#wf-pw").focus(); else wifiConnect({ ssid: n.ssid }, n.ssid);
+    });
+  } catch (e) { $("#wf-list").textContent = "掃描失敗：" + e.message; }
+}
+async function wifiConnect(body, label) {
+  if (!confirm("要切換到「" + label + "」嗎？連不上會在 30 秒內切回原本的網路。\n（如果你是用 Wi‑Fi 開這個網頁，切換時會暫時斷線）")) return;
+  try {
+    const j = await wjson("/wifi/connect", body);
+    wfOp = j.op && j.op.id;
+    toast("連線中：" + label);
+  } catch (e) { toast("錯誤：" + e.message); }
+}
+$("#wf-show").onchange = () => { $("#wf-pw").type = $("#wf-show").checked ? "text" : "password"; };
+$("#wf-scan").onclick = wifiScan;
+$("#wf-form").onsubmit = (e) => {
+  e.preventDefault();
+  const ssid = $("#wf-ssid").value.trim();
+  if (!ssid) return toast("請輸入網路名稱");
+  const pw = $("#wf-pw").value;
+  if (pw && (pw.length < 8 || pw.length > 63)) return toast("密碼要 8～63 個字");
+  wifiConnect({ ssid: ssid, password: pw || undefined, hidden: $("#wf-hidden").checked }, ssid);
+  $("#wf-pw").value = "";
+};
+async function wifiSaved() {
+  try {
+    const list = (await wjson("/wifi/saved")).saved || [];
+    if (!list.length) { $("#wf-saved").textContent = "還沒有記錄"; return; }
+    $("#wf-saved").innerHTML = list.map((n, i) =>
+      '<div class="wifi-row"><span class="n">' + (n.active ? "✅ " : "") + esc(n.ssid || n.name) + (n.hidden ? " 🙈" : "") +
+      '<br><span class="dim">上次連線：' + esc(fmtTime(n.last_connected)) + "</span></span>" +
+      '<button data-a="up" data-i="' + i + '"' + (i === 0 ? " disabled" : "") + ">⬆️</button>" +
+      '<button data-a="down" data-i="' + i + '"' + (i === list.length - 1 ? " disabled" : "") + ">⬇️</button>" +
+      (n.active ? "" : '<button data-a="conn" data-i="' + i + '">連線</button>') +
+      (n.active ? "" : '<button data-a="del" data-i="' + i + '" class="stop">刪除</button>') + "</div>").join("");
+    $("#wf-saved").querySelectorAll("button").forEach(b => b.onclick = async () => {
+      const n = list[+b.dataset.i], a = b.dataset.a;
+      try {
+        if (a === "conn") return wifiConnect({ uuid: n.uuid }, n.ssid || n.name);
+        if (a === "del") {
+          if (!confirm("刪除「" + (n.ssid || n.name) + "」的記錄？")) return;
+          await wjson("/wifi/forget", { uuid: n.uuid }); toast("已刪除");
+        } else { await wjson("/wifi/priority", { uuid: n.uuid, direction: a }); }
+        wifiSaved();
+      } catch (e) { toast("錯誤：" + e.message); }
+    });
+  } catch (e) { $("#wf-saved").textContent = "讀不到：" + e.message; }
+}
+async function wifiInit() {
+  try { const r = await fetch("/wifi/status", { cache: "no-store" }); if (r.status === 404) { $("#wifi-card").style.display = "none"; return; } }
+  catch (e) { }
+  wifiStatus(); wifiSaved(); setInterval(wifiStatus, 3000);
+}
+wifiInit();
 </script>
 </body>
 </html>

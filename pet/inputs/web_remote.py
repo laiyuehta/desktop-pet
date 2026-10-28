@@ -33,8 +33,10 @@ class WebRemoteInput(InputAdapter):
     name = "web"
 
     def __init__(self, emit, host: str = "0.0.0.0", port: int = 8080,
-                 status_fn: Optional[Callable[[], dict]] = None):
+                 status_fn: Optional[Callable[[], dict]] = None, routes: Optional[list] = None):
         super().__init__(emit, source="web-remote")
+        # 額外路由（例如 Wi‑Fi 設定）：物件要有 handle(method, path, data, headers) → (code, obj) 或 None
+        self.routes = list(routes or [])
         self.host, self.port = host, port
         self.status_fn = status_fn or (lambda: {})
         self.httpd: Optional[ThreadingHTTPServer] = None
@@ -60,8 +62,23 @@ class WebRemoteInput(InputAdapter):
             def _json(self, code: int, obj) -> None:
                 self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"))
 
+            def _route(self, method: str, path: str, data) -> bool:
+                for r in adapter.routes:
+                    try:
+                        res = r.handle(method, path, data, self.headers)
+                    except Exception as exc:   # 路由出錯不能讓伺服器掛掉
+                        log.exception("路由 %s %s 出錯", method, path)
+                        self._json(500, {"ok": False, "error": f"內部錯誤：{type(exc).__name__}"})
+                        return True
+                    if res is not None:
+                        self._json(res[0], res[1])
+                        return True
+                return False
+
             def do_GET(self):
                 path = self.path.split("?", 1)[0]
+                if adapter.routes and self._route("GET", path, None):
+                    return
                 if path in ("/", "/index.html"):
                     try:
                         with open(HTML_PATH, "rb") as fh:
@@ -80,6 +97,8 @@ class WebRemoteInput(InputAdapter):
                     if n > MAX_BODY:
                         raise ValueError("內容太大")
                     data = json.loads(self.rfile.read(n) or b"{}")
+                    if adapter.routes and self._route("POST", path, data):
+                        return
                     ev = adapter.build_event(path, data)
                 except (ValueError, KeyError, TypeError) as exc:
                     self._json(400, {"ok": False, "error": str(exc)})

@@ -23,6 +23,7 @@
 | 輸出：piscreen（Unix socket + JPEG）、預覽 PNG / GIF | ✅（piscreen 尚未在 Pi 實測） |
 | 後端（大腦）：成長／心情／存檔 API、本機 LLM 對話（qwen3-14b）、備用台詞、雲端路由接口 | ✅（見 [backend/README.md](backend/README.md)；還沒在 R7 實跑） |
 | 裝置接後端：背景送事件、套用指令、螢幕對話框、網頁遙控「跟寵物說話」 | ✅（`--backend`，預設不接） |
+| **網頁 Wi‑Fi 設定**：掃描／連線（含隱藏網路）、自動記錄與優先順序、斷線自動重試、換網路失敗切回、救援熱點 `PetRescue-AP` | ✅（見下方「Wi‑Fi 設定」） |
 | **預錄動畫包**：`tools/bake.py` 用骨架系統離線產生 JPEG 片段，Pi 只播放（變化版、過渡、表情、對話框即時疊加、缺片段退回即時繪圖） | ✅（見下方「動畫包」） |
 
 ## 安裝
@@ -109,6 +110,42 @@ curl localhost:8080/status
 
 > ⚠️ 網頁遙控沒有密碼，只適合在家裡內網用；不要把埠號開到外網。
 
+## Wi‑Fi 設定（網頁遙控）
+
+遙控頁最下面的「Wi‑Fi 設定」卡片：目前連線（名稱、訊號、IP、有線網路）、掃描附近網路、手動輸入（隱藏網路）、
+已記錄的網路（上次連線時間、⬆️⬇️ 調整優先、刪除）。程式在 `pet/wifi.py`，透過 NetworkManager 的 `nmcli`：
+
+- **已記錄的網路 = NetworkManager 的 Wi‑Fi 連線設定**；優先順序 = `autoconnect-priority`，上次連線 = `connection.timestamp`。
+  從網頁連成功的網路自動存起來、排到最前面（目前最高 +10）；手動排序時重寫全部優先值（200、210、220…）。
+- **換網路的保險**：從網頁換網路時 `nmcli -w 30 connection up`；30 秒內連不上就刪掉剛建的設定、切回原本的網路。
+  結果分「密碼錯誤／找不到網路／逾時／失敗」。同一個 SSID 用新密碼連成功，舊設定才會被取代；失敗不動原本的設定。
+- **自動嘗試**：桌寵程式裡的背景執行緒每 5 秒看一次 wlan0；沒連上時依優先順序試「掃描看得到的＋隱藏的」已記錄網路，
+  每個 20 秒；全部失敗 60 秒後重掃再試。
+- **救援熱點**：連續 120 秒（`--wifi-hotspot-after`）都連不上已記錄的網路，開 `PetRescue-AP`（WPA2，密碼在 Pi 的
+  `/etc/desktop-pet/wifi-hotspot.conf`）；手機連上後開 `http://192.0.2.1:8080/` 設定，連上正式網路熱點就關。
+  熱點開著時每 3 分鐘（2 分鐘內沒人用網頁時）關掉熱點重試一輪已記錄網路，連不上再開回來。
+  **熱點救援只在桌寵程式（desktop-pet）跑的時候有效**。
+- **螢幕提示**：沒網路、正在連、連上、熱點模式時寵物用對話框說（熱點模式每 30 秒提醒一次熱點名稱與網址）。
+- **只動 Wi‑Fi**：指令只針對 `--wifi-iface`（預設 wlan0）和 802-11-wireless 設定；有線網路只讀取顯示。
+- **密碼**：只經由 stdin 交給 `nmcli connection edit`（不出現在指令列、日誌、API 回應）。
+- **權限**：桌寵以一般使用者跑，不用 sudo；部署時裝一次 polkit 規則（只開放 wifi.scan、network-control、
+  settings.modify.system、wifi.share.protected 給該使用者）與熱點密碼檔：`sudo sh tools/wifi/install.sh`。
+- **PIN**：先不用（`WifiManager.pin` 預留，設了之後 `/wifi/*` 要帶 `X-Pet-PIN` 標頭）。
+- 參數：`--wifi auto|on|off`（auto = 有 nmcli 和 wlan0 才開）、`--wifi-iface`、`--wifi-hotspot on|off`、
+  `--wifi-hotspot-ssid`、`--wifi-hotspot-conf`、`--wifi-hotspot-after`。
+
+```bash
+curl localhost:8080/wifi/status
+curl localhost:8080/wifi/scan
+curl localhost:8080/wifi/saved
+curl -X POST localhost:8080/wifi/connect  -d '{"ssid":"MyWifi","password":"........"}'   # 回 202 + op，進度看 /wifi/status 的 op
+curl -X POST localhost:8080/wifi/connect  -d '{"ssid":"Hidden","password":"........","hidden":true}'
+curl -X POST localhost:8080/wifi/connect  -d '{"uuid":"<已記錄的 uuid>"}'
+curl -X POST localhost:8080/wifi/forget   -d '{"uuid":"<uuid>"}'                 # 連線中的不能刪
+curl -X POST localhost:8080/wifi/priority -d '{"uuid":"<uuid>","direction":"up"}'  # 或 {"order":[uuid,...]}
+curl -X POST localhost:8080/wifi/hotspot  -d '{"on":true}'                          # 手動開關熱點（測試／救援）
+```
+
 ## 動畫包（預錄動畫）
 
 Pi 3B 即時繪圖只有 10~14 fps，所以改成**在電腦上把動畫先算好、Pi 只播放**（項目書「裝置端：預錄動畫播放」）。
@@ -167,7 +204,9 @@ config/bake.json           動畫包產生設定（外觀、fps、品質、變�
 pet/backend_client.py      後端客戶端（背景執行緒、離線降級、指令 → 事件）
 pet/bubble.py              對話框與中文字型尋找
 pet/inputs/                InputAdapter、KeyboardInput、WebRemoteInput、Touch/Button/Vision stub
-pet/web/remote.html        網頁遙控頁面
+pet/web/remote.html        網頁遙控頁面（含 Wi‑Fi 設定）
+pet/wifi.py                Wi‑Fi 設定：nmcli 包裝、WifiManager（自動重試、切回、救援熱點）、/wifi/* 路由
+tools/wifi/                Pi 上的 polkit 規則與安裝腳本（熱點密碼檔）
 pet/outputs/               OutputSink、PiscreenSink、FileSink、GifSink、NullSink
 pet/actuators/             ActuatorController、Wheels、PanTilt、ActuatorHub、LoggingActuator、NullActuator
 pet/extensions/            EventBus、Extension、ExtensionManager、ExampleExtension

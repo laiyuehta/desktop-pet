@@ -19,10 +19,12 @@ import sys
 import time
 
 from pet.app import PetApp
+from pet.events import make_event
 from pet.inputs import KeyboardInput, WebRemoteInput
 from pet.pack import AnimationPack, PackDriver
 from pet.outputs import FileSink, NullSink, PiscreenSink
 from pet.outputs.piscreen import DEFAULT_SOCKET
+from pet.wifi import DEFAULT_HOTSPOT_CONF, HOTSPOT_SSID, WifiManager, WifiWebAPI
 
 
 def parse_args(argv=None):
@@ -49,6 +51,14 @@ def parse_args(argv=None):
     p.add_argument("--pet-id", default="seed-001", help="寵物 ID（後端存檔用）")
     p.add_argument("--backend-token", default="", help="後端 api_token（有設才需要）")
     p.add_argument("--font", default=None, help="對話框中文字型路徑（預設自動尋找）")
+    p.add_argument("--wifi", choices=["auto", "on", "off"], default="auto",
+                   help="網頁 Wi‑Fi 設定與自動重連（auto = 有 nmcli 和 Wi‑Fi 介面才開）")
+    p.add_argument("--wifi-iface", default="wlan0", help="要管理的 Wi‑Fi 介面（只動這個介面）")
+    p.add_argument("--wifi-hotspot", choices=["on", "off"], default="on",
+                   help="連不上已記錄的網路時開設定熱點（預設 on）")
+    p.add_argument("--wifi-hotspot-ssid", default=HOTSPOT_SSID, help="設定熱點名稱")
+    p.add_argument("--wifi-hotspot-conf", default=DEFAULT_HOTSPOT_CONF, help="熱點密碼設定檔（password=...）")
+    p.add_argument("--wifi-hotspot-after", type=float, default=120, help="幾秒連不上就開熱點（預設 120）")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -91,13 +101,29 @@ def main(argv=None) -> int:
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
 
+    wifi = None
+    if args.wifi == "on" or (args.wifi == "auto" and WifiManager.available(args.wifi_iface)):
+        def wifi_notice(text, seconds):
+            app.post(make_event("action", "say", source="wifi", params={"text": text, "seconds": seconds}))
+        wifi = WifiManager(iface=args.wifi_iface, notify=wifi_notice, hotspot=args.wifi_hotspot == "on",
+                           hotspot_conf=args.wifi_hotspot_conf, hotspot_ssid=args.wifi_hotspot_ssid,
+                           hotspot_after=args.wifi_hotspot_after)
+        log.info("Wi‑Fi 設定：管理 %s（熱點 %s）", args.wifi_iface, args.wifi_hotspot_ssid if wifi.hotspot_enabled else "關")
+
+    def status_with_wifi():
+        st = app.status()
+        if wifi:
+            st["wifi"] = wifi.brief()
+        return st
+
     inputs = []
     for name in [s.strip() for s in args.input.split(",") if s.strip()]:
         if name == "keyboard":
             inputs.append(KeyboardInput(app.post, on_quit=request_stop))
         elif name == "web":
             host, _, port = args.web.rpartition(":")
-            inputs.append(WebRemoteInput(app.post, host or "0.0.0.0", int(port), status_fn=app.status))
+            inputs.append(WebRemoteInput(app.post, host or "0.0.0.0", int(port), status_fn=status_with_wifi,
+                                          routes=[WifiWebAPI(wifi)] if wifi else None))
         elif name != "none":
             log.error("未知的輸入：%s", name)
             return 2
@@ -106,6 +132,8 @@ def main(argv=None) -> int:
     sink.open()
     for i in inputs:
         i.start()
+    if wifi:
+        wifi.start()
 
     frame_time = 1.0 / max(1.0, args.fps)
     t_start = last = time.monotonic()
@@ -140,6 +168,8 @@ def main(argv=None) -> int:
     finally:
         for i in inputs:
             i.stop()
+        if wifi:
+            wifi.stop()
         sink.close()
         app.stop()
         if pack:
