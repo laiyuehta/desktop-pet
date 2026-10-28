@@ -9,7 +9,7 @@
 
 **部署到自己的裝置**：repo 裡的 service／polkit 檔只有佔位（`@USER@`、`@HOME@`、`@BACKEND_URL@`）。先 `cp deploy.env.example deploy.env`
 並填入實際值（`deploy.env` 不進 repo），再跑各自的 `install.sh`。後端的實際設定寫在本機 `backend/config.json`（不進 repo，預設值見
-`backend/config.example.json`）。授權：MIT（見 [LICENSE](LICENSE)）。
+`backend/config.example.json`）。授權：程式碼 MIT、assets/ 為 CC BY-NC 4.0（見下方〈[授權](#授權)〉）。
 
 ## 目前進度（第一版程式原型 v0.1）
 
@@ -299,3 +299,11 @@ python3 -m unittest discover -s tests -v     # 不需要額外套件（pytest �
 - 即時骨架繪圖（`tools/bench.py --stages`）：每格繪圖 40~47 ms（滾動 77 ms，其中零件變形佔大部分）＋ JPEG 編碼約 11 ms → 待機 13~14 fps、滾動 10~11 fps，吃滿 1 顆核心。
 - 動畫包播放（`tools/bench.py --pack packs/seed`）：每格約 0.17 ms；實際跑 20.0 fps、CPU 約 1 核的 2.3%；有對話框時每格約 20 ms（解碼＋畫框＋編碼），20.0 fps、約 41%。
 - 連跑 30 分鐘：平均 20.0 fps，記憶體沒有增加，piscreen 錯誤／救援都是 0。
+
+## 授權
+
+- **程式碼、工具、設定與預覽圖**（含 `tools/gen_seed_parts.py`、`config/bake.json`、`config/states.json`、`preview/` 的 `demo.gif` 與各狀態 PNG）：MIT，見 [LICENSE](LICENSE)。
+- **美術素材 `assets/`**（含 `assets/skeletons/`、`assets/parts/`）：[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)（姓名標示－非商業性），見 [assets/LICENSE](assets/LICENSE)。署名：laiyuehta（https://github.com/laiyuehta/desktop-pet）。
+- 由素材烘焙出的動畫包 `packs/`（不進 repo）屬衍生作品，同樣適用 CC BY-NC 4.0。
+
+English: code, tools, `config/` and `preview/` are MIT; everything under `assets/` (and packs baked from it) is CC BY-NC 4.0 — see [assets/LICENSE](assets/LICENSE).

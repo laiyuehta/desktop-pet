@@ -27,3 +27,12 @@ Some art assets in this repository (for example under assets/ and preview/)
 were created with the help of AI image-generation tools. They are provided
 "as is", without any warranty, including no warranty or representation that
 they are free of third-party rights. Use them at your own risk.
+
+---------------------------------------------------------------------------
+Note on assets/ license
+
+Files under assets/ (including assets/skeletons/ and assets/parts/) are NOT
+covered by the MIT License above. They are licensed under the Creative
+Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0);
+see assets/LICENSE. Animation packs baked from them (packs/) inherit
+CC BY-NC 4.0. Code, tools, config/ and preview/ remain under the MIT License.
