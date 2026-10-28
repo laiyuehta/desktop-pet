@@ -1,0 +1,67 @@
+{
+  "comment": "狀態機設定：(目前狀態, 事件) → 下一個狀態。時間單位為秒。from 可用 \"*\" 代表任何狀態；具體狀態的規則優先於 \"*\"。",
+  "initial": "idle",
+  "states": {
+    "idle": {
+      "label": "待機",
+      "animation": "idle",
+      "eyes": "normal",
+      "timers": [{"after": 600, "event": "idle_timeout", "reset_on_input": true}]
+    },
+    "happy": {
+      "label": "開心",
+      "animation": "happy",
+      "eyes": "happy",
+      "timers": [{"after": 3.0, "event": "happy_done", "reset_on_input": false}],
+      "on_enter": [{"name": "motion", "params": {"motion": "nod", "times": 1}}]
+    },
+    "bored": {
+      "label": "無聊",
+      "animation": "bored",
+      "eyes": "bored",
+      "timers": [{"after": 600, "event": "idle_timeout", "reset_on_input": true}]
+    },
+    "sleep": {
+      "label": "睡覺",
+      "animation": "sleep",
+      "eyes": "sleep",
+      "effects": ["zzz"],
+      "timers": []
+    }
+  },
+  "transitions": [
+    {"from": "idle",  "event": "pat",          "to": "happy"},
+    {"from": "idle",  "event": "poke",         "to": "happy"},
+    {"from": "idle",  "event": "press",        "to": "happy"},
+    {"from": "idle",  "event": "person_near",  "to": "happy"},
+    {"from": "idle",  "event": "idle_timeout", "to": "bored"},
+    {"from": "idle",  "event": "night",        "to": "sleep"},
+
+    {"from": "happy", "event": "pat",          "to": "happy"},
+    {"from": "happy", "event": "happy_done",   "to": "idle"},
+
+    {"from": "bored", "event": "pat",          "to": "happy"},
+    {"from": "bored", "event": "poke",         "to": "idle"},
+    {"from": "bored", "event": "press",        "to": "idle"},
+    {"from": "bored", "event": "person_near",  "to": "idle"},
+    {"from": "bored", "event": "idle_timeout", "to": "sleep"},
+    {"from": "bored", "event": "night",        "to": "sleep"},
+
+    {"from": "sleep", "event": "pat",          "to": "idle"},
+    {"from": "sleep", "event": "poke",         "to": "idle"},
+    {"from": "sleep", "event": "press",        "to": "idle"},
+    {"from": "sleep", "event": "morning",      "to": "idle"},
+
+    {"from": "*",     "event": "wake",         "to": "idle"},
+    {"from": "*",     "event": "sleep",        "to": "sleep"}
+  ],
+  "growth": {
+    "comment": "成長階段 → 骨架檔。推進規則尚未決定（只有資料結構與 set_stage 接口）。",
+    "stages": {
+      "1": {"name": "種子", "skeleton": "assets/skeletons/seed.json"},
+      "2": {"name": "長腳", "skeleton": "assets/skeletons/legs.json"},
+      "3": {"name": "長耳朵", "skeleton": "assets/skeletons/ears.json"}
+    }
+  },
+  "clock": {"night_start": 23, "night_end": 7, "enabled": true}
+}
