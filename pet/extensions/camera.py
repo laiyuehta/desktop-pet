@@ -107,7 +107,7 @@ class PhotoUploader:
 
     def upload(self, data: bytes, meta: dict) -> str:
         q = urllib.parse.urlencode({"pet_id": self.pet_id, "reason": meta.get("reason", "manual"),
-                                    "taken": "%.3f" % float(meta.get("taken", time.time()))})
+                                    "taken": "%.3f" % (round(float(meta.get("taken", time.time())) * 1000) / 1000)})
         headers = {"Content-Type": "image/jpeg"}
         if self.token:
             headers["X-Pet-Token"] = self.token
@@ -256,7 +256,8 @@ class CameraSnapshot(Extension):
         who = self.busy_check()
         if who:
             return self._fail(job, "camera_busy", f"相機忙碌（{who} 正在用）")
-        name = time.strftime("%Y%m%d-%H%M%S", time.localtime(job["taken"])) + "-%03d" % int((job["taken"] % 1) * 1000)
+        ms = int(round(job["taken"] * 1000))      # 跟後端 photo_id 同一套算法
+        name = time.strftime("%Y%m%d-%H%M%S", time.localtime(ms // 1000)) + "-%03d" % (ms % 1000)
         base, i = name, 1
         while os.path.exists(os.path.join(self.pending_dir, name + ".jpg")):
             i += 1

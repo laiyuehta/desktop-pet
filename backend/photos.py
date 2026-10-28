@@ -56,8 +56,8 @@ class PhotoStore:
         d = self._dir(pet_id)
         with self._lock:
             os.makedirs(d, exist_ok=True)
-            lt = time.localtime(taken)
-            base = time.strftime("%Y%m%d-%H%M%S", lt) + "-%03d" % int((taken % 1) * 1000)
+            ms = int(round(taken * 1000))          # 跟裝置端檔名同一套算法（毫秒四捨五入）
+            base = time.strftime("%Y%m%d-%H%M%S", time.localtime(ms // 1000)) + "-%03d" % (ms % 1000)
             pid, i = base, 1
             while os.path.exists(os.path.join(d, pid + ".jpg")):
                 i += 1
