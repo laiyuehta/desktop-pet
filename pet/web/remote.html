@@ -352,44 +352,75 @@ $("#cam-btn").onclick = async () => {
 camStatus().then(ok => { if (ok) setInterval(camStatus, 2000); });
 
 // ---- 螢幕畫面同步 ----
-let scrPaused = false, scrOn = false;
-const MODE = { pack: "動畫包", bubble: "動畫包＋對話框", live: "即時繪圖" };
-function scrMsg(t) { const m = $("#scr-msg"); m.textContent = t || ""; m.style.display = t ? "flex" : "none"; }
-function scrStart() {
-  scrPaused = false; $("#scr-pause").textContent = "⏸ 暫停";
-  $("#scr-img").src = "/screen.mjpg?fps=" + $("#scr-fps").value + "&t=" + Date.now(); scrMsg("");
-}
-function scrStop(freeze) {
-  // 暫停：停掉串流（釋放觀看名額），留一張靜止畫面
-  $("#scr-img").src = freeze ? "/screen.jpg?t=" + Date.now() : "";
-}
-$("#scr-pause").onclick = () => {
-  if (scrPaused) { scrStart(); return; }
-  scrPaused = true; $("#scr-pause").textContent = "▶ 繼續"; scrStop(true);
-};
-$("#scr-fps").onchange = () => { if (!scrPaused) scrStart(); };
-$("#scr-img").onerror = () => {
-  if (scrPaused) return;
-  scrMsg("看不到畫面（可能同時觀看人數已滿，或桌寵還沒送出畫面）；5 秒後重試");
-  setTimeout(() => { if (!scrPaused) scrStart(); }, 5000);
-};
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) scrStop(false); else if (!scrPaused) scrStart();
-});
-async function scrInfo() {
-  try {
-    const r = await fetch("/screen.info", { cache: "no-store" });
-    if (r.status === 404) { $("#scr-card").style.display = "none"; return false; }
-    const i = await r.json();
-    $("#scr-info").textContent = i.ok
-      ? "來源：" + (MODE[i.mode] || i.mode) + (i.pack ? "（" + i.pack + "）" : "") + "｜" + (i.fps ?? "—") + " fps｜狀態 " + (i.state || "—") +
-        (i.clip ? "｜片段 " + i.clip + " #" + i.frame : "") + "｜觀看 " + i.viewers + "/" + i.max_viewers + (scrPaused ? "｜已暫停" : "")
-      : "桌寵還沒送出畫面";
-    if (!scrOn) { scrOn = true; scrStart(); }
-    return true;
-  } catch (e) { $("#scr-info").textContent = "讀不到"; return true; }
-}
-scrInfo().then(ok => { if (ok) setInterval(scrInfo, 1000); });
+// 包在函式裡，名稱不會跟上面的程式撞（之前 const MODE 重複宣告，整段 script 都沒執行）。
+(() => {
+  const img = $("#scr-img");
+  const SRC = { pack: "動畫包", bubble: "動畫包＋對話框", live: "即時繪圖" };
+  let paused = false, started = false, how = "mjpeg", gen = 0, gotFrame = false, mjpegFails = 0, blobUrl = null;
+  const fps = () => Math.max(1, Math.min(20, parseInt($("#scr-fps").value, 10) || 10));
+  function msg(t) { const m = $("#scr-msg"); m.textContent = t || ""; m.style.display = t ? "flex" : "none"; }
+  function stopAll() { gen++; img.onload = img.onerror = null; img.removeAttribute("src"); }
+  function startMjpeg() {
+    const my = ++gen; gotFrame = false;
+    img.onload = () => { if (my === gen) { gotFrame = true; mjpegFails = 0; msg(""); } };
+    img.onerror = () => { if (my === gen) fallback("串流連不上"); };
+    img.src = "/screen.mjpg?fps=" + fps() + "&t=" + Date.now();
+    // 有些瀏覽器／代理不支援 MJPEG：4 秒內沒有第一張就改成輪詢 /screen.jpg
+    setTimeout(() => { if (my === gen && !gotFrame) fallback("串流沒有畫面"); }, 4000);
+  }
+  function fallback(why) {
+    mjpegFails++;
+    how = "poll"; startPoll();
+    console.log("螢幕畫面：" + why + "，改用輪詢 /screen.jpg");
+  }
+  function startPoll() {
+    const my = ++gen; img.onload = img.onerror = null;
+    const tick = async () => {
+      if (my !== gen) return;
+      try {
+        const r = await fetch("/screen.jpg?t=" + Date.now(), { cache: "no-store" });
+        if (my !== gen) return;
+        if (r.ok) {
+          const u = URL.createObjectURL(await r.blob());
+          img.src = u; if (blobUrl) URL.revokeObjectURL(blobUrl); blobUrl = u; gotFrame = true; msg("");
+        } else msg(r.status === 503 ? "桌寵還沒送出畫面" : "讀不到畫面（" + r.status + "）");
+      } catch (e) { if (my === gen) msg("連不上桌寵"); }
+      if (my === gen) setTimeout(tick, 1000 / fps());
+    };
+    tick();
+  }
+  function start() {
+    paused = false; $("#scr-pause").textContent = "⏸ 暫停"; msg("");
+    if (how === "mjpeg") startMjpeg(); else startPoll();
+  }
+  $("#scr-pause").onclick = async () => {
+    if (paused) { start(); return; }
+    paused = true; $("#scr-pause").textContent = "▶ 繼續"; stopAll();
+    try {   // 暫停：停掉串流（釋放觀看名額），留最新一張靜止畫面
+      const r = await fetch("/screen.jpg?t=" + Date.now(), { cache: "no-store" });
+      if (r.ok && paused) { const u = URL.createObjectURL(await r.blob()); img.src = u; if (blobUrl) URL.revokeObjectURL(blobUrl); blobUrl = u; }
+    } catch (e) {}
+  };
+  $("#scr-fps").onchange = () => { if (!paused) start(); };
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopAll(); else if (!paused && started) start();
+  });
+  async function info() {
+    try {
+      const r = await fetch("/screen.info", { cache: "no-store" });
+      if (r.status === 404) { $("#scr-card").style.display = "none"; return false; }
+      const i = await r.json();
+      $("#scr-info").textContent = i.ok
+        ? "來源：" + (SRC[i.mode] || i.mode) + (i.pack ? "（" + i.pack + "）" : "") + "｜" + (i.fps ?? "—") + " fps｜狀態 " + (i.state || "—") +
+          (i.clip ? "｜片段 " + i.clip + " #" + i.frame : "") + "｜觀看 " + i.viewers + "/" + i.max_viewers +
+          "｜" + (how === "mjpeg" ? "串流" : "輪詢") + (paused ? "｜已暫停" : "")
+        : "桌寵還沒送出畫面";
+      if (!started) { started = true; start(); }
+      return true;
+    } catch (e) { $("#scr-info").textContent = "讀不到"; return true; }
+  }
+  info().then(ok => { if (ok) setInterval(info, 1000); });
+})();
 </script>
 </body>
 </html>
