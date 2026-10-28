@@ -1,0 +1,46 @@
+# 誰負責哪裡（說明見 PROPOSAL.md「15. 開發流程（git 為主）」的「負責範圍」）
+#
+# 限制：使用者和三個 bot 目前共用同一個 GitHub 帳號 @laiyuehta，所以每一行的擁有者都是 @laiyuehta。
+# GitHub 不會向 PR 作者本人要求審查，所以這個檔案現在「只是文件」：
+# 不會自動加審查者，也無法當成合併條件。真正的負責人寫在每段的註解裡；
+# 改到別人負責的路徑時，PR 說明要標出來，並請負責的 bot 在 PR 留言確認（見 PR 範本）。
+# 之後如果 bot 改用獨立的 GitHub 帳號（machine user），把對應那幾行換成該帳號即可生效。
+#
+# 後面的規則會蓋過前面的，所以預設放最前面。
+
+# 預設與規格（項目書、流程文件、CI）：使用者（規格 PR 由使用者核准）
+*                         @laiyuehta
+/PROPOSAL.md              @laiyuehta
+/CHANGELOG.md             @laiyuehta
+/CONTRIBUTING.md          @laiyuehta
+/.github/                 @laiyuehta
+/.gitleaks.toml           @laiyuehta
+
+# 程式與測試：桌寵專案機器人1
+/main.py                  @laiyuehta
+/pet/                     @laiyuehta
+/backend/                 @laiyuehta
+/services/                @laiyuehta
+/tools/                   @laiyuehta
+/tests/                   @laiyuehta
+/requirements.txt         @laiyuehta
+/deploy.env.example       @laiyuehta
+/config/states.json       @laiyuehta
+
+# 美術與動畫：桌寵專案機器人2（包含素材工具與動畫規格）
+/packs/                   @laiyuehta
+/assets/                  @laiyuehta
+/preview/                 @laiyuehta
+/config/bake.json         @laiyuehta
+/docs/emotion-levels.md   @laiyuehta
+/docs/anim/               @laiyuehta
+/tools/bake.py            @laiyuehta
+/tools/gen_seed_parts.py  @laiyuehta
+/tools/render_demo.py     @laiyuehta
+/tests/test_emotion_levels.py @laiyuehta
+
+# 公開與授權（桌寵專案機器人3 做過公開前整理與歷史改寫；之後改動由使用者核准）
+/LICENSE                  @laiyuehta
+/.gitignore               @laiyuehta
+/.gitattributes           @laiyuehta
+/README.md                @laiyuehta

@@ -1,0 +1,38 @@
+name: Bug
+description: 程式或部署出問題
+title: "fix: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 不要貼密碼、token、正式網址、區網 IP、Wi‑Fi 名稱或照片；日誌貼之前先遮掉。
+  - type: textarea
+    id: what
+    attributes:
+      label: 發生什麼事
+      description: 看到什麼、預期是什麼
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 怎麼重現
+      placeholder: "1. …\n2. …"
+  - type: dropdown
+    id: where
+    attributes:
+      label: 在哪裡
+      multiple: true
+      options: [Pi 桌寵主程式, Pi picam, Pi Wi‑Fi／熱點, 網頁遙控, R7 後端, 動畫包／美術, CI／工具, 其他]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 部署的 tag（例如 v2.8.0）或 commit
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日誌（已遮掉個人資訊）
+      render: text
