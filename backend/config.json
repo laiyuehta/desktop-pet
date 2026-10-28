@@ -1,0 +1,60 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8090,
+    "api_token": "",
+    "comment": "api_token 留空 = 不檢查；設定後裝置要帶 X-Pet-Token 標頭"
+  },
+  "data_dir": "data",
+  "llm": {
+    "local": {
+      "base_url": "http://127.0.0.1:8080/v1",
+      "model": "qwen3-14b",
+      "timeout_s": 8,
+      "retries": 1,
+      "temperature": 0.7,
+      "max_tokens": 160,
+      "json_mode": true,
+      "no_think": true,
+      "comment": "換小模型時只要改 base_url / model；no_think 是 Qwen3 專用（加 /no_think 與 enable_thinking=false），其他模型可設 false"
+    },
+    "cloud": {
+      "enabled": false,
+      "provider": "none",
+      "base_url": "",
+      "model": "",
+      "api_key_env": "PET_CLOUD_API_KEY",
+      "timeout_s": 20,
+      "comment": "第二期：複雜任務交給雲端。目前只有接口，沒有實作也沒有金鑰。"
+    },
+    "router": {"mode": "local_only"},
+    "health_cache_s": 10,
+    "history_turns": 6,
+    "max_say_chars": 40
+  },
+  "mood": {
+    "decay_per_hour": {"happiness": 6, "affection": 1.5, "energy_awake": 8},
+    "energy_recover_per_hour_sleep": 25,
+    "neutral": {"happiness": 50, "affection": 30, "energy": 70},
+    "events": {
+      "pat":         {"happiness": 8, "affection": 3, "growth": 1.0},
+      "poke":        {"happiness": 3, "affection": 1, "growth": 0.5},
+      "press":       {"happiness": 2, "growth": 0.3},
+      "person_near": {"happiness": 2, "growth": 0.2},
+      "talk":        {"happiness": 4, "affection": 4, "growth": 1.0}
+    },
+    "sleep_when_energy_below": 15
+  },
+  "growth": {
+    "auto_advance": false,
+    "thresholds": {"2": 200, "3": 600},
+    "comment": "成長推進規則尚未決定：auto_advance 預設關閉；開啟後成長值達門檻就送 set_stage 指令。"
+  },
+  "chatter": {
+    "enabled": true,
+    "cooldown_s": 45,
+    "chance": 0.35,
+    "comment": "被摸等互動時偶爾說一句固定台詞（不用 LLM）。chance=1、cooldown_s=0 方便測試。"
+  },
+  "memory_size": 20
+}
