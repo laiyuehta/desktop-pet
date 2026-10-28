@@ -7,6 +7,7 @@
   POST /control    {"cmd":"set_state","state":"sleep"} 或 {"cmd":"set_stage","stage":2}
   POST /actuator   {"motion":"nod"}、{"motion":"wheels","action":"forward"} 等 → 外部控制器接口
   POST /talk       {"text":"你好"} → 對寵物說話（有接後端時由後端 LLM 回覆）
+  其他路由（Wi‑Fi、拍照、螢幕畫面同步）由 routes 掛上；GET 路由的 data 是查詢字串（dict）。
 
 用 curl 測：
   curl -X POST localhost:8080/event -d '{"type":"touch","name":"pat"}'
@@ -19,6 +20,7 @@ import logging
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 from typing import Callable, Optional
 
 from ..events import make_event, normalize_event
@@ -51,9 +53,11 @@ class WebRemoteInput(InputAdapter):
             def log_message(self, fmt, *args):  # 改走 logging，避免洗版
                 log.debug("%s - %s", self.address_string(), fmt % args)
 
-            def _send(self, code: int, body: bytes, ctype: str = "application/json; charset=utf-8"):
+            def _send(self, code: int, body: bytes, ctype: str = "application/json; charset=utf-8", extra=None):
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
+                for k, v in (extra or {}).items():
+                    self.send_header(k, v)
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
@@ -71,7 +75,11 @@ class WebRemoteInput(InputAdapter):
                         self._json(500, {"ok": False, "error": f"內部錯誤：{type(exc).__name__}"})
                         return True
                     if res is not None:
-                        if len(res) == 3:          # (code, bytes, content-type)，例如縮圖
+                        if res[0] == "stream":     # ("stream", fn)：路由自己寫回應（例如 MJPEG 串流）
+                            res[1](self)
+                        elif len(res) == 4:        # (code, bytes, content-type, 額外標頭)
+                            self._send(res[0], res[1], res[2], res[3])
+                        elif len(res) == 3:        # (code, bytes, content-type)，例如縮圖
                             self._send(res[0], res[1], res[2])
                         else:
                             self._json(res[0], res[1])
@@ -79,8 +87,9 @@ class WebRemoteInput(InputAdapter):
                 return False
 
             def do_GET(self):
-                path = self.path.split("?", 1)[0]
-                if adapter.routes and self._route("GET", path, None):
+                path, _, qs = self.path.partition("?")
+                query = {k: v[-1] for k, v in parse_qs(qs).items()} if qs else {}
+                if adapter.routes and self._route("GET", path, query):
                     return
                 if path in ("/", "/index.html"):
                     try:

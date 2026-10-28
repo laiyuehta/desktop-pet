@@ -1,4 +1,4 @@
-# 桌寵專案 項目書 v2.2
+# 桌寵專案 項目書 v2.3
 
 > 最後更新：2026-10-28　｜　狀態：第一期規劃定稿，細節持續補充
 >
@@ -14,6 +14,7 @@
 > v2.0：後端設好 `api_token`（裝置用 token 檔帶上，`/health` 對外只回基本資訊）；拍照模組實作完成並在 Pi 實測（見該節「實作備註」）。
 > v2.1：新增「週邊常駐服務原則」：每個週邊由一個專門的常駐程式獨占、負責對接；新增相機常駐服務 picam，拍照改成多個觸發共用同一張照片、分送給每個請求者（取代冷卻與「相機忙碌」）。
 > v2.2：網頁遙控新增「螢幕畫面同步」：送到螢幕的每張畫面同步一份到網頁，方便遠端調整。
+> v2.3：picam 相機常駐服務、camera.snapshot 改成 picam client、camcast 改成訂閱 client、螢幕畫面同步都已實作並在 Pi 實測（見各節「實作備註」）。
 
 ## 1. 專案目標
 做一隻放在桌上的實體桌寵：有小螢幕顯示表情動畫，能跟人互動。先在樹莓派上做出原型（之後也會試 ESP32），再比較哪個平台比較適合承載。
@@ -314,8 +315,43 @@ flowchart LR
 - 連續狂按：實際拍照不超過每秒 2 次，每個請求都有回應（拿到某一張照片），沒有錯誤。
 - picam 重啟或相機出錯時，client 收到清楚的錯誤並自動重連；螢幕 20 fps 不受影響，piscreen 錯誤與救援 0。
 
+**實作備註（2026-10-28）**
+- 程式在 repo 的 `services/picam/`：`picamd.py`（daemon）、`picam_client.py`（client 函式庫）、`picam.service`、`install.sh`、`README.md`（協定）。
+  Pi 上裝在 `/home/pi-user/picam/`（跟 `~/piscreen` 同樣的放法）。systemd `picam.service` 已 enable（開機啟動、`Restart=always`）。
+- **用 Picamera2**（`sudo apt install --no-install-recommends python3-picamera2`，約 170 個套件，大多是 numpy、ffmpeg、mesa 函式庫）。
+  原因：一個程式可以長期持有相機，並在同一個程式裡切換「閒置／預覽／拍照」三種設定，還能用硬體 MJPEG 編碼。
+  如果用 `rpicam-*` 指令，拍照和預覽要不同的程式，每次切換都要放開再重開相機，等於又回到搶相機。
+- **服務身分**：以 pi-user 身分、加 video 群組執行，不需要 root。socket 是 `/run/picam/picam.sock`（pi-user:pi-user 0660），狀態在 `/run/picam/status.json`。
+- **閒置**：相機用 640×480、5 fps 低速串流，讓曝光和白平衡一直保持收斂，拍照不用暖機。picam 閒置 CPU 約 1.2%，RSS 約 54 MB。
+- **拍照**：切到 still 設定、丟 2 格再拍，然後切回原本的設定。
+  - 1280×960 從請求到拿到照片約 1.0 秒（含 0.5 秒合併視窗），2592×1944 約 1.3 秒。
+  - 1280×960 會用 sensor 的 1296×972 binning 模式。
+- **預覽**：800×480 @15 fps 用硬體 MJPEGEncoder，picam CPU 約 10.5～11.6%。
+  - 預覽固定選全視角的 1296×972 sensor 模式，不用中間裁切的 1080p 模式。
+  - 會中央裁切成目標長寬比，畫面不變形。
+  - 預覽中拍照，預覽停頓約 1.1 秒。
+- **和規格不同或補充的地方**：
+  - 拍照中到的請求，尺寸不超過這次拍的尺寸才掛上去；比這次大的排到下一張。
+  - 多個預覽訂閱者共用一個預覽：用最大的尺寸和 fps 跑，每個訂閱者照自己的 fps 拿，不會個別縮圖。
+  - 回應多了 `shared`（這張分給幾個請求）和 `capture`（實際拍的尺寸）。
+  - 請求也可以帶 `client` 名稱，寫在日誌與狀態裡。
+- **錯誤**：
+  - 相機打不開或拍照失敗：回 `camera_error`，然後關掉相機重開（退避 2～60 秒）。
+  - 預覽超過 6 秒沒畫面：重開相機。
+  - picam 沒在跑：client 丟 `service_down`「相機服務未啟動」。
+  - `Subscriber` 斷線後自動重連（退避 0.5～5 秒）。
+- **實測（Pi，2026-10-28 21:41 前後，Asia/Taipei）**：
+  - 3 個來源（網頁 API web、事件 touch、網頁 API timer）在 0.3 秒內觸發：只拍 1 張，3 個都拿到 `20261028-214132-421`（shared=3），後端只多 1 張。
+  - 預覽訂閱中拍照：照片正常，預覽停頓 1.08 秒後恢復。
+  - 2 秒內狂按 20 次：實際只拍 3 張（約 1.2 秒一張，低於每秒 2 次的上限），20 個請求都回 200、都拿到某一張照片。
+  - `systemctl restart picam`：重啟期間桌寵觸發回 503「相機服務未啟動」，1.8 秒後恢復可拍。camcast 自動重連 1 次（最長停頓 3.8 秒）。
+  - 整段測試期間螢幕維持 20 fps，piscreen 錯誤與救援都是 0。
+- **模擬測試**（`tests/test_picam.py`）：
+  - 假相機的合併、最大解析度、拍照中掛上、頻率上限、預覽中拍照。
+  - 重啟後重連、相機打不開、拍照失敗重開、錯誤參數、status.json。
+
 ### 能力模組：拍照傳給後端（camera.snapshot）
-第一個真正的能力模組。（v2.1 起改為 picam 的 client，冷卻與「相機忙碌」由「同一張照片分送」取代，見「相機常駐服務：picam」。）Pi 用接在上面的相機拍一張照片，傳給後端存起來；**什麼時候觸發先不決定**，只把觸發接口做好。
+第一個真正的能力模組。（v2.1 起改為 picam 的 client，冷卻與「相機忙碌」由「同一張照片分送」取代，見「相機常駐服務：picam」。下面「裝置端流程」第 1、2 步與 v2.0 實作備註裡的冷卻、相機忙碌、rpicam-still 已不適用，以本節最後的「v2.3 實作備註」為準。）Pi 用接在上面的相機拍一張照片，傳給後端存起來；**什麼時候觸發先不決定**，只把觸發接口做好。
 
 **觸發接口（都走同一個模組，之後再決定實際用哪個）**
 - 事件：任何來源發出 `{"type": "skill", "name": "camera.snapshot"}` 事件就拍（之後可以接按鈕、觸控、定時、狀態變化）。
@@ -362,6 +398,31 @@ flowchart LR
 - 後端存檔的「最近照片」清單只記最近 20 筆（`photos.recent_in_record`），照片本身保留 200 張（`photos.retention`）。
 - 實測：按鈕／本機 API／事件觸發、相機忙碌、後端連不上→存本機→恢復後自動補傳、冷卻與拍照中阻擋都在 Pi 上實測通過，動畫維持 20 fps，piscreen 錯誤與救援 0。重試一次、20 張上限、沒接相機、後端指令觸發只用模擬測試。
 
+**v2.3 實作備註（picam client 版）**
+- 每個觸發各自用 `picam_client.snapshot()` 跟 picam 要照片，由 picam 合併。`--camera auto` 的條件是有 picam socket 或 `rpicam-still`，`--camera-socket` 預設 `/run/picam/picam.sock`。`--camera-cooldown` 已拿掉。
+- 同一個 `photo_id` 由第一個拿到的觸發負責處理：存待傳檔、縮圖、上傳（重試一次）。其他觸發等它的結果。
+  - 同一張有不同尺寸時，等 0.15 秒，挑最大的那份上傳。
+  - 上傳時的 `taken` 用 picam 的拍攝時間，所以後端的 photo_id 跟 picam 的一樣。
+- 每個觸發都有 `request_id`。`camera.snapshot.done`／`failed` 事件帶 `request_id`、`trigger`（來源）、`photo_id`、`shared`，分送給每一個觸發。
+- 本機 API 的回應：
+  - `POST /skill/camera.snapshot`：202，回 `request_id`。
+  - 帶 `{"wait": true}`：等結果再回，成功 200、失敗 502。
+  - 可以帶 `source`。
+  - picam 沒在跑：503「相機服務未啟動」。
+  - 參數錯誤：400。
+  - 已經沒有 429。
+- 「喀嚓」反應：同一秒內多個觸發只演一次。
+- 遙控頁顯示：「相機服務未啟動」、拍照中幾個請求、photo_id。`GET /skill/camera.snapshot` 多了 `recent`（最近每個觸發的結果）、`service`、`in_flight`。
+- 模擬測試：
+  - 3 個觸發同一個 photo_id 只上傳一次、done 事件分送 3 份。
+  - 「相機服務未啟動」、wait API。
+  - 真的 picamd（假相機）端到端：3 個觸發 → 拍 1 次、後端收 1 張。
+- 待傳資料夾、補傳、重試一次、縮圖都照舊（同一套測試）。
+- **camcast** 改成 picam 的預覽訂閱 client。
+  - repo 在 `services/camcast/`，Pi 上在 `~/camcast/`，舊版留了 `.bak-20261028-214009`。
+  - 不再自己開相機，picam 重啟會自動重連。多了 `--dry-run`（只收預覽、不送螢幕）。
+  - 這次只用 `--dry-run` 短測（14 秒、25 秒各一次）就停掉，沒有實際送到螢幕，以免跟桌寵搶畫面。camcast 現在沒在跑。
+
 ### 外部控制器接口（預留）
 之後桌寵可能裝上會動的硬體，第一期**只定義接口、不接真的硬體**：
 - **輪子**：前進、後退、左轉、右轉、停止，可設定速度與持續時間。
@@ -386,6 +447,25 @@ flowchart LR
 - **顯示資訊**：畫面下方顯示畫面來源（動畫包／即時繪圖）、目前 fps、目前狀態與片段名稱，方便對照。
 - **限制**：只同步桌寵送出的畫面；桌寵沒在跑時螢幕上的 piscreen 待機畫面（時鐘＋IP）不會出現在這裡。之後若要完全一致，可在 piscreen 加「最新畫面」訂閱接口（需要重啟一次 piscreen，屆時再決定）。
 - **驗收**：網頁看到的畫面和實體螢幕一致、延遲約 0.5 秒內；開著網頁時螢幕仍 20 fps，piscreen 錯誤與救援 0。
+
+**實作備註（2026-10-28）**
+- 程式：`pet/outputs/mirror.py`（`ScreenMirror`、`ScreenWebAPI`）。
+  - `PiscreenSink` 每送成功一格，就把同一份 bytes 交給 mirror（動畫包幀就是包裡的原始 JPEG；有對話框時是實際送出的合成 JPEG）。
+  - `PackDriver` 每格附上來源資訊（模式、片段、第幾格）。`main.py --mirror on|off`（預設 on）、`--mirror-viewers 3`。
+- 路由：
+  - `GET /screen.mjpg?fps=1～20`（預設 10）。
+  - `GET /screen.jpg`：標頭 `X-Frame-Seq`、`X-Frame-Ts`、`X-Frame-Mode`、`X-Frame-Clip`、`X-Frame-Index`。
+  - `GET /screen.info`：JSON，含 sha1、來源、狀態、片段、fps、觀看人數。這是規格外多加的，方便工具比對。
+- 遙控頁最上方是「螢幕畫面」區塊：
+  - 有暫停（停掉串流、釋放名額、留一張靜止畫面）、更新率 1／2／5／10／15／20 fps。
+  - 「存這一張」連到 `/screen.jpg`。下方資訊列每秒更新。
+  - 分頁切到背景時自動停串流。
+- 每個觀看者一條執行緒。沒有新畫面就等。太慢的網頁睡完直接拿最新一張，舊的丟掉。寫入卡住 10 秒就放掉。
+- 實測（Pi）：
+  - `/screen.jpg` 的 bytes 和動畫包裡同一格（`idle/blink` 第 58 格）完全相同（sha1 一致，沒有重新編碼）。
+  - 有對話框時拿到的是 800×480 合成畫面，跟原始幀只差在對話框區域。
+  - 本機串流延遲平均 1～50 ms，最大 52 ms。
+  - 3 個觀看者（Pi 本機 2×20 fps＋Windows 1×10 fps）時第 4 個回 503，螢幕維持 20.0 fps。桌寵 CPU 從約 1.6% 增加到約 4.2%。piscreen 錯誤與救援 0。
 
 ### 網頁遙控：Wi‑Fi 設定
 讓使用者不用接螢幕鍵盤或 SSH，就能用手機替桌寵換 Wi‑Fi。
@@ -447,9 +527,11 @@ flowchart LR
 | 後端（R7） | 運作中 | qwen3-14b 對話約 0.5～1 秒；心情、成長、存檔正常 |
 | 網頁遙控 | 運作中 | `http://192.0.2.43:8080/`，內網使用；含 Wi‑Fi 設定（救援熱點 `PetRescue-AP`） |
 | 外部控制器 | 只有接口 | 記錄用假控制器 |
-| 拍照能力 | 運作中 | 遙控頁「📷 拍一張」；照片存在 R7 `backend/data/photos/<pet_id>/` |
+| 拍照能力 | 運作中 | 遙控頁「📷 拍一張」；改成 picam 的 client（多個觸發共用同一張）；照片存在 R7 `backend/data/photos/<pet_id>/` |
+| 相機常駐服務 picam | 運作中 | `picam.service`（開機啟動）；閒置 CPU 約 1.2%，預覽 800×480@15 約 11% |
+| 螢幕畫面同步 | 運作中 | 遙控頁最上方；`/screen.mjpg`、`/screen.jpg`；開著時仍 20 fps |
 | 後端 token | 已設定 | 裝置用 token 檔；`/health` 對外只回基本資訊 |
-| 測試 | 129 個全過 | 含動畫包、播放器、Wi‑Fi（假 nmcli）、拍照（假相機、假上傳）與照片 API 測試 |
+| 測試 | 142 個全過 | 含動畫包、播放器、Wi‑Fi（假 nmcli）、picam（假相機）、拍照（假 picam、假上傳）、照片 API、螢幕畫面同步測試 |
 | 尚未做 | — | 開機自動啟動、成長推進規則、小模型替換、ESP32 原型、外殼 |
 
 ## 7. 部署與維運
@@ -460,6 +542,11 @@ flowchart LR
 - 目前啟動參數：`--sink piscreen --input web --web 0.0.0.0:8080 --backend https://pet.example.com --backend-token-file /home/pi-user/.config/desktop-pet/backend-token --pack /home/pi-user/desktop-pet/packs/seed`。
 - 後端 token 放在 `/home/pi-user/.config/desktop-pet/backend-token`（pi-user 擁有、權限 0600），用 `--backend-token-file` 讀，不放在命令列（`ps`、systemd 設定都看不到）。換 token 時改這個檔和 R7 的設定，再重啟 `desktop-pet`。
 - 之後改成正式的開機自動啟動服務（排在 piscreen 之後啟動）。
+
+**相機常駐服務 picam（Pi，`/home/pi-user/picam`）**
+- 正式 systemd 服務 `picam.service`（已 enable，開機啟動、`Restart=always`），以 pi-user 身分執行。需要 `python3-picamera2`（已裝）。
+- 更新：把 repo 的 `services/picam/` 複製到 Pi，執行 `sh services/picam/install.sh`（複製到 `~/picam`、裝 unit、enable、restart）。可以隨時重啟，client 會自動重連。
+- 狀態：`cat /run/picam/status.json`；日誌：`journalctl -u picam -f`。相機預覽到螢幕（測試用）：`~/camcast/start.sh`／`~/camcast/stop.sh`（會跟桌寵搶螢幕畫面）。
 
 **後端（R7，`C:\Users\<user>\desktop-pet`）**
 - 用 ComfyUI 內附的 Python 3.13 執行，埠 8090，日誌 `backend_out.log`／`backend_err.log`；目前重開機不會自動啟動。
@@ -479,7 +566,7 @@ flowchart LR
 - 雲端 API 金鑰（第二期）只放在後端設定，不放在裝置端或 repo。
 
 ## 9. 測試與驗收
-- **自動測試**：每次改動在電腦上跑 `python -m pytest -q`（目前 129 個）。
+- **自動測試**：每次改動在電腦上跑 `python -m pytest -q`（目前 142 個）。
 - **效能量測**：`tools/bench.py` 與逐階段量測；每次大改在 Pi 上量各狀態 fps、CPU。
 - **實機驗收**：所有狀態 20 fps、說話 ≥ 18 fps、事件到畫面 ≤ 0.5 秒、連跑 30 分鐘不掉幀不漏記憶體、piscreen 錯誤與救援次數為 0。
 - **降級測試**：後端關掉、LLM 關掉、網路斷線時，寵物仍正常待機與睡覺。

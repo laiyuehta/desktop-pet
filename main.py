@@ -22,10 +22,11 @@ import time
 from pet.app import PetApp
 from pet.events import make_event
 from pet.extensions import CameraSnapshot, CameraWebAPI, PhotoUploader
-from pet.extensions.camera import DEFAULT_PENDING_DIR
+from pet.extensions.camera import DEFAULT_PENDING_DIR, DEFAULT_PICAM_SOCKET, picam_snapshot
 from pet.inputs import KeyboardInput, WebRemoteInput
 from pet.pack import AnimationPack, PackDriver
 from pet.outputs import FileSink, NullSink, PiscreenSink
+from pet.outputs.mirror import ScreenMirror, ScreenWebAPI
 from pet.outputs.piscreen import DEFAULT_SOCKET
 from pet.wifi import DEFAULT_HOTSPOT_CONF, HOTSPOT_SSID, WifiManager, WifiWebAPI
 
@@ -56,9 +57,12 @@ def parse_args(argv=None):
     p.add_argument("--backend-token-file", default=None,
                    help="從檔案讀後端 api_token（建議，例如 ~/.config/desktop-pet/backend-token，權限 600）")
     p.add_argument("--camera", choices=["auto", "on", "off"], default="auto",
-                   help="拍照能力模組 camera.snapshot（auto = 有 rpicam-still 才開）")
+                   help="拍照能力模組 camera.snapshot（picam 的 client；auto = 有 picam socket 或 rpicam-still 才開）")
+    p.add_argument("--camera-socket", default=DEFAULT_PICAM_SOCKET, help="相機常駐服務 picam 的 socket")
     p.add_argument("--camera-pending-dir", default=None, help="上傳失敗的照片暫存資料夾（預設 ~/.local/share/desktop-pet/pending-photos）")
-    p.add_argument("--camera-cooldown", type=float, default=5.0, help="拍照冷卻秒數（預設 5）")
+    p.add_argument("--mirror", choices=["on", "off"], default="on",
+                   help="網頁遙控的螢幕畫面同步（/screen.mjpg、/screen.jpg）")
+    p.add_argument("--mirror-viewers", type=int, default=3, help="螢幕畫面同時觀看人數上限（預設 3）")
     p.add_argument("--font", default=None, help="對話框中文字型路徑（預設自動尋找）")
     p.add_argument("--wifi", choices=["auto", "on", "off"], default="auto",
                    help="網頁 Wi‑Fi 設定與自動重連（auto = 有 nmcli 和 Wi‑Fi 介面才開）")
@@ -72,12 +76,15 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def make_sink(args):
+def make_sink(args, mirror=None):
     if args.sink == "piscreen":
-        return PiscreenSink(args.socket, quality=args.jpeg_quality)
-    if args.sink == "preview":
-        return FileSink(args.preview_dir, every=args.preview_every)
-    return NullSink()
+        sink = PiscreenSink(args.socket, quality=args.jpeg_quality)
+    elif args.sink == "preview":
+        sink = FileSink(args.preview_dir, every=args.preview_every)
+    else:
+        sink = NullSink()
+    sink.mirror = mirror
+    return sink
 
 
 def main(argv=None) -> int:
@@ -95,14 +102,17 @@ def main(argv=None) -> int:
             log.error("讀不到後端 token 檔 %s：%s", args.backend_token_file, exc.strerror)
             return 2
     camera = None
-    if args.camera == "on" or (args.camera == "auto" and shutil.which("rpicam-still")):
+    if args.camera == "on" or (args.camera == "auto" and (os.path.exists(args.camera_socket)
+                                                          or shutil.which("rpicam-still"))):
         uploader = PhotoUploader(args.backend, args.pet_id, token) if args.backend else None
         camera = CameraSnapshot(uploader, pending_dir=args.camera_pending_dir or DEFAULT_PENDING_DIR,
-                                cooldown=args.camera_cooldown)
-        log.info("拍照能力模組：開（%s）", "上傳到後端" if uploader else "沒有後端，只存在本機")
+                                capture=picam_snapshot(args.camera_socket))
+        log.info("拍照能力模組：開（picam %s；%s）", args.camera_socket,
+                 "上傳到後端" if uploader else "沒有後端，只存在本機")
     app = PetApp(args.config, timer_overrides=overrides, backend_url=args.backend, pet_id=args.pet_id,
                  backend_token=token, font_path=args.font, extensions=[camera] if camera else None)
-    sink = make_sink(args)
+    mirror = ScreenMirror(max_viewers=args.mirror_viewers) if args.mirror == "on" else None
+    sink = make_sink(args, mirror)
     pack_dir = args.pack
     if pack_dir == "auto":
         pack_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs", app.renderer.skeleton.name)
@@ -147,7 +157,8 @@ def main(argv=None) -> int:
             host, _, port = args.web.rpartition(":")
             inputs.append(WebRemoteInput(app.post, host or "0.0.0.0", int(port), status_fn=status_with_wifi,
                                           routes=([WifiWebAPI(wifi)] if wifi else [])
-                                          + ([CameraWebAPI(camera)] if camera else [])))
+                                          + ([CameraWebAPI(camera)] if camera else [])
+                                          + ([ScreenWebAPI(mirror, app.status)] if mirror else [])))
         elif name != "none":
             log.error("未知的輸入：%s", name)
             return 2
@@ -172,6 +183,7 @@ def main(argv=None) -> int:
             if driver:
                 driver.emit()
             else:
+                sink.frame_meta = {"mode": "live"}
                 sink.send(app.render())
             frames += 1
             fps_n += 1

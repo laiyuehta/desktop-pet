@@ -9,6 +9,8 @@ from PIL import Image
 
 class OutputSink(abc.ABC):
     name = "sink"
+    mirror = None        # ScreenMirror（螢幕畫面同步）；PiscreenSink／NullSink 會把送出的 JPEG 同步一份
+    frame_meta = None    # 這一格的來源資訊（PackDriver 每格設定）
 
     def open(self) -> None:
         pass
@@ -37,4 +39,5 @@ class NullSink(OutputSink):
         pass
 
     def send_jpeg(self, data: bytes) -> None:
-        pass
+        if self.mirror is not None:
+            self.mirror.publish(data, self.frame_meta)

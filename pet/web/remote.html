@@ -44,6 +44,23 @@
 <body>
 <h1>🟦 桌寵遙控</h1>
 
+<div class="card" id="scr-card">
+  <h2>螢幕畫面（跟送到螢幕的同一張）</h2>
+  <div style="position:relative;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:5/3">
+    <img id="scr-img" alt="螢幕畫面" style="width:100%;height:100%;object-fit:contain;display:block">
+    <div id="scr-msg" class="dim" style="position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:12px"></div>
+  </div>
+  <div class="talk" style="margin-top:8px;align-items:center;flex-wrap:wrap">
+    <button id="scr-pause">⏸ 暫停</button>
+    <label class="dim">更新率
+      <select id="scr-fps" style="font:inherit;font-size:1rem;padding:8px;border-radius:10px;background:#0f1626;color:var(--fg);border:1px solid #36507a">
+        <option>1</option><option>2</option><option>5</option><option selected>10</option><option>15</option><option>20</option>
+      </select> fps</label>
+    <a id="scr-save" class="dim" href="/screen.jpg" target="_blank">存這一張</a>
+  </div>
+  <div class="dim" id="scr-info" style="margin-top:6px">—</div>
+</div>
+
 <div class="card">
   <h2>目前狀態</h2>
   <div class="status">
@@ -308,12 +325,12 @@ async function camStatus() {
     const r = await fetch("/skill/camera.snapshot", { cache: "no-store" });
     if (r.status === 404) { $("#cam-card").style.display = "none"; return false; }
     const s = await r.json();
-    $("#cam-st").textContent = s.busy ? "拍照中…" : s.cooldown_left > 0 ? "冷卻 " + s.cooldown_left + " 秒" :
+    $("#cam-st").textContent = !s.service ? "相機服務未啟動（picam）" : s.busy ? "拍照中…（" + s.in_flight + " 個請求）" :
       "待傳 " + s.pending + " 張" + (s.uploader ? "" : "（沒接後端）");
     const l = s.last;
     if (l) {
       $("#cam-last").innerHTML = l.ok
-        ? "最後一張：" + esc(camFmt(l.time)) + "（" + esc(l.reason) + "）" + (l.uploaded ? ' <span class="good">已傳到後端</span>' : ' <span class="bad">先存在本機，等網路恢復補傳</span>')
+        ? "最後一張：" + esc(camFmt(l.time)) + "（" + esc(l.reason) + "，" + esc(l.photo_id || "") + "）" + (l.uploaded ? ' <span class="good">已傳到後端</span>' : ' <span class="bad">先存在本機，等網路恢復補傳</span>')
         : '<span class="bad">' + esc(camFmt(l.time) + " 失敗：" + l.error) + "</span>";
       const key = (l.file || "") + (l.time || "");
       if (s.has_thumb && key !== camLastKey && l.ok) {
@@ -333,6 +350,46 @@ $("#cam-btn").onclick = async () => {
   setTimeout(camStatus, 300);
 };
 camStatus().then(ok => { if (ok) setInterval(camStatus, 2000); });
+
+// ---- 螢幕畫面同步 ----
+let scrPaused = false, scrOn = false;
+const MODE = { pack: "動畫包", bubble: "動畫包＋對話框", live: "即時繪圖" };
+function scrMsg(t) { const m = $("#scr-msg"); m.textContent = t || ""; m.style.display = t ? "flex" : "none"; }
+function scrStart() {
+  scrPaused = false; $("#scr-pause").textContent = "⏸ 暫停";
+  $("#scr-img").src = "/screen.mjpg?fps=" + $("#scr-fps").value + "&t=" + Date.now(); scrMsg("");
+}
+function scrStop(freeze) {
+  // 暫停：停掉串流（釋放觀看名額），留一張靜止畫面
+  $("#scr-img").src = freeze ? "/screen.jpg?t=" + Date.now() : "";
+}
+$("#scr-pause").onclick = () => {
+  if (scrPaused) { scrStart(); return; }
+  scrPaused = true; $("#scr-pause").textContent = "▶ 繼續"; scrStop(true);
+};
+$("#scr-fps").onchange = () => { if (!scrPaused) scrStart(); };
+$("#scr-img").onerror = () => {
+  if (scrPaused) return;
+  scrMsg("看不到畫面（可能同時觀看人數已滿，或桌寵還沒送出畫面）；5 秒後重試");
+  setTimeout(() => { if (!scrPaused) scrStart(); }, 5000);
+};
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) scrStop(false); else if (!scrPaused) scrStart();
+});
+async function scrInfo() {
+  try {
+    const r = await fetch("/screen.info", { cache: "no-store" });
+    if (r.status === 404) { $("#scr-card").style.display = "none"; return false; }
+    const i = await r.json();
+    $("#scr-info").textContent = i.ok
+      ? "來源：" + (MODE[i.mode] || i.mode) + (i.pack ? "（" + i.pack + "）" : "") + "｜" + (i.fps ?? "—") + " fps｜狀態 " + (i.state || "—") +
+        (i.clip ? "｜片段 " + i.clip + " #" + i.frame : "") + "｜觀看 " + i.viewers + "/" + i.max_viewers + (scrPaused ? "｜已暫停" : "")
+      : "桌寵還沒送出畫面";
+    if (!scrOn) { scrOn = true; scrStart(); }
+    return true;
+  } catch (e) { $("#scr-info").textContent = "讀不到"; return true; }
+}
+scrInfo().then(ok => { if (ok) setInterval(scrInfo, 1000); });
 </script>
 </body>
 </html>

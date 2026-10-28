@@ -1,0 +1,19 @@
+[Unit]
+Description=picam - Pi camera owner daemon (snapshot / preview for clients)
+After=local-fs.target systemd-udevd.service
+
+[Service]
+Type=simple
+User=pi-user
+Group=pi-user
+SupplementaryGroups=video
+ExecStart=/usr/bin/python3 /home/pi-user/picam/picamd.py
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+RuntimeDirectory=picam
+RuntimeDirectoryMode=0755
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

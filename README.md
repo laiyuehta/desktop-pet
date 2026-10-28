@@ -74,7 +74,7 @@ Pi 端：
 
 ```bash
 python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
-# 選用：--pet-id seed-001  --backend-token-file ~/.config/desktop-pet/backend-token（檔案權限 0600，只放 token）  --camera auto|on|off  --font /usr/share/fonts/truetype/wqy/wqy-microhei.ttc
+# 選用：--pet-id seed-001  --backend-token-file ~/.config/desktop-pet/backend-token（檔案權限 0600，只放 token）  --camera auto|on|off（picam 的 client）  --mirror on|off（網頁 /screen.mjpg）  --font /usr/share/fonts/truetype/wqy/wqy-microhei.ttc
 ```
 
 - 事件（摸頭、計時、狀態改變…）在背景執行緒送給後端，逾時 2 秒，主迴圈不等網路；每 60 秒送一次心跳。

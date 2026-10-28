@@ -1,40 +1,44 @@
-"""能力模組：拍照傳給後端（camera.snapshot）。規格見 PROPOSAL.md「能力模組：拍照傳給後端」。
+"""能力模組：拍照傳給後端（camera.snapshot）。規格見 PROPOSAL.md「相機常駐服務：picam」「能力模組：拍照傳給後端」。
 
-觸發（都走 trigger()）：
-- 事件 {"type":"skill","name":"camera.snapshot", "params"?: {...}}（任何來源，包含後端指令）
-- 網頁遙控 POST /skill/camera.snapshot（CameraWebAPI）
-參數（可選）：reason（manual/touch/timer…）、width/height（預設 1280×960）、quality（預設 85）
-
-流程：冷卻（預設 5 秒）→ 相機占用檢查（camcast 等，不強搶）→ rpicam-still（不開預覽）→
-背景上傳 POST /v1/pet/photo（失敗重試一次；還是失敗就留在本機待傳資料夾，最多 20 張，之後自動補傳）。
-拍照時請寵物「瞇眼＋喀嚓！」（動作請求，寵物本體決定怎麼演）；結果發 skill 事件
-camera.snapshot.done / camera.snapshot.failed。照片內容不寫進日誌。
+v2.1 起改成相機常駐服務 picam 的 client（不再自己開相機）：
+- 觸發（都走 trigger()，可以同時來自很多來源）：
+  事件 {"type":"skill","name":"camera.snapshot","params"?:{...}}（任何來源，包含後端指令）、
+  網頁遙控 POST /skill/camera.snapshot（CameraWebAPI；{"wait": true} 會等結果再回）
+- 參數（可選）：reason（manual/touch/timer…）、width/height（預設 1280×960）、quality（預設 85）
+- 每個觸發各自跟 picam 要照片；picam 把 0.5 秒內的請求合併成同一張（同一個 photo_id）。
+  同一個 photo_id 只上傳後端一次，結果事件 camera.snapshot.done 分送給每一個觸發（帶 request_id、trigger）。
+- 沒有冷卻、沒有「相機忙碌」：避免狂拍由 picam 的頻率上限（每秒最多 2 次實際拍照）負責。
+- picam 沒在跑：回報「相機服務未啟動」，寵物照常運作。
+- 上傳失敗重試一次，還是失敗就留在本機待傳資料夾（最多 20 張），之後自動補傳。
+- 拍照時請寵物「瞇眼＋喀嚓！」（同一秒內多個觸發只演一次）。照片內容不寫進日誌。
 """
 
 from __future__ import annotations
 
+import collections
 import io
 import json
 import logging
 import os
-import queue
 import re
-import shutil
-import subprocess
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Callable, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, Dict, List, Optional, Tuple
+
+from services.picam import picam_client
+from services.picam.picam_client import PicamError
 
 from .base import Extension
 
 log = logging.getLogger("pet.ext.camera")
 
 DEFAULT_PENDING_DIR = os.path.expanduser("~/.local/share/desktop-pet/pending-photos")
+DEFAULT_PICAM_SOCKET = picam_client.DEFAULT_SOCKET
 REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
-BUSY_PATTERNS = ("camcast", "rpicam-", "libcamera-", "raspivid", "raspistill")
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -45,55 +49,21 @@ class CameraError(Exception):
 
 
 ERROR_TEXT = {
-    "cooldown": "冷卻中", "in_progress": "正在拍上一張", "camera_busy": "相機忙碌（別的程式正在用）",
-    "no_camera": "找不到相機", "capture_failed": "拍照失敗", "timeout": "拍照逾時", "bad_params": "參數不對",
+    "service_down": picam_client.SERVICE_DOWN, "camera_error": "相機出錯", "timeout": "拍照逾時",
+    "bad_params": "參數不對", "bad_request": "參數不對", "protocol": "picam 回應不對",
 }
 
 
-def camera_busy(proc_root: str = "/proc") -> Optional[str]:
-    """有別的程式在用相機就回傳它的名字（看 /proc/*/cmdline，不動它）。"""
-    me = os.getpid()
-    try:
-        pids = [p for p in os.listdir(proc_root) if p.isdigit()]
-    except OSError:
-        return None
-    for p in pids:
-        if int(p) == me:
-            continue
+def picam_snapshot(socket_path: str = DEFAULT_PICAM_SOCKET, timeout: float = 25.0):
+    """回傳 capture(width, height, quality, client, reason) → (meta, jpeg)，錯誤丟 CameraError。"""
+    def capture(width: int, height: int, quality: int, client: str, reason: str) -> Tuple[dict, bytes]:
         try:
-            with open(os.path.join(proc_root, p, "cmdline"), "rb") as fh:
-                cmd = fh.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
-        except OSError:
-            continue
-        if not cmd:
-            continue
-        low = cmd.lower()
-        for pat in BUSY_PATTERNS:
-            if pat in low and "--list-cameras" not in low:
-                return pat.rstrip("-")
-    return None
-
-
-def rpicam_capture(path: str, width: int, height: int, quality: int, binary: str = "rpicam-still",
-                   warmup_ms: int = 1000, timeout: float = 25.0) -> None:
-    """用 rpicam-still 拍一張 JPEG（-n 不開預覽，不碰螢幕）。"""
-    if not shutil.which(binary):
-        raise CameraError("no_camera", f"沒有 {binary}")
-    cmd = [binary, "-n", "-t", str(int(warmup_ms)), "--width", str(width), "--height", str(height),
-           "-q", str(quality), "-e", "jpg", "-o", path]
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                           preexec_fn=lambda: os.nice(10) if hasattr(os, "nice") else None)
-    except subprocess.TimeoutExpired:
-        raise CameraError("timeout", "拍照逾時")
-    err = (p.stderr or "").lower()
-    if p.returncode != 0 or not os.path.exists(path) or os.path.getsize(path) < 64:
-        if "busy" in err or "in use" in err or "failed to acquire" in err:
-            raise CameraError("camera_busy", ERROR_TEXT["camera_busy"])
-        if "no cameras" in err or "no camera" in err:
-            raise CameraError("no_camera", ERROR_TEXT["no_camera"])
-        tail = (p.stderr or "").strip().splitlines()[-1:] or [f"結束碼 {p.returncode}"]
-        raise CameraError("capture_failed", f"拍照失敗：{tail[0][:120]}")
+            return picam_client.snapshot(width, height, quality, client=client, reason=reason,
+                                         path=socket_path, timeout=timeout)
+        except PicamError as exc:
+            raise CameraError(exc.kind, str(exc)) from exc
+    capture.available = lambda: os.path.exists(socket_path)   # type: ignore[attr-defined]
+    return capture
 
 
 class PhotoUploader:
@@ -134,43 +104,61 @@ def make_thumb(data: bytes, size=(320, 240)) -> Optional[bytes]:
         return None
 
 
+class _Photo:
+    """同一個 photo_id 的共用狀態：第一個拿到的請求負責存檔＋上傳，其他的等結果。"""
+
+    def __init__(self, photo_id: str, created: float):
+        self.photo_id = photo_id
+        self.created = created
+        self.candidates: List[Tuple[bytes, dict]] = []
+        self.done = threading.Event()
+        self.result: Optional[dict] = None
+        self.triggers: List[str] = []
+
+
 class CameraSnapshot(Extension):
     name = "camera.snapshot"
 
     def __init__(self, uploader: Optional[PhotoUploader] = None, pending_dir: str = DEFAULT_PENDING_DIR,
-                 cooldown: float = 5.0, max_pending: int = 20, enabled: bool = True,
-                 capture: Optional[Callable[[str, int, int, int], None]] = None,
-                 busy_check: Optional[Callable[[], Optional[str]]] = None,
-                 clock: Callable[[], float] = time.monotonic, retry_delay: float = 2.0,
-                 resend_interval: float = 30.0, defaults: Optional[dict] = None):
+                 max_pending: int = 20, enabled: bool = True,
+                 capture: Optional[Callable[..., Tuple[dict, bytes]]] = None,
+                 socket_path: str = DEFAULT_PICAM_SOCKET, retry_delay: float = 2.0,
+                 resend_interval: float = 30.0, defaults: Optional[dict] = None, max_workers: int = 8,
+                 upload_grace: float = 0.15, react_gap: float = 1.0):
         super().__init__(enabled=enabled)
         self.uploader = uploader
         self.pending_dir = pending_dir
-        self.cooldown = cooldown
         self.max_pending = max_pending
-        self.capture = capture or rpicam_capture
-        self.busy_check = busy_check or camera_busy
-        self.clock = clock
+        self.capture = capture or picam_snapshot(socket_path)
         self.retry_delay = retry_delay
         self.resend_interval = resend_interval
+        self.upload_grace = upload_grace
+        self.react_gap = react_gap
         self.defaults = dict({"reason": "manual", "width": 1280, "height": 960, "quality": 85}, **(defaults or {}))
         self.sleep = time.sleep
         self._lock = threading.Lock()
-        self._jobs: "queue.Queue[Optional[dict]]" = queue.Queue()
-        self._busy = False
-        self._last_trigger = -1e9
+        self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="camera-req")
+        self._photos: Dict[str, _Photo] = {}
+        self._waiters: Dict[int, threading.Event] = {}
+        self._req_seq = 0
+        self._in_flight = 0
+        self._last_react = -1e9
+        self._upload_lock = threading.Lock()      # 上傳／補傳一次一個，避免同一張傳兩次
         self._thread: Optional[threading.Thread] = None
-        self.last: Optional[dict] = None          # 最後一次結果（給遙控頁）
+        self.last: Optional[dict] = None          # 最後一張照片（給遙控頁）
+        self.recent = collections.deque(maxlen=30)   # 最近每個觸發的結果
+        self.results: Dict[int, dict] = {}
         self.last_thumb: Optional[bytes] = None
         self.last_error: Optional[str] = None
         self.uploaded = 0
+        self.photos_total = 0
         self._stop = threading.Event()
 
     # -- 生命週期 -----------------------------------------------------------------
     def start(self) -> None:
         os.makedirs(self.pending_dir, mode=0o700, exist_ok=True)
         self.subscribe("skill:camera.snapshot", self._on_event)
-        self._thread = threading.Thread(target=self._worker, name="camera-snapshot", daemon=True)
+        self._thread = threading.Thread(target=self._resend_loop, name="camera-resend", daemon=True)
         self._thread.start()
         n = len(self.pending())
         if n:
@@ -178,7 +166,11 @@ class CameraSnapshot(Extension):
 
     def stop(self) -> None:
         self._stop.set()
-        self._jobs.put(None)
+        self._pool.shutdown(wait=False)
+
+    def service_available(self) -> bool:
+        fn = getattr(self.capture, "available", None)
+        return True if fn is None else bool(fn())
 
     # -- 觸發 -----------------------------------------------------------------------
     def _on_event(self, ev: dict) -> None:
@@ -204,112 +196,159 @@ class CameraSnapshot(Extension):
         return p
 
     def trigger(self, params: Optional[dict] = None, source: str = "api") -> dict:
-        """不阻塞：檢查冷卻後排進背景執行緒。回傳 {"ok", "error"?, "retry_after"?}。"""
+        """不阻塞：交給背景執行緒跟 picam 要照片。回傳 {"ok", "request_id"} 或錯誤。"""
         try:
             p = self._params(params or {})
         except (ValueError, TypeError) as exc:
             return self._reject("bad_params", str(exc), source)
+        if not self.service_available():
+            return self._reject("service_down", ERROR_TEXT["service_down"], source)
         with self._lock:
-            now = self.clock()
-            if self._busy:
-                return self._reject("in_progress", ERROR_TEXT["in_progress"], source)
-            left = self.cooldown - (now - self._last_trigger)
-            if left > 0:
-                return self._reject("cooldown", f"冷卻中，{left:.1f} 秒後再試", source, retry_after=round(left, 1))
-            self._last_trigger = now
-            self._busy = True
-        self._jobs.put(dict(p, source=source, taken=time.time()))
-        return {"ok": True, "accepted": True, "params": p}
-
-    def _reject(self, kind: str, msg: str, source: str, **extra) -> dict:
-        log.info("拍照被擋下（%s）：%s", source, msg)
-        self._emit_failed(kind, msg, source)
-        return dict({"ok": False, "error": msg, "kind": kind}, **extra)
-
-    def _emit_failed(self, kind: str, msg: str, source: str) -> None:
-        if self.bus:
-            self.publish("camera.snapshot.failed", type_="skill", reason=kind, message=msg, trigger=source)
-
-    # -- 背景執行緒 ------------------------------------------------------------------
-    def _worker(self) -> None:
-        while not self._stop.is_set():
-            try:
-                job = self._jobs.get(timeout=self.resend_interval)
-            except queue.Empty:
-                job = "resend"
-            if job is None:
-                break
-            if job == "resend":
-                self.flush_pending()
-                continue
-            try:
-                self.run_job(job)
-            except Exception:   # noqa: BLE001
-                log.exception("拍照工作失敗")
-            finally:
-                with self._lock:
-                    self._busy = False
-
-    def run_job(self, job: dict) -> dict:
-        """拍照＋上傳（背景執行緒；測試可以直接呼叫）。"""
-        src = job.get("source", "api")
-        who = self.busy_check()
-        if who:
-            return self._fail(job, "camera_busy", f"相機忙碌（{who} 正在用）")
-        ms = int(round(job["taken"] * 1000))      # 跟後端 photo_id 同一套算法
-        name = time.strftime("%Y%m%d-%H%M%S", time.localtime(ms // 1000)) + "-%03d" % (ms % 1000)
-        base, i = name, 1
-        while os.path.exists(os.path.join(self.pending_dir, name + ".jpg")):
-            i += 1
-            name = f"{base}-{i}"
-        path = os.path.join(self.pending_dir, name + ".jpg")
-        meta = {"reason": job["reason"], "taken": job["taken"], "source": src, "width": job["width"],
-                "height": job["height"]}
-        if self.bus:
+            self._req_seq += 1
+            rid = self._req_seq
+            self._in_flight += 1
+            self._waiters[rid] = threading.Event()
+            now = time.monotonic()
+            react = now - self._last_react >= self.react_gap
+            if react:
+                self._last_react = now
+        if react and self.bus:
             self.request_action("expression", expression="squint", seconds=0.6)
             self.request_action("say", text="喀嚓！", seconds=2)
+        job = dict(p, source=source, request_id=rid, requested=time.time())
         try:
-            self.capture(path, job["width"], job["height"], job["quality"])
-        except CameraError as exc:
-            self._rm(path)
-            return self._fail(job, exc.kind, str(exc))
-        with open(path, "rb") as fh:
-            data = fh.read()
-        with open(path[:-4] + ".json", "w", encoding="utf-8") as fh:
-            json.dump(meta, fh)
-        self.last_thumb = make_thumb(data) or self.last_thumb
-        photo_id = None
-        for attempt in (1, 2):
-            photo_id = self._upload(data, meta)
-            if photo_id or not self.uploader:
-                break
-            if attempt == 1:
-                self.sleep(self.retry_delay)
-        if photo_id:
-            self._rm(path)
-            self._rm(path[:-4] + ".json")
-        else:
-            self._trim_pending()
-        result = {"ok": True, "file": name + ".jpg", "photo_id": photo_id, "uploaded": bool(photo_id),
-                  "queued": not photo_id, "reason": job["reason"], "trigger": src, "time": job["taken"],
-                  "bytes": len(data)}
-        self.last = result
-        log.info("拍照完成 %s（%d KB）%s", name, len(data) // 1024,
-                 f"→ 後端 {photo_id}" if photo_id else "→ 先存在本機待傳")
-        if self.bus:
-            self.publish("camera.snapshot.done", type_="skill", file=name + ".jpg", photo_id=photo_id,
-                         uploaded=bool(photo_id), queued=not photo_id, trigger=src)
-        if photo_id:
-            self.flush_pending()          # 順便補傳之前沒傳成功的
-        return result
+            self._pool.submit(self._run_safe, job)
+        except RuntimeError:          # 已經 stop
+            self._finish(job, self._failed_result(job, "service_down", "拍照模組已停止"))
+        return {"ok": True, "accepted": True, "request_id": rid, "params": p}
 
-    def _fail(self, job: dict, kind: str, msg: str) -> dict:
-        log.warning("拍照失敗：%s", msg)
+    def wait(self, request_id: int, timeout: float = 30.0) -> Optional[dict]:
+        ev = self._waiters.get(request_id)
+        if ev is not None:
+            ev.wait(timeout)
+        return self.results.get(request_id)
+
+    def _reject(self, kind: str, msg: str, source: str) -> dict:
+        log.info("拍照不能執行（%s）：%s", source, msg)
         self.last_error = msg
-        self.last = {"ok": False, "error": msg, "kind": kind, "reason": job.get("reason"),
-                     "trigger": job.get("source"), "time": job.get("taken")}
-        self._emit_failed(kind, msg, job.get("source", "api"))
-        return self.last
+        if self.bus:
+            self.publish("camera.snapshot.failed", type_="skill", reason=kind, kind=kind, error=msg, message=msg,
+                         trigger=source)
+        return {"ok": False, "error": msg, "kind": kind}
+
+    # -- 背景 -------------------------------------------------------------------------
+    def _run_safe(self, job: dict) -> None:
+        try:
+            res = self.run_job(job)
+        except Exception as exc:   # noqa: BLE001
+            log.exception("拍照工作失敗")
+            res = self._failed_result(job, "camera_error", f"內部錯誤：{type(exc).__name__}")
+        self._finish(job, res)
+
+    def _finish(self, job: dict, res: dict) -> None:
+        rid = job["request_id"]
+        with self._lock:
+            self._in_flight -= 1
+            self.results[rid] = res
+            for old in [k for k in self.results if k <= rid - 200]:
+                self.results.pop(old, None)
+                self._waiters.pop(old, None)
+            ev = self._waiters.get(rid)
+        self.recent.appendleft(res)
+        if ev:
+            ev.set()
+        if self.bus:
+            if res.get("ok"):
+                self.publish("camera.snapshot.done", type_="skill", request_id=rid, trigger=res["trigger"],
+                             photo_id=res["photo_id"], file=res.get("file"), uploaded=res["uploaded"],
+                             queued=res["queued"], shared=res.get("shared"))
+            else:
+                self.publish("camera.snapshot.failed", type_="skill", request_id=rid, trigger=res.get("trigger"),
+                             reason=res.get("kind"), kind=res.get("kind"), error=res.get("error"),
+                             message=res.get("error"))
+
+    def _failed_result(self, job: dict, kind: str, msg: str) -> dict:
+        self.last_error = msg
+        log.warning("拍照失敗（%s）：%s", job.get("source"), msg)
+        return {"ok": False, "error": msg, "kind": kind, "request_id": job.get("request_id"),
+                "trigger": job.get("source"), "reason": job.get("reason"), "time": time.time()}
+
+    def run_job(self, job: dict) -> dict:
+        """一個觸發：跟 picam 要照片 → 同一個 photo_id 只存一次、傳一次 → 回傳這個觸發的結果。"""
+        try:
+            meta, data = self.capture(job["width"], job["height"], job["quality"],
+                                      f"desktop-pet:{job['source']}"[:32], job["reason"])
+        except CameraError as exc:
+            return self._failed_result(job, exc.kind, str(exc))
+        pid = str(meta.get("photo_id") or "")
+        if not pid or not data:
+            return self._failed_result(job, "protocol", "picam 沒有給 photo_id")
+        with self._lock:
+            ph = self._photos.get(pid)
+            owner = ph is None
+            if owner:
+                ph = self._photos[pid] = _Photo(pid, time.monotonic())
+                self._prune_photos()
+            ph.candidates.append((data, dict(meta, reason=job["reason"], source=job["source"])))
+            ph.triggers.append(job["source"])
+        if owner:
+            try:
+                self._handle_photo(ph)
+            finally:
+                ph.done.set()
+        else:
+            ph.done.wait(120)
+        r = ph.result or {"ok": False, "error": "照片處理失敗", "kind": "camera_error"}
+        if not r.get("ok"):
+            return dict(r, request_id=job["request_id"], trigger=job["source"])
+        return dict(r, request_id=job["request_id"], trigger=job["source"], reason=job["reason"],
+                    shared=int(meta.get("shared") or 1))
+
+    def _prune_photos(self) -> None:
+        now = time.monotonic()
+        for k in [k for k, v in self._photos.items() if v.done.is_set() and now - v.created > 120]:
+            self._photos.pop(k, None)
+
+    def _handle_photo(self, ph: _Photo) -> None:
+        if self.upload_grace:
+            self.sleep(self.upload_grace)          # 同一張的其他尺寸幾乎同時到，挑最大的上傳
+        with self._lock:
+            data, meta = max(ph.candidates, key=lambda c: len(c[0]))
+        taken = float(meta.get("ts") or time.time())
+        name, i = ph.photo_id, 1
+        while os.path.exists(os.path.join(self.pending_dir, name + ".jpg")):
+            i += 1
+            name = f"{ph.photo_id}-{i}"
+        path = os.path.join(self.pending_dir, name + ".jpg")
+        umeta = {"reason": meta.get("reason", "manual"), "taken": taken, "source": meta.get("source"),
+                 "width": meta.get("width"), "height": meta.get("height"), "photo_id": ph.photo_id}
+        with open(path, "wb") as fh:
+            fh.write(data)
+        with open(path[:-4] + ".json", "w", encoding="utf-8") as fh:
+            json.dump(umeta, fh)
+        self.last_thumb = make_thumb(data) or self.last_thumb
+        backend_id = None
+        with self._upload_lock:
+            for attempt in (1, 2):
+                backend_id = self._upload(data, umeta)
+                if backend_id or not self.uploader:
+                    break
+                if attempt == 1:
+                    self.sleep(self.retry_delay)
+            if backend_id:
+                self._rm(path)
+                self._rm(path[:-4] + ".json")
+            else:
+                self._trim_pending()
+        self.photos_total += 1
+        ph.result = {"ok": True, "photo_id": ph.photo_id, "backend_photo_id": backend_id, "file": name + ".jpg",
+                     "uploaded": bool(backend_id), "queued": not backend_id, "time": taken, "bytes": len(data),
+                     "width": meta.get("width"), "height": meta.get("height")}
+        self.last = dict(ph.result, reason=umeta["reason"], trigger=umeta["source"])
+        log.info("拍照完成 %s（%d KB）%s", ph.photo_id, len(data) // 1024,
+                 f"→ 後端 {backend_id}" if backend_id else "→ 先存在本機待傳")
+        if backend_id:
+            self.flush_pending()          # 順便補傳之前沒傳成功的
 
     def _upload(self, data: bytes, meta: dict) -> Optional[str]:
         if not self.uploader:
@@ -324,6 +363,13 @@ class CameraSnapshot(Extension):
             self.last_error = f"上傳失敗：{code or getattr(exc, 'reason', exc)}"
             log.warning("照片上傳失敗（%s）", code or str(getattr(exc, "reason", exc))[:80])
             return None
+
+    def _resend_loop(self) -> None:
+        while not self._stop.wait(self.resend_interval):
+            try:
+                self.flush_pending()
+            except Exception:   # noqa: BLE001
+                log.exception("補傳失敗")
 
     # -- 待傳資料夾 -------------------------------------------------------------------
     def pending(self) -> List[str]:
@@ -351,43 +397,50 @@ class CameraSnapshot(Extension):
         """補傳待傳照片（舊的先傳；遇到失敗就停，下次再試）。"""
         if not self.uploader:
             return 0
+        if not self._upload_lock.acquire(blocking=False):
+            return 0
         n = 0
-        for f in self.pending():
-            p = os.path.join(self.pending_dir, f)
-            try:
-                with open(p, "rb") as fh:
-                    data = fh.read()
-            except OSError:
-                continue
-            try:
-                with open(p[:-4] + ".json", "r", encoding="utf-8") as fh:
-                    meta = json.load(fh)
-            except (OSError, ValueError):
-                meta = {"reason": "unknown", "taken": os.path.getmtime(p)}
-            meta["reason"] = meta.get("reason") or "unknown"
-            pid = self._upload(data, meta)
-            if not pid:
-                break
-            self._rm(p)
-            self._rm(p[:-4] + ".json")
-            n += 1
-            if self.last and self.last.get("file") == f:
-                self.last = dict(self.last, photo_id=pid, uploaded=True, queued=False)
+        try:
+            for f in self.pending():
+                p = os.path.join(self.pending_dir, f)
+                try:
+                    with open(p, "rb") as fh:
+                        data = fh.read()
+                except OSError:
+                    continue
+                try:
+                    with open(p[:-4] + ".json", "r", encoding="utf-8") as fh:
+                        meta = json.load(fh)
+                except (OSError, ValueError):
+                    meta = {"reason": "unknown", "taken": os.path.getmtime(p)}
+                meta["reason"] = meta.get("reason") or "unknown"
+                pid = self._upload(data, meta)
+                if not pid:
+                    break
+                self._rm(p)
+                self._rm(p[:-4] + ".json")
+                n += 1
+                if self.last and self.last.get("file") == f:
+                    self.last = dict(self.last, backend_photo_id=pid, uploaded=True, queued=False)
+        finally:
+            self._upload_lock.release()
         if n:
             log.info("補傳了 %d 張照片", n)
         return n
 
     # -- 狀態 -----------------------------------------------------------------------
     def status(self) -> dict:
-        left = max(0.0, self.cooldown - (self.clock() - self._last_trigger))
-        return {"ok": True, "enabled": self.enabled, "busy": self._busy, "cooldown_s": self.cooldown,
-                "cooldown_left": round(left, 1), "pending": len(self.pending()), "max_pending": self.max_pending,
+        return {"ok": True, "enabled": self.enabled, "service": self.service_available(),
+                "service_text": None if self.service_available() else ERROR_TEXT["service_down"],
+                "busy": self._in_flight > 0, "in_flight": self._in_flight, "requests": self._req_seq,
+                "photos": self.photos_total, "pending": len(self.pending()), "max_pending": self.max_pending,
                 "uploaded": self.uploaded, "uploader": bool(self.uploader), "last": self.last,
-                "last_error": self.last_error, "has_thumb": self.last_thumb is not None}
+                "recent": list(self.recent)[:10], "last_error": self.last_error,
+                "has_thumb": self.last_thumb is not None}
 
 
 class CameraWebAPI:
-    """網頁遙控路由：POST /skill/camera.snapshot、GET /skill/camera.snapshot、GET /skill/camera.snapshot/last.jpg。"""
+    """網頁遙控路由：POST /skill/camera.snapshot（{"wait":true} 等結果）、GET 狀態、GET last.jpg 縮圖。"""
 
     PATH = "/skill/camera.snapshot"
 
@@ -396,10 +449,17 @@ class CameraWebAPI:
 
     def handle(self, method: str, path: str, data, headers=None):
         if path == self.PATH and method == "POST":
-            r = self.ext.trigger(data if isinstance(data, dict) else {}, source="web")
-            if r.get("ok"):
-                return 202, r
-            return (429 if r.get("kind") in ("cooldown", "in_progress") else 400), r
+            data = data if isinstance(data, dict) else {}
+            wait = bool(data.pop("wait", False))
+            r = self.ext.trigger(data, source=str(data.pop("source", "web"))[:24] or "web")
+            if not r.get("ok"):
+                return (503 if r.get("kind") == "service_down" else 400), r
+            if wait:
+                res = self.ext.wait(r["request_id"], 30.0)
+                if res is None:
+                    return 504, {"ok": False, "error": "等太久", "kind": "timeout", "request_id": r["request_id"]}
+                return (200 if res.get("ok") else 502), res
+            return 202, r
         if path == self.PATH and method == "GET":
             return 200, self.ext.status()
         if path == self.PATH + "/last.jpg" and method == "GET":

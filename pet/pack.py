@@ -247,6 +247,7 @@ class PackDriver:
         if ref is None:
             self.mode = "live"
             self.stats["live"] += 1
+            self.sink.frame_meta = {"mode": "live"}
             self.sink.send(app.render())
         else:
             data = self.pack.frame(*ref)
@@ -261,10 +262,12 @@ class PackDriver:
                 bubble.draw(img, ax, ay)
                 self.mode = "bubble"
                 self.stats["bubble"] += 1
+                self.sink.frame_meta = {"mode": "bubble", "clip": ref[0], "frame": ref[1]}
                 self.sink.send(img)
             else:
                 self.mode = "pack"
                 self.stats["pack"] += 1
+                self.sink.frame_meta = {"mode": "pack", "clip": ref[0], "frame": ref[1]}
                 self.sink.send_jpeg(data)
         app.render_info = self.info()
         return self.mode

@@ -51,6 +51,8 @@ class PiscreenSink(OutputSink):
         self.sent = 0
         self.dropped = 0
         self.last_jpeg_size = 0
+        self.mirror = None          # ScreenMirror：送成功的每一格同步一份（同一份 bytes）
+        self.frame_meta = None      # 這一格的來源資訊（PackDriver 設定）
 
     def open(self) -> None:
         self._connect()
@@ -85,6 +87,8 @@ class PiscreenSink(OutputSink):
         try:
             self.sock.sendall(pack_frame(data))
             self.sent += 1
+            if self.mirror is not None:
+                self.mirror.publish(data, self.frame_meta)
         except OSError as exc:
             log.warning("送畫面失敗（%s），之後重連", exc)
             self.dropped += 1
@@ -99,6 +103,8 @@ class PiscreenSink(OutputSink):
         try:
             self.sock.sendall(pack_frame(data))
             self.sent += 1
+            if self.mirror is not None:
+                self.mirror.publish(data, self.frame_meta)
         except OSError as exc:
             log.warning("送畫面失敗（%s），之後重連", exc)
             self.dropped += 1
