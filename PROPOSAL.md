@@ -1,4 +1,4 @@
-# 桌寵專案 項目書 v2.5
+# 桌寵專案 項目書 v2.6
 
 > 最後更新：2026-10-28　｜　狀態：第一期規劃定稿，細節持續補充
 >
@@ -14,6 +14,7 @@
 > v2.0：後端設好 `api_token`（裝置用 token 檔帶上，`/health` 對外只回基本資訊）；拍照模組實作完成並在 Pi 實測（見該節「實作備註」）。
 > v2.1：新增「週邊常駐服務原則」：每個週邊由一個專門的常駐程式獨占、負責對接；新增相機常駐服務 picam，拍照改成多個觸發共用同一張照片、分送給每個請求者（取代冷卻與「相機忙碌」）。
 > v2.2：網頁遙控新增「螢幕畫面同步」：送到螢幕的每張畫面同步一份到網頁，方便遠端調整。
+> v2.6：定下整體架構（見「整體架構」）：三層（前端／後端／後端支援）；前端拆成桌寵主程式、前端後台（獨立程式）、各模組守護程式（一個程式獨占一個模組，可給別的專案用）；新的常駐守護程式改用 Rust，先做 Wi‑Fi 的 piwifi；附遷移步驟。v2.5 的多模態與記憶規格**擱置**，問題暫緩。
 > v2.5：新增「後端：多模態模型」與「後端：記憶系統」規格（**待核准，尚未實作**）：R7 現況調查、提議以 Qwen3-VL-8B 取代 qwen3-14b（含 A/B 與回退）、三層記憶（短期對話、長期事實、日記）存在後端 SQLite。
 > v2.4：裝置端（Pi `desktop-pet.service`）與後端（R7 工作排程器）改成開機／登入自動啟動，見「部署與維運」。
 > v2.3：picam 相機常駐服務、camera.snapshot 改成 picam client、camcast 改成訂閱 client、螢幕畫面同步都已實作並在 Pi 實測（見各節「實作備註」）。
@@ -120,6 +121,215 @@ Pi 上已經有常駐服務 `piscreend`（systemd `piscreen.service`），它會
 - [ ] 其他幫忙做事的能力
 
 ## 5. 架構構想
+### 整體架構（v2.6：三層、前端拆成獨立程式）
+> v2.6 定下整體架構。本節優先於後面各節裡「在桌寵程式裡跑」的描述。
+> 下面的「狀態機」圖是「桌寵主程式」內部的邏輯；網頁遙控、Wi‑Fi、螢幕畫面同步會依「遷移步驟」逐步搬出主程式。
+> 本節是規格，**尚未實作**。
+
+**三層**
+1. **前端（Pi 3B）**，分三部分：
+   - **1-1 桌寵主程式** `desktop-pet`：狀態機、動畫播放、對話框、反應，跟後端溝通（事件、對話、上傳照片）。**只做寵物本身**，不開網頁、不管 Wi‑Fi。
+   - **1-2 前端後台** `desktop-pet-admin`：管理網頁（遙控、螢幕畫面同步、Wi‑Fi 設定頁，之後的記憶頁），是**獨立程式**。
+     - 網頁掛掉不影響寵物。
+     - 主程式重啟時，網頁和 Wi‑Fi 救援照常可用。
+   - **1-3 各模組控制軟體**（守護程式）：**一個程式獨占一個模組**，其他程式一律透過它的 socket 使用該模組。
+     - 螢幕 → piscreen
+     - 相機 → picam
+     - Wi‑Fi → **piwifi**（新）
+     - 之後：觸控、輪子、雲台、麥克風
+2. **後端（R7）** `backend`：事件、對話、心情／成長、照片、記憶（v2.5，擱置中）。
+3. **後端支援（模型，R7）**：llama-server（目前 qwen3-14b），之後是多模態模型（v2.5，擱置中）。後端以 OpenAI 相容 HTTP 呼叫，模型本身不存任何狀態。
+
+```mermaid
+flowchart TB
+  subgraph PI["前端：Pi 3B"]
+    direction TB
+    subgraph APP["1-1 桌寵主程式 desktop-pet（Python）"]
+      SM2[狀態機・動畫・對話框・反應]
+    end
+    subgraph ADM["1-2 前端後台 desktop-pet-admin（Python）"]
+      WEBUI[管理網頁 :8080\n遙控・螢幕畫面・Wi‑Fi 頁]
+    end
+    subgraph DMN["1-3 模組控制軟體（守護程式）"]
+      PS2[piscreen（使用者既有，不動）\nUSB 螢幕]
+      PC2[picam（Python）\n相機]
+      PW2[piwifi（Rust，新）\nWi‑Fi／救援熱點]
+      FUT[之後（Rust）：觸控・輪子・雲台・麥克風]
+    end
+    WEBUI <-->|"控制 API：/run/desktop-pet/control.sock（HTTP JSON）"| SM2
+    SM2 -->|"畫面供應：/run/desktop-pet/frames.sock"| WEBUI
+    SM2 -->|"JPEG：/run/piscreen/piscreen.sock"| PS2
+    SM2 -->|"拍照：/run/picam/picam.sock"| PC2
+    SM2 -.->|"Wi‑Fi 狀態訂閱（顯示用）"| PW2
+    WEBUI -->|"Wi‑Fi 指令：/run/piwifi/piwifi.sock"| PW2
+    SM2 -.->|之後| FUT
+    PW2 -->|nmcli| NM[NetworkManager]
+  end
+  subgraph R7["R7（Windows）"]
+    BE[後端 backend :8090（Python）\n事件・對話・心情／成長・照片・記憶]
+    LLM2[後端支援：llama-server :8080\nqwen3-14b → 之後多模態]
+    BE -->|OpenAI 相容 HTTP| LLM2
+  end
+  SM2 <-->|"HTTPS（DDNS）＋ token：事件 ⇄ 指令、對話、照片"| BE
+```
+
+**元件表**
+| 元件 | 層 | 語言 | 獨占的硬體 | socket／埠 | systemd unit（R7 為排程） | 開機啟動 |
+|---|---|---|---|---|---|---|
+| desktop-pet（桌寵主程式） | 1-1 | Python | 無（螢幕、相機都當 client） | `/run/desktop-pet/control.sock`、`/run/desktop-pet/frames.sock` | `desktop-pet.service`（已有） | 是 |
+| desktop-pet-admin（前端後台） | 1-2 | Python | 無 | `0.0.0.0:8080`（網頁） | `desktop-pet-admin.service`（新） | 是 |
+| piscreen | 1-3 | Python（使用者既有，**不動**） | USB 螢幕 | `/run/piscreen/piscreen.sock` | `piscreen.service` | 是 |
+| picam | 1-3 | Python | 相機 | `/run/picam/picam.sock` | `picam.service`（已有） | 是 |
+| piwifi | 1-3 | **Rust** | Wi‑Fi（wlan0，經 NetworkManager）、救援熱點 `PetRescue-AP` | `/run/piwifi/piwifi.sock` | `piwifi.service`（新） | 是 |
+| pitouch／piwheels／pigimbal／pimic | 1-3 | Rust（預定） | 觸控／輪子／雲台／麥克風 | `/run/<名稱>/<名稱>.sock` | `<名稱>.service` | 是（有硬體才裝） |
+| camcast（測試工具） | 工具 | Python | 無（picam 預覽 client） | — | 無，手動 `~/camcast/start.sh` | 否 |
+| backend（後端） | 2 | Python | R7 上的 `backend/data/` | `0.0.0.0:8090`（DDNS 對外） | 工作排程器 `DesktopPet Backend` | 登入時 |
+| llama-server | 3 | C++（llama.cpp） | R7 顯示卡 | `127.0.0.1:8080` | 無，桌面 `Start-Qwen3.bat` 手動 | 否（v2.5 待決定） |
+| 多模態模型（v2.5） | 3 | C++（llama.cpp） | R7 顯示卡 | 同上 | 同上 | 擱置中 |
+
+**主程式 ↔ 前端後台的接口**
+- 兩條 Unix socket，放在 `/run/desktop-pet/`：
+  - systemd 的 `RuntimeDirectory=desktop-pet`、`RuntimeDirectoryPreserve=yes`，權限 0750，群組 pi-user。
+  - 主程式建立 socket；後台連不上就每 2 秒重試。
+  - 不開 TCP 埠，內網其他機器碰不到。
+- **控制 API**：`control.sock`，用 HTTP/1.1＋JSON（Python 標準庫就能做，除錯可直接用 `curl --unix-socket`）。
+  - 路徑都有版本前綴 `/v1`，回應標頭 `X-Proto: desktop-pet-core/1`。
+  - `GET /v1/health`：`{ok, version, proto, uptime, fps}`。
+  - `GET /v1/status`：就是現在 `/status` 的內容（狀態、階段、表情、fps、最後事件、後端連線……）。
+  - `POST /v1/event`、`/v1/control`、`/v1/actuator`、`/v1/talk`：跟現在網頁遙控的同名接口一樣。
+  - `POST /v1/skill/camera.snapshot`、`GET /v1/skill/camera.snapshot`、`GET /v1/skill/camera.snapshot/last.jpg`：拍照。
+  - `POST /v1/notice {"kind":"wifi","text":"…","until":…}`：後台請主程式在螢幕上顯示提示（例如「熱點 PetRescue-AP」）。**只在遷移第 1 步用**；第 2 步起主程式直接訂閱 piwifi。
+  - 錯誤一律 `{ok:false, error}` 加適當的 HTTP 碼。主程式忙的時候也要在 1 秒內回應（請求只排進事件佇列）。
+- **畫面供應**：`frames.sock`，跟 picam 預覽同一種格式。
+  - 後台送 `{"v":1,"cmd":"subscribe","fps":10}`。主程式回 `{"ok":true,"proto":1}`，接著每格送：
+    一行 JSON 標頭 `{"seq","ts","mode":"pack|live","clip","w","h","size"}` ＋ `[4 byte big-endian 長度][JPEG]`。
+  - `{"v":1,"cmd":"latest"}`：只回最新一張。
+  - JPEG 就是主程式送給 piscreen 的**同一份 bytes**，在主程式送出時順手交一份。所以**不經過 piscreen、piscreen 完全不用改**。
+  - 省資源：
+    - 沒有訂閱者時不做任何事。
+    - 每個訂閱者只留最新一張，慢的就丟舊畫面，不拖慢 20 fps 主迴圈。
+    - 訂閱上限 2：後台只開一條，再把同一份畫面分給所有網頁觀看者（觀看人數上限仍是 3）。
+  - 網頁路由（`/screen.mjpg`、`/screen.jpg`、`/screen.info`）改由後台提供，網址和遙控頁不變。
+- **主程式不在時**：
+  - 後台回 `503 {"ok":false,"error":"桌寵主程式未執行"}`，網頁頂端顯示「主程式重新啟動中」。
+  - Wi‑Fi 頁、熱點、狀態頁照常可用。
+  - 螢幕由 piscreen 保持最後一張畫面（piscreen 既有行為，不改）。
+- **誰叫後端**：照舊由主程式叫（事件、對話、上傳照片、token 檔也只給主程式）。後台的「對話」按鈕轉給主程式的 `/v1/talk`，後台不碰 token。
+
+**守護程式的共同規範（每一個都要做到，方便以後給別的專案用）**
+- **自己一個資料夾，可以直接拆成獨立 repo**：`services/<名稱>/`。
+  - 內含 `README.md`（用途、安裝、設定）、`PROTOCOL.md`（協定、版本）、`CHANGELOG.md`、systemd unit、`install.sh`，以及原始碼（Rust 是 `Cargo.toml`＋`src/`）。
+  - **不 import `pet/`**，也不依賴桌寵的設定檔。client 函式庫（例如 `picam_client.py`）放在守護程式自己的資料夾，桌寵只是使用者。
+- **協定有版本**：
+  - 每個請求帶 `"v":1`；沒帶的視為 v1（相容現有的 picam client）。
+  - `status` 回應帶 `proto` 與 `version`。
+  - 不相容的修改升主版本，舊版本保留一段時間。
+- **socket**：`/run/<名稱>/<名稱>.sock`，JSON 一行一個請求（需要時接二進位資料）。
+  - 權限 0660，群組可設定（這個專案用 pi-user）。
+  - 每個都有 `status` 與 `subscribe`（事件推送）。
+- **狀態檔** `/run/<名稱>/status.json`，共同欄位：`name, version, proto, pid, started, uptime, clients, errors, last_error, last_error_ts`，再加各自的欄位。
+- **日誌**：stdout／stderr 交給 journald，第一個字是等級，一行一件事。
+  - **不寫密碼、token、照片內容**。Wi‑Fi 只寫 SSID，連 SSID 都可以設定成遮蔽。
+- **systemd**：`Restart=always`、`RestartSec=2～3`、`StartLimitIntervalSec=0`。
+  - 相依只用 `Wants=`／`After=`，**不用 `Requires=`**，不會連帶停止別的服務（跟 `desktop-pet.service` 一樣）。
+  - 安裝腳本可以重跑，不會覆蓋使用者的設定檔。
+- **整合打包版**：以後有需要時另外做（例如一個 deb 或一個安裝腳本裝全部）。這是另一種打包方式，**不改變各元件獨立的原則**。
+
+**語言**
+- **Rust**：新寫的、簡單又常駐的守護程式，先做 **piwifi**，之後是觸控、輪子、雲台，麥克風大概也是。
+  - 理由是實測數字。CPU 都很低：desktop-pet 1.6～4.2%，picam 閒置約 1.2%。
+  - 真正的成本是 1 GB Pi 3B 上的**記憶體**：2026-10-28 實測 RSS，desktop-pet 約 51 MB、picam 約 54～61 MB、piscreend 約 27 MB。每個 Python 常駐程式大約 25～60 MB，Rust 只要幾 MB。
+- **維持 Python**：
+  - **picam**：Picamera2 只有 Python 版，改 Rust 要直接綁 libcamera，得不償失。
+  - **桌寵主程式**、**前端後台**：常常改。
+  - **R7 後端**。
+- **以後才重寫**：只有實測顯示太重（例如 RSS 長期 > 80 MB，或 Pi 可用記憶體 < 200 MB）才考慮。協定都走 socket，換掉一個元件不影響其他元件。
+- **piscreen** 是使用者既有的程式，**不動**。
+
+**Rust 怎麼編給 Pi 3B**
+- Pi 實測（2026-10-28，唯讀）：`uname -m` = **aarch64**，`dpkg --print-architecture` = **arm64**（64 位元 PiOS，Debian 13 trixie，kernel 6.18 rpi-v8，glibc 2.41）。所以目標是 **aarch64**，不是 armv7。
+- **主要做法：在 box 交叉編譯成靜態執行檔**。目標 `aarch64-unknown-linux-musl`，完全靜態，不吃 Pi 的 glibc 版本，拿去別的 64 位元 Pi 也能跑。
+  - box 是 Debian 13 x86_64，目前有系統的 rustc／cargo 1.85，但**沒有 aarch64 標準庫**。
+  - 第 2 步開始時用 rustup 裝 stable 工具鏈，加上 `rustup target add aarch64-unknown-linux-musl`。
+  - 連結器用 `gcc-aarch64-linux-gnu`（apt）或 rust 內附的 `rust-lld`，第 2 步第一件事就是驗證可用。
+  - 每個守護程式的資料夾放 `rust-toolchain.toml` 鎖定版本，放 `.cargo/config.toml` 設定目標與連結器。
+  - `--release`，開 `lto`、`strip`、`opt-level="s"`、`panic="abort"`。
+  - 相依盡量少：serde／serde_json，用標準庫的執行緒，不用 tokio。預估執行檔 1～2 MB、RSS 2～5 MB。
+- **備案：在 Pi 上編**。Pi 已有 gcc，裝 rustup 後 `cargo build --release -j2`。Pi 只有 905 MB 記憶體，大型相依可能很慢或記憶體不足，所以只當備案。
+- **執行檔放哪裡**：
+  - **不進 git**。box 上 `services/<名稱>/target/` 被 `.gitignore` 排除。
+  - 打包成 `dist/<名稱>-<版本>-aarch64-linux-musl.tar.gz`，附 sha256，也不進 git。
+  - Pi 上裝在 `/opt/<名稱>/<版本>/<名稱>`，`/usr/local/bin/<名稱>` 指向目前版本。
+  - 保留前一版，回退只要改連結再重啟。
+  - 要不要另外放到 GitHub Releases，待決定。
+- 同一個執行檔也是除錯用的 client：`piwifi status`、`piwifi scan`、`piwifi events`（連自己的 socket）。
+
+**piwifi（Wi‑Fi 守護程式，Rust）**
+- 接手現在 `pet/wifi.py` 的全部工作：
+  - 透過 `nmcli` 和 NetworkManager 互動，只對 wlan0 與 Wi‑Fi 連線設定下指令。先沿用已測過的 nmcli 做法，D-Bus 以後再說。
+  - 已記錄網路依優先順序自動重試。
+  - 換網路失敗自動切回。
+  - 2 分鐘都連不上就開救援熱點 `PetRescue-AP`（關 PMF、2.4 GHz、共用模式）；熱點開著時定期關掉重試。
+- **不碰** eth0、USB、piscreen，**不刪**使用者的已存網路。
+- 協定（v1，`/run/piwifi/piwifi.sock`）：
+  - `status`、`scan`、`saved`、`connect {ssid,password?,hidden?}`、`forget {uuid}`、`priority {uuid,value}`、`hotspot {on}`。
+  - `subscribe`：推送狀態變化，例如 connected／connecting／hotspot。
+  - 欄位和現在的 `/wifi/*` API 一樣，後台只是轉送，**網頁不用改**。
+- 權限：
+  - 用專用系統使用者 `piwifi` 跑，polkit 規則給它跟現在一樣的四個 NetworkManager 動作。
+  - 熱點密碼移到 `/etc/piwifi/hotspot.conf`（root:piwifi 0640），**密碼不會出現在 socket 回應、日誌、repo**。
+  - `password` 只在 `connect` 請求裡經過 socket，傳給 nmcli 後就丟掉，不寫日誌。
+- 開機就跑，排在 NetworkManager 之後（`After=NetworkManager.service`，只用 `Wants=`）。所以就算桌寵主程式、後台都沒起來，救援熱點照樣會開。
+  - 熱點網址 `http://192.0.2.1:8080/` 由後台提供。
+
+**遷移步驟（從現在的狀態開始；每一步都不能讓救援熱點或螢幕壞掉）**
+- 現在：網頁遙控、Wi‑Fi 管理、螢幕畫面同步都是 desktop-pet 裡的執行緒。
+- 每一步完成時都要驗收，有任何一項不過就回到上一步：
+  - 20 fps、遙控頁看得到螢幕畫面、拍照成功。
+  - piscreen 錯誤與救援 0。
+  - `POST /wifi/hotspot on` → 手機看得到 `PetRescue-AP` 並打得開網頁 → `off` → 自動連回 HomeAP。測試時 Pi 經有線 192.0.2.43 維持可連。
+  - 主程式 `systemctl kill` 後，網頁、Wi‑Fi 頁仍可用（第 1 步起）。
+
+1. **拆出前端後台（Python）**
+   - 主程式新增 `control.sock`、`frames.sock`（先跟現有的 :8080 並存）。
+   - 新程式 `desktop-pet-admin` 先開在 :8081 測試：遙控、螢幕畫面、拍照、對話都經控制 API。
+   - Wi‑Fi 管理（現有的 `pet/wifi.py` 程式碼）**搬到後台這個程式**裡跑。熱點提示用 `/v1/notice` 請主程式顯示。
+   - 切換時**同一次操作**完成：主程式改 `--web off --wifi off`，後台開 :8080 並啟動 Wi‑Fi 管理。**確保任何時候只有一個 Wi‑Fi 管理在跑**。
+   - 這一步之後，主程式重啟時網頁和 Wi‑Fi 救援都還在。
+   - 回退：停用後台，主程式改回原本參數。
+2. **piwifi（Rust）取代程序內的 Wi‑Fi 管理**
+   - 先在 box 驗證交叉編譯，再寫 piwifi，用假 nmcli 做和 Python 版相同的測試。
+   - 在 Pi 上先以 `--observe` 模式跑（只讀狀態、不下任何指令），跟後台裡的 Python 版並行比對 1 天。
+   - 切換：建 `piwifi` 使用者、polkit 規則、搬熱點設定檔 → 後台停掉內建 Wi‑Fi 管理、改當 piwifi client → piwifi 改成正式模式。這也是**同一次操作**完成。
+   - 主程式改成直接訂閱 piwifi 的狀態來顯示提示，`/v1/notice` 保留給其他用途。
+   - 舊的 polkit 規則（給 pi-user）在穩定 1 週後才移除。
+   - 回退：停 piwifi，後台改回內建 Wi‑Fi 管理。
+3. **整理現有守護程式**
+   - picam 補 `PROTOCOL.md`、`CHANGELOG.md`、`"v":1` 與共同狀態欄位，維持相容。
+   - 桌寵端的 client 程式碼只用守護程式資料夾提供的 client。
+   - piscreen 不動，只在文件裡記錄它的協定。
+4. **新模組依硬體到貨逐一加入（Rust）**：觸控（pitouch）、輪子（piwheels）、雲台（pigimbal）、麥克風（pimic），都照共同規範。主程式只透過它們的 socket 使用。
+5. **（之後，選用）整合打包版**：一個安裝包裝全部元件，各元件仍是獨立程式。
+
+**日誌與查問題（每個元件）**
+| 元件 | 日誌 | 狀態指令 |
+|---|---|---|
+| desktop-pet | `journalctl -u desktop-pet -f` | `curl -s --unix-socket /run/desktop-pet/control.sock http://x/v1/status` |
+| desktop-pet-admin | `journalctl -u desktop-pet-admin -f` | `curl -s http://127.0.0.1:8080/admin/status`（後台自己、主程式連線、piwifi 連線） |
+| piscreen | `journalctl -u piscreen -f` | `cat /run/piscreen/status.json` |
+| picam | `journalctl -u picam -f` | `cat /run/picam/status.json` |
+| piwifi | `journalctl -u piwifi -f` | `piwifi status`（或 `cat /run/piwifi/status.json`） |
+| 全部 Pi 服務 | — | `systemctl status desktop-pet desktop-pet-admin picam piwifi piscreen` |
+| backend（R7） | `backend_out.log`、`backend_err.log`、`backend_supervisor.log` | `curl http://127.0.0.1:8090/health`、`Get-ScheduledTask "DesktopPet Backend"` |
+| llama-server（R7） | 它自己的視窗 | `curl http://127.0.0.1:8080/props` |
+
+查問題的順序：先看 `status.json`／狀態指令裡哪個元件的 `errors`、`clients` 不對，再看那個元件的日誌。
+- 網頁打不開 → 後台。
+- 網頁開了但「主程式未執行」→ 主程式。
+- 沒畫面 → piscreen。
+- 不會說話 → 後端或 LLM。
+
+### 主程式內部邏輯（狀態機）
 ```mermaid
 flowchart LR
   IN[輸入轉接器\n觸控／按鈕／視覺／模擬器] -->|事件| SM[狀態機]
@@ -426,7 +636,7 @@ flowchart LR
   - 不再自己開相機，picam 重啟會自動重連。多了 `--dry-run`（只收預覽、不送螢幕）。
   - 這次只用 `--dry-run` 短測（14 秒、25 秒各一次）就停掉，沒有實際送到螢幕，以免跟桌寵搶畫面。camcast 現在沒在跑。
 
-### 後端：多模態模型（v2.5 規格，**待核准，尚未實作**）
+### 後端：多模態模型（v2.5 規格，**擱置中**：待核准、尚未實作，相關問題暫緩）
 目標：把 R7 上只看得懂文字的 qwen3-14b，換成**一個**同時看得懂文字和圖片的模型。這樣 camera.snapshot 拍的照片就能被描述、被問問題，而且顯存要能跟 ComfyUI 並存。
 
 **R7 現況（2026-10-28 唯讀調查）**
@@ -520,7 +730,7 @@ flowchart LR
 - 回退：關 8B → 執行原本的 `Start-Qwen3.bat` → 設定改回 `qwen3-14b`、`no_think: true`、`vision.enabled: false`。
   - 記憶資料庫和照片 caption 都保留，14B 一樣可以用文字記憶，只是不能看新照片。
 
-### 後端：記憶系統（v2.5 規格，**待核准，尚未實作**）
+### 後端：記憶系統（v2.5 規格，**擱置中**：待核准、尚未實作，相關問題暫緩）
 原則：**記憶放在後端，LLM 只是無狀態的工具**。每次對話由後端挑出相關記憶放進提示詞，換模型不會失憶。記憶跟心情／成長分開。
 
 **三層記憶**
@@ -646,6 +856,8 @@ flowchart LR
 - **安全**：程式結束時一定呼叫停止（輪子停、雲台回正）。
 
 ### 內部控制器：網頁遙控
+> v2.6：網頁遙控、螢幕畫面同步、Wi‑Fi 設定會搬到獨立的「前端後台」`desktop-pet-admin`，Wi‑Fi 管理再改由守護程式 piwifi 負責。網址、頁面和 API 不變，見「整體架構」的遷移步驟。
+
 在還沒有實體輸入硬體之前，「內部控制器」先做成一個網頁遙控：
 - 由桌寵主程式一起開（Python 內建 HTTP 伺服器，不用另外裝套件），手機瀏覽器打開 Pi 的網址就能用，介面是繁體中文。
 - 功能：送互動事件（摸頭、戳、按按鈕、有人靠近、叫醒、睡覺……）、強制切換狀態、切換成長階段、測試外部控制器（點頭、搖頭、輪子前後左右停）。
@@ -756,8 +968,9 @@ flowchart LR
 | 後端 token | 已設定 | 裝置用 token 檔；`/health` 對外只回基本資訊 |
 | 測試 | 151 個全過 | 含開機自動啟動設定（unit、supervise）、動畫包、播放器、Wi‑Fi（假 nmcli）、picam（假相機）、拍照（假 picam、假上傳）、照片 API、螢幕畫面同步測試 |
 | 開機自動啟動 | 已設定 | Pi `desktop-pet.service`（enable）；R7 工作排程器 `DesktopPet Backend`（登入時） |
-| 多模態模型＋記憶系統 | 規格待核准 | v2.5 規格；尚未下載模型、尚未實作 |
-| 尚未做 | — | 成長推進規則、多模態模型、記憶系統、ESP32 原型、外殼 |
+| 整體架構 | 規格 v2.6 | 三層＋前端拆分＋守護程式規範＋Rust；尚未實作（遷移第 1 步：拆出前端後台） |
+| 多模態模型＋記憶系統 | 擱置中 | v2.5 規格待核准，問題暫緩；尚未下載模型、尚未實作 |
+| 尚未做 | — | 前端後台拆分、piwifi（Rust）、成長推進規則、多模態模型、記憶系統、ESP32 原型、外殼 |
 
 ## 7. 部署與維運
 **裝置端（Pi 3B，`/home/pi-user/desktop-pet`）**
@@ -834,7 +1047,8 @@ flowchart LR
 1. ~~確認角色方向與硬體~~（已完成：參考圖、Pi 3B、SmartCool 螢幕接口）
 2. ~~骨架格式與 runtime、狀態機、輸入模擬器~~（已完成）
 3. ~~樹莓派原型（接 piscreen，量 fps）~~（已完成：改預錄動畫後穩定 20 fps）
-   - 接著做（R7 後端）：多模態模型與記憶系統（v2.5 規格待核准；分步驟見「後端：記憶系統」的「分步驟」）
+   - 接著做（v2.6 架構）：拆出前端後台 → piwifi（Rust）取代程序內 Wi‑Fi → 整理現有守護程式 → 新模組（Rust）。見「整體架構」的遷移步驟。
+   - 擱置：R7 後端的多模態模型與記憶系統（v2.5）
 4. ESP32 原型
 5. 比較兩平台（流暢度、耗電、成本、開發難度），選定平台
 6. 外殼與完整版
@@ -853,7 +1067,14 @@ flowchart LR
 - 要不要電池、可攜？
 - ~~裝置端與後端要不要開機自動啟動？~~ 已決定（2026-10-28）：要。Pi 用 systemd `desktop-pet.service`（開機），R7 用工作排程器（pi-user 登入時）。見「部署與維運」。
 - 要換成哪個 1～3B 小模型？（v2.5 改提議：R7 先換成多模態 Qwen3-VL-8B，1～3B 留到 ESP32／離線再說）
-- **v2.5 多模態與記憶（待決定）**：
+- **v2.6 整體架構（待決定）**：
+  - 名稱可以嗎？前端後台叫 `desktop-pet-admin`，Wi‑Fi 守護程式叫 `piwifi`，之後是 `pitouch`、`piwheels`、`pigimbal`、`pimic`。
+  - 遷移每一步要實測救援熱點：Wi‑Fi 會斷線約 1～2 分鐘，Pi 經有線維持可連。可以接受嗎？
+  - 守護程式先放在這個 repo 的 `services/<名稱>/`（隨時可拆出），還是現在就各開一個 GitHub repo？
+  - 在 box 用 rustup 安裝 Rust 工具鏈（需要下載）可以嗎？編好的執行檔要不要放 GitHub Releases？
+  - piwifi 用專用使用者 `piwifi` 跑，還是沿用 pi-user？
+  - 前端後台的網頁仍然沒有密碼（只限內網），PIN 照舊延後嗎？
+- **v2.5 多模態與記憶（擱置中，問題暫緩）**：
   - 同意用 Qwen3-VL-8B 取代 qwen3-14b 嗎？要先 A/B 再換，A/B 由你盲評。同意下載模型檔（約 6.2 GB）嗎？
   - 8080 的 llama-server 是 hermes 的工具開的。有沒有其他程式也在用 qwen3-14b？換掉會不會影響它們？
   - llama-server 要不要也登入自動啟動？
