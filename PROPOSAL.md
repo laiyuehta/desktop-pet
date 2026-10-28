@@ -1,6 +1,6 @@
-# 桌寵專案 項目書 v2.7
+# 桌寵專案 項目書 v2.8
 
-> 最後更新：2026-10-28　｜　狀態：第一期規劃定稿，細節持續補充
+> 最後更新：2026-10-29　｜　狀態：第一期規劃定稿，細節持續補充
 >
 > v1.1：新增「外部控制器接口」（輪子、雲台，只預留）與「內部控制器：網頁遙控」；架構圖、MVP 清單同步更新。無聊狀態的表現改為左右滾動。
 > v1.2：新增「後端（大腦）」章節：API、LLM 路由（本機小模型／雲端處理複雜任務）、目前測試模型 qwen3-14b（R7）；裝置可在螢幕上用對話框說話。
@@ -14,6 +14,7 @@
 > v2.0：後端設好 `api_token`（裝置用 token 檔帶上，`/health` 對外只回基本資訊）；拍照模組實作完成並在 Pi 實測（見該節「實作備註」）。
 > v2.1：新增「週邊常駐服務原則」：每個週邊由一個專門的常駐程式獨占、負責對接；新增相機常駐服務 picam，拍照改成多個觸發共用同一張照片、分送給每個請求者（取代冷卻與「相機忙碌」）。
 > v2.2：網頁遙控新增「螢幕畫面同步」：送到螢幕的每張畫面同步一份到網頁，方便遠端調整。
+> v2.8：改成 git 為主的多人開發流程（見「15. 開發流程（git 為主）」）：分支命名、main 只透過 PR＋CI、規格走 `spec/` PR 由使用者核准、commit 訊息格式、squash merge、Issue、CODEOWNERS（共用帳號的限制）、不再改寫歷史、semver tag＋`CHANGELOG.md`、只部署 tag（部署腳本是設計）。新增 CI（測試、gitleaks、個人資訊檢查）。
 > v2.7：新增「後端控制網頁」（只限內網，另開 listener，網際網路連不到）、「前後端連線安全：API 金鑰」（每台裝置一把、綁 pet_id、全部 `/v1/*` 都要、速率限制與鎖定、不中斷遷移）、「14. 專案公開前的檢查」；v2.6 的六個問題已決定。控制網頁與金鑰是規格，尚未實作。
 > v2.6：定下整體架構（見「整體架構」）：三層（前端／後端／後端支援）；前端拆成桌寵主程式、前端後台（獨立程式）、各模組守護程式（一個程式獨占一個模組，可給別的專案用）；新的常駐守護程式改用 Rust，先做 Wi‑Fi 的 piwifi；附遷移步驟。v2.5 的多模態與記憶規格**擱置**，問題暫緩。
 > v2.5：新增「後端：多模態模型」與「後端：記憶系統」規格（**待核准，尚未實作**）：R7 現況調查、提議以 Qwen3-VL-8B 取代 qwen3-14b（含 A/B 與回退）、三層記憶（短期對話、長期事實、日記）存在後端 SQLite。
@@ -1088,11 +1089,12 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
 | 相機常駐服務 picam | 運作中 | `picam.service`（開機啟動）；閒置 CPU 約 1.2%，預覽 800×480@15 約 11% |
 | 螢幕畫面同步 | 運作中 | 遙控頁最上方；`/screen.mjpg`、`/screen.jpg`；開著時仍 20 fps |
 | 後端 token | 已設定 | 裝置用 token 檔；`/health` 對外只回基本資訊 |
-| 測試 | 151 個全過 | 含開機自動啟動設定（unit、supervise）、動畫包、播放器、Wi‑Fi（假 nmcli）、picam（假相機）、拍照（假 picam、假上傳）、照片 API、螢幕畫面同步測試 |
+| 測試 | 161 個全過（CI 自動跑） | 含開機自動啟動設定（unit、supervise）、動畫包、播放器、Wi‑Fi（假 nmcli）、picam（假相機）、拍照（假 picam、假上傳）、照片 API、螢幕畫面同步測試 |
 | 開機自動啟動 | 已設定 | Pi `desktop-pet.service`（enable）；R7 工作排程器 `DesktopPet Backend`（登入時） |
 | 整體架構 | 規格 v2.6 | 三層＋前端拆分＋守護程式規範＋Rust；尚未實作（遷移第 1 步：拆出前端後台） |
 | 多模態模型＋記憶系統 | 擱置中 | v2.5 規格待核准，問題暫緩；尚未下載模型、尚未實作 |
 | 後端控制網頁、API 金鑰 | 規格 v2.7 | 尚未實作 |
+| 開發流程 | v2.8 | git 為主：分支＋PR＋CI，squash merge，semver tag；分支保護要等升級或公開 |
 | 公開專案 | 檢查中 | 歷史已改寫、佔位化、MIT；剩下的見「14. 專案公開前的檢查」 |
 | 尚未做 | — | 前端後台拆分、piwifi（Rust）、後端控制網頁、API 金鑰、成長推進規則、多模態模型、記憶系統、ESP32 原型、外殼 |
 
@@ -1110,7 +1112,7 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
   恢復：`sudo systemctl enable --now desktop-pet`。
 - 停止：`sudo systemctl stop desktop-pet`（`Restart=always` 不會在手動 stop 後重啟）。
 - 日誌：`journalctl -u desktop-pet -f`；螢幕狀態：`cat /run/piscreen/status.json`。
-- 更新流程：在電腦上改程式或骨架 → 跑測試 → `python3 tools/bake.py` 產生動畫包 → 連同程式複製到 Pi → 重啟 `desktop-pet`。
+- 更新流程（v2.8 起）：改動走 PR、CI 綠燈、合併後打 tag，**只部署 tag**（見「15. 開發流程」的「部署：只部署 tag」）。動畫包另外用 `python3 tools/bake.py` 產生再放到 Pi。
 - 部署值（執行使用者 `PET_USER`、家目錄 `PET_HOME`、後端網址 `PET_BACKEND_URL`）放在 repo 根目錄的 `deploy.env`（不進 repo，範本 `deploy.env.example`）。`install.sh` 把 unit 裡的 `@USER@`／`@HOME@`／`@BACKEND_URL@` 換成這些值，只讀不寫 `deploy.env`。
 - 其他啟動參數（寫在 unit 裡，改參數就改 `services/desktop-pet/desktop-pet.service` 再跑 `install.sh`）：`--sink piscreen --input web --web 0.0.0.0:8080 --fps 20 --pack @HOME@/desktop-pet/packs/seed`。
 - 後端 token 放在 `@HOME@/.config/desktop-pet/backend-token`（@USER@ 擁有、權限 0600），用 `--backend-token-file` 讀，不放在命令列（`ps`、systemd 設定都看不到）。換 token 時改這個檔和 R7 的設定，再重啟 `desktop-pet`。
@@ -1151,7 +1153,7 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
 - 雲端 API 金鑰（第二期）只放在後端設定，不放在裝置端或 repo。
 
 ## 9. 測試與驗收
-- **自動測試**：每次改動在電腦上跑 `python -m pytest -q`（目前 151 個）。
+- **自動測試**：每次改動在電腦上跑 `python -m pytest -q`（目前 161 個）。每個 PR 和 main 都由 CI（`.github/workflows/ci.yml`）自動跑：Python 3.13 測試、gitleaks 掃機密（PR 差異與全部歷史）、個人資訊檢查。
 - **效能量測**：`tools/bench.py` 與逐階段量測；每次大改在 Pi 上量各狀態 fps、CPU。
 - **實機驗收**：所有狀態 20 fps、說話 ≥ 18 fps、事件到畫面 ≤ 0.5 秒、連跑 30 分鐘不掉幀不漏記憶體、piscreen 錯誤與救援次數為 0。
 - **降級測試**：後端關掉、LLM 關掉、網路斷線時，寵物仍正常待機與睡覺。
@@ -1204,6 +1206,11 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
   - piwifi 用專用使用者 `piwifi` 跑。
   - 內網管理網頁不加 PIN。
 - ~~熱點名稱~~ 已決定（2026-10-29）：改成 `PetRescue-AP`，密碼不變。
+- **v2.8（待決定）**：
+  - repo 合併設定要不要改成只允許 squash、合併後自動刪分支？
+  - 要不要讓 bot 改用獨立的 GitHub 帳號（machine user）或 GitHub App，讓 CODEOWNERS 與核准真的生效？
+  - 要不要升級 GitHub Pro（或公開後）打開分支保護（設定見第 15 節）？
+  - 合併後是否打第一個 tag `v2.8.0`？
 - **v2.7（待決定）**：
   - 後端控制網頁用 8091，只綁 127.0.0.1 和 R7 的區網 IP，加 Windows 防火牆規則（只允許本機子網路）。可以嗎？
   - 控制網頁可以在內網不登入就刪照片嗎（有 CSRF 防護）？
@@ -1273,3 +1280,134 @@ Pi 跟後端之間可能經過網際網路。**後端只回應帶了正確金鑰
    - 圖檔重新檢查有沒有內嵌資料。
 8. **【決定】** GitHub 帳號名稱在公開 repo 一定看得到，可以接受嗎？
 9. **【決定】** 使用者自己按下公開。
+
+## 15. 開發流程（git 為主）
+從 v2.8 起改成一般多人開發的做法：所有改動都走分支和 PR，main 只透過 PR 改。
+這一節由使用者核准（2026-10-29）；這個流程本身也是用 `chore/git-workflow` 這個 PR 加進來的。
+
+### 分支與 PR
+- **分支命名**：`<前綴>/<簡短英文名稱>`，小寫、用 `-` 連接，例如 `feat/api-keys`、`fix/hotspot-reconnect`。
+
+  | 前綴 | 用途 | 通常由誰開 |
+  |---|---|---|
+  | `feat/` | 新功能 | 桌寵專案機器人1 |
+  | `fix/` | 修 bug | 誰發現誰修（改到別人範圍要對方確認） |
+  | `spec/` | 改項目書規格（版本號 +0.1） | 提案的人；使用者核准 |
+  | `anim/` | 動畫、美術、動畫包、動畫規格 | 桌寵專案機器人2 |
+  | `chore/` | 整理、工具、CI、文件、相依套件 | 任何人 |
+
+- **main 只能透過 PR 改**，而且 CI 要全綠（`tests`、`secrets & personal-info scan`）。不直接 push 到 main。
+  目前帳號方案還不能用 GitHub 強制（見「分支保護」），所以先靠大家遵守；能開的時候再打開。
+- **一個 PR 一件事**，盡量小。PR 用範本：規格、`Closes #n`、測試、部署影響、回退方式。
+- **由使用者合併**。bot 可以開 PR、修到 CI 綠燈、回覆意見，但不自己合併。
+
+### 規格先行（取代原本的「先給使用者看」）
+- 規格改動開 `spec/` PR，只改 `PROPOSAL.md`（必要時加 `docs/`），並把項目書版本號加 0.1、在開頭版本說明加一行。
+- **使用者在 PR 上核准**（approve 或留言「核准」）就算定案，再由使用者合併。不用另外貼給使用者看。
+- 實作 PR 要在說明寫對應的規格：項目書版本與章節（例如「v2.7 前後端連線安全：API 金鑰」）或規格 PR 編號。
+  實作跟規格不一樣時，先開 `spec/` PR 改規格，不要只在程式裡改。
+- 小修（錯字、說明補充、不改行為）可以直接在 `chore/` 或 `fix/` PR 改項目書，不用加版本號。
+
+### commit 訊息
+- 格式：`<type>(<scope>): <摘要>`，摘要用中文或英文都可以，一行講清楚做了什麼。
+  - type：`feat`、`fix`、`spec`、`anim`、`chore`、`docs`、`test`、`refactor`、`ci`。
+  - scope（選填）：`pet`、`backend`、`wifi`、`picam`、`camera`、`mirror`、`pack`、`deploy`、`ci` 等。
+  - 例：`fix(wifi): 熱點關閉後沒有重連`、`spec: 項目書 v2.8 開發流程`、`anim(pack): happy_1~3`。
+- 內文（選填）：為什麼要改、注意事項；最後一行放 `Closes #n`、`Spec: v2.7`。
+- 共用同一個 GitHub 帳號，所以 commit 作者名稱用 bot 名字（`git -c user.name="桌寵專案機器人1" …`），看得出是誰做的。
+- 分支上的 commit 可以隨意（「wip」也行），因為合併時會壓成一個；**PR 標題必須符合格式**，它就是 main 上的 commit 訊息。
+
+### 合併方式：squash merge
+- 一律用 **squash merge**（PR 的所有 commit 壓成 main 上的一個 commit，訊息用 PR 標題＋`Closes #n`）。理由：
+  - main 是一條直線，一個 commit 等於一個 PR、一個任務，好讀、好寫更新紀錄。
+  - 要回退時 `git revert <那一個 commit>` 就整件事撤掉，不會撤一半。
+  - 分支上的試錯 commit 不會進 main，所以分支上不用整理 commit，也不需要 rebase 或 force push。
+  - 缺點：分支上的細節只留在 PR 頁面。需要保留細節的大工作就拆成幾個 PR。
+- 建議 repo 設定：只開「Allow squash merging」（預設訊息用 PR 標題與說明），關掉 merge commit 與 rebase merge，打開「合併後自動刪除分支」。這些設定由使用者決定要不要改。
+
+### Issue
+- 每個任務、bug 都開 Issue（範本：Bug、任務），在 Issue 裡討論與記錄決定。
+- PR 說明寫 `Closes #n`，合併後 Issue 自動關閉。只做了一部分就寫 `Refs #n`。
+- Issue 與 PR 不貼個人資訊或照片（正式網址、IP、Wi‑Fi 名稱、日誌裡的路徑先遮掉）。
+
+### 負責範圍（CODEOWNERS）
+| 範圍 | 負責 |
+|---|---|
+| `packs/`、`assets/`、`preview/`、動畫規格（`docs/emotion-levels.md` 等）、`config/bake.json`、素材工具（`tools/bake.py`、`tools/gen_seed_parts.py`、`tools/render_demo.py`）、`tests/test_emotion_levels.py` | 桌寵專案機器人2 |
+| `main.py`、`pet/`、`backend/`、`services/`、`tools/`（素材工具以外）、`tests/`、`config/states.json`、`requirements.txt`、`deploy.env.example` | 桌寵專案機器人1 |
+| `PROPOSAL.md`、`CHANGELOG.md`、`CONTRIBUTING.md`、`.github/`、`.gitleaks.toml`、`LICENSE`、`README.md`、`.gitignore` | 使用者核准（公開前整理與歷史改寫是桌寵專案機器人3 做的；之後這類工作也由它提案） |
+
+- 寫在 `.github/CODEOWNERS`。
+- **限制（老實說）**：使用者和三個 bot 用的是同一個 GitHub 帳號。CODEOWNERS 只能填 GitHub 帳號，所以每一行都是同一個帳號。
+  GitHub 不會要 PR 作者審查自己的 PR，因此：
+  - CODEOWNERS 現在**不會自動加審查者**，也**不能當合併條件**，只是文件。
+  - 「需要 1 個核准」也做不到：作者本人不能核准自己的 PR。
+  - 所以目前的「審查」是：使用者看過 PR 並合併；改到別人範圍時，負責的 bot 在 PR 留言確認。
+  - 要真的生效：讓 bot 改用另一個 GitHub 帳號（machine user，GitHub 允許每人一個免費的）或 GitHub App 推送與開 PR，使用者用自己的帳號審查。到時把 CODEOWNERS 換成那些帳號，就能「需要 code owner 核准」。
+
+### 三個 bot 怎麼配合
+- **開工前**：`git fetch origin`，從最新的 `origin/main` 開新分支（`git switch -c <分支> origin/main`）。
+- 還沒 push 的分支可以 `git rebase origin/main` 跟上 main。**已經 push 的分支不 rebase**，改用 `git merge origin/main`（因為不能 force push）。
+- **一個任務一個分支、一個 worktree**。不在別人的分支或 worktree 裡改東西。
+- **不改別人負責的資料夾**，除非走 PR 並在 PR 標出來、請負責的 bot 確認。
+- 開工前在 Issue 留言「我來做」，避免兩個 bot 做同一件事。
+- 改到共用的介面（例如動畫包格式、`config/states.json`、API）時，先開 `spec/` PR。
+
+### 歷史
+- **從現在起不再改寫歷史**：不 force push、不改寫已 push 的分支、不刪 tag。
+- 不小心 commit 了機密：立刻換掉那個機密（換 token、改密碼），再用一般 commit 刪掉；需要從歷史清掉時，由使用者決定（那會是唯一的例外，而且要所有人重新 clone）。
+- 2026-10-29 桌寵專案機器人3 做的那次改寫是最後一次；之前的 clone 不能再 push。
+
+### 發佈與版號
+- 用語意化版本的 tag：`vMAJOR.MINOR.PATCH`，打在 main 上，打了就不移動、不刪除。
+  - PATCH：只修 bug（`v2.8.1`）。
+  - MINOR：新功能、新的規格版本合併（`v2.9.0`）。
+  - MAJOR：不相容的改動（例如 API 改版、部署方式要手動遷移）。
+- 第一個 tag 是 **`v2.8.0`**：這個流程合併後的 main。MINOR 先跟項目書版本對齊，之後各自前進（項目書改版不一定要發佈）。
+- `CHANGELOG.md`：每個 PR 在「未發佈」加一行；發佈時把「未發佈」改成版號與日期，再打 tag。
+- 打 tag 由使用者決定（或叫 bot 打），只打在 CI 綠燈的 main commit 上。
+- 後端 `/health` 回的 `version`（目前 `0.1.0`）之後改成讀發佈版號，讓部署後看得出跑的是哪一版。
+
+### 部署：只部署 tag
+- 正式機器（Pi、R7）**只部署 tag**，不部署分支或沒打 tag 的 commit。要測試分支就在電腦上跑，或明確說是「暫時測試」，測完部署回 tag。
+- `deploy.env`（Pi）與 `backend/config.json`（R7）只存在機器上，不進 git；部署不建立、不覆蓋、不刪除它們。
+- 動畫包 `packs/` 不進 git，由 bake 產生後另外放到 Pi。
+
+**規劃中的部署腳本 `tools/deploy/deploy.sh`（只有設計，尚未實作）**
+
+`tools/deploy/deploy.sh <pi|r7> <tag> [--dry-run]`、`tools/deploy/deploy.sh <pi|r7> --rollback`、`tools/deploy/deploy.sh <pi|r7> --status`
+- **部署前檢查**：
+  - tag 存在、在 main 上、tag 的 commit CI 是綠的（用 GitHub API 查 check runs）。
+  - 目標機器的 `deploy.env`／`config.json` 存在。
+  - Pi 上 piscreen 在跑（只讀，不碰它）。
+- **Pi**：
+  - 目錄改成 `@HOME@/desktop-pet-releases/<tag>/`，`@HOME@/desktop-pet` 是指向目前版本的連結。
+  - `packs/` 與 `deploy.env` 放在共用位置，每個版本用連結接上。
+  - 流程：
+    1. 用 `git archive <tag>` 打包並複製過去，解開到新版本目錄。
+    2. 先產生 unit 等檔案，和已安裝的比對差異（`--dry-run` 到這裡就停）。
+    3. 把連結換到新版本，跑 `services/desktop-pet/install.sh`、`services/picam/install.sh`、需要時 `tools/wifi/install.sh`。
+    4. 做健康檢查：服務 active、fps 達標、`/wifi/status`、`/screen.jpg`、piscreen 錯誤數沒增加。
+  - 健康檢查失敗就自動回到上一版（連結換回去、重跑 install），並回報。
+  - 記錄 `CURRENT`／`PREVIOUS`，保留最近 3 個版本。
+  - 不碰 piscreen、USB、eth0、使用者存的 Wi‑Fi 設定。
+- **R7**：
+  - 工作資料夾維持 git checkout。R7 沒有 GitHub 登入，用 `git bundle` 傳 tag。
+  - 流程：
+    1. 檢查工作區乾淨（只允許被忽略的 `config.json`、`backend/data/`、日誌）。
+    2. 記下目前的 tag，`git checkout --detach <tag>`。
+    3. 用工作排程器重啟後端，檢查 `/health` 與它回報的版本，再從 Pi 做一次帶金鑰的呼叫。
+  - 失敗就 `checkout` 回上一個 tag，再重啟。
+  - 不碰 llama-server、ComfyUI。
+- **回退**：`--rollback` 回到 `PREVIOUS` 記錄的 tag，同樣跑健康檢查。
+  資料格式有變的版本（例如存檔遷移），PR 的「回退方式」要另外寫清楚，腳本會提醒。
+- 部署紀錄（時間、tag、結果）寫在目標機器本機，不寫個人資訊。
+
+### 分支保護（目前狀態）
+- 這個 repo 是私人的，帳號是免費方案：分支保護和 rulesets 都要 GitHub Pro 或公開 repo 才能用（API 回「Upgrade to GitHub Pro or make this repository public」）。所以現在無法強制，只能靠流程。
+- 升級 Pro 或公開後建議的設定（main）：
+  - 要 PR 才能合併，**需要的核准數 0**（共用帳號，作者不能核准自己）。
+  - 必須通過 CI：`tests (Python 3.13)`、`secrets & personal-info scan`，且分支要跟 main 同步。
+  - 禁止 force push、禁止刪除。
+  - 管理員也要遵守（ruleset 不設 bypass）。
+- 等 bot 有獨立帳號後，再把核准數改成 1，並要求 code owner 核准。
