@@ -158,7 +158,9 @@ class NM:
         if key_mgmt:
             args += ["wifi-sec.key-mgmt", key_mgmt]
             if ap:
-                args += ["wifi-sec.proto", "rsn", "wifi-sec.pairwise", "ccmp", "wifi-sec.group", "ccmp"]
+                # Pi 3B（brcmfmac）實測：不關 PMF 熱點會卡在「supplicant-timeout」開不起來
+                args += ["wifi-sec.proto", "rsn", "wifi-sec.pairwise", "ccmp", "wifi-sec.group", "ccmp",
+                         "wifi-sec.pmf", "disable"]
         out = self.run(args)
         m = re.search(r"\(([0-9a-fA-F-]{36})\)", out)
         if not m:
@@ -240,6 +242,7 @@ class WifiManager:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._status_cache: Tuple[float, Optional[dict]] = (-1e9, None)
+        self._hotspot_checked = False
 
     # -- 權限（預留 PIN）-----------------------------------------------------------
     def authorize(self, headers) -> bool:
@@ -436,7 +439,7 @@ class WifiManager:
                     op["message"] = RESULT_TEXT[kind] + f"，切回原本的網路也失敗（{exc2.kind}）"
             self._say(RESULT_TEXT[kind], 6)
             op.update(phase="done", finished=time.time())
-            self.mode = "unknown"
+            self.mode = "connected" if op["reverted"] else "unknown"
             return
         # 成功：自動記錄、排到最前面
         new_uuid = created or up_uuid
@@ -511,11 +514,14 @@ class WifiManager:
         """手動開關設定熱點（測試與救援用）。"""
         self.last_web = self.clock()
         with self.lock:
+            ok = True
             if on:
-                self._hotspot_on()
+                ok = self._hotspot_on()
             else:
                 self._hotspot_off(reconnect=True)
             self._status_cache = (-1e9, None)
+        if not ok:
+            return {"ok": False, "mode": self.mode, "error": "開熱點失敗（沒有熱點設定檔或網卡不支援）"}
         return {"ok": True, "mode": self.mode}
 
     # -- 熱點 ------------------------------------------------------------------
@@ -526,6 +532,9 @@ class WifiManager:
             return None
         for c in self.nm.connections():
             if c["name"] == self.hotspot_ssid and c["type"] == WIFI_TYPE:
+                if not self._hotspot_checked:
+                    self.nm.modify(c["uuid"], "802-11-wireless-security.pmf", "disable")   # 舊版建立的熱點補上
+                    self._hotspot_checked = True
                 return c["uuid"]
         u = self.nm.add_wifi(self.hotspot_ssid, conf.get("ssid", self.hotspot_ssid), self.iface, "wpa-psk", ap=True)
         self.nm.set_psk(u, conf["password"])
@@ -695,7 +704,8 @@ class WifiWebAPI:
                         order=list(order) if isinstance(order, list) else None,
                         uuid=d.get("uuid"), direction=d.get("direction"))}
                 if path == "/wifi/hotspot":
-                    return 200, self.mgr.set_hotspot(bool(d.get("on")))
+                    r = self.mgr.set_hotspot(bool(d.get("on")))
+                    return (200 if r["ok"] else 500), r
         except ValueError as exc:
             return 400, {"ok": False, "error": str(exc)}
         except NmError as exc:

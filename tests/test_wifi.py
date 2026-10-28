@@ -354,8 +354,14 @@ def test_no_hotspot_without_conf(env, tmp_path):
 
 def test_manual_hotspot_toggle(env):
     nm, mgr, home, _, _ = env
-    mgr.set_hotspot(True)
+    nm.ap_ok = False
+    assert mgr.set_hotspot(True)["ok"] is False
+    assert WifiWebAPI(mgr).handle("POST", "/wifi/hotspot", {"on": True})[0] == 500
+    nm.ap_ok = True
+    assert mgr.set_hotspot(True)["ok"] is True
     assert mgr.mode == "hotspot"
+    hs = [u for u, c in nm.conns.items() if c["name"] == "PetRescue-AP"][0]
+    assert ("modify", hs, "802-11-wireless-security.pmf", "disable") in nm.calls
     mgr.set_hotspot(False)
     assert mgr.tick() == "connected" and nm.active == home
 
