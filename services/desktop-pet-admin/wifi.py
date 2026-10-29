@@ -237,7 +237,7 @@ class WifiManager:
         self.iface = iface
         self.lock_file = lock_file
         self._lock_fd = None
-        self.has_lock = False
+        self.has_lock = True
         self.notify = notify or (lambda text, secs: None)
         self.try_secs, self.rescan_secs, self.revert_secs = try_secs, rescan_secs, revert_secs
         self.hotspot_after, self.hotspot_retry = hotspot_after, hotspot_retry
@@ -699,29 +699,32 @@ class WifiManager:
             return True
         if self.has_lock and self._lock_fd:
             return True
-        try:
-            if self._lock_fd is None:
-                os.makedirs(os.path.dirname(self.lock_file), exist_ok=True)
+
+        # 1. 建立目錄並開啟鎖檔
+        if self._lock_fd is None:
+            try:
+                dir_name = os.path.dirname(self.lock_file)
+                if dir_name:
+                    os.makedirs(dir_name, exist_ok=True)
                 self._lock_fd = open(self.lock_file, "a+")
+            except (IOError, OSError) as exc:
+                # 目錄無法建立或權限不足（例如一般使用者在 /run 下無權限）：
+                # 絕不能中斷 Wi-Fi 管理與救援熱點！記 WARNING 並直接管理 Wi-Fi。
+                log.warning("無法建立或開啟 Wi‑Fi 鎖檔 %s (%s)，略過檔案鎖直接啟用 Wi‑Fi 管理", self.lock_file, exc)
+                self.has_lock = True
+                return True
+
+        # 2. 申請互斥鎖（只有 flock 拋出 BlockingIOError 才算鎖被佔用）
+        try:
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.has_lock = True
             return True
-        except BlockingIOError:
-            self.has_lock = False
-            return False
-        except (IOError, OSError) as exc:
+        except (BlockingIOError, IOError, OSError) as exc:
             err = getattr(exc, "errno", None)
-            if errno is not None and err in (getattr(errno, "EAGAIN", 11), getattr(errno, "EWOULDBLOCK", 11), getattr(errno, "EACCES", 13)):
+            if isinstance(exc, BlockingIOError) or (errno is not None and err in (getattr(errno, "EAGAIN", 11), getattr(errno, "EWOULDBLOCK", 11))):
                 self.has_lock = False
                 return False
-            # 權限不足或目錄不存在等問題：不應擋住 Wi-Fi 管理與救援熱點
-            log.warning("無法建立或開啟 Wi‑Fi 鎖檔 %s (%s)，略過互斥鎖直接啟用 Wi‑Fi 管理", self.lock_file, exc)
-            if self._lock_fd:
-                try:
-                    self._lock_fd.close()
-                except Exception:
-                    pass
-                self._lock_fd = None
+            log.warning("Wi‑Fi 鎖檔 flock 失敗 %s (%s)，略過檔案鎖直接啟用 Wi‑Fi 管理", self.lock_file, exc)
             self.has_lock = True
             return True
 
@@ -759,7 +762,7 @@ class WifiManager:
             except Exception:
                 pass
             self._lock_fd = None
-        self.has_lock = False
+        self.has_lock = True
 
     @staticmethod
     def available(iface: str = "wlan0") -> bool:
@@ -785,6 +788,8 @@ class WifiWebAPI:
             if method == "GET" and path == "/wifi/saved":
                 return 200, {"ok": True, "saved": self.mgr.saved()}
             if method == "POST":
+                if not getattr(self.mgr, "has_lock", True):
+                    return 409, {"ok": False, "error": "另一個 Wi‑Fi 管理在執行"}
                 d = data if isinstance(data, dict) else {}
                 if path == "/wifi/connect":
                     pw = d.get("password")
