@@ -325,11 +325,10 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
             insecure_dev = bool(srv_cfg.get("insecure_dev", False))
             is_local = host in ("127.0.0.1", "localhost", "::1")
 
-            # 2. 沒設定就不開放（insecure_dev 僅限綁定 127.0.0.1 時有效）
-            if insecure_dev and is_local:
-                return None
-
+            # 2. 沒設定就不開放（insecure_dev 僅限綁定 127.0.0.1 且未設定金鑰時免金鑰）
             if not keys and not legacy_token:
+                if insecure_dev and is_local:
+                    return None
                 raise ApiError(503, "後端未設定金鑰")
 
             # 3. 取得傳入的金鑰

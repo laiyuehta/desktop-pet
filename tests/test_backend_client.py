@@ -242,6 +242,7 @@ class DeviceBackendTest(unittest.TestCase):
         llm = FakeLLM("valid")
         tmp = tempfile.mkdtemp()
         cfg = load_config(overrides={"data_dir": tmp, "chatter": {"enabled": False},
+                                     "server": {"insecure_dev": True},
                                      "llm": {"local": {"base_url": llm.base_url, "timeout_s": 2}}})
         httpd, port = serve_in_thread(Brain(cfg))
         app = make_app(f"http://127.0.0.1:{port}")

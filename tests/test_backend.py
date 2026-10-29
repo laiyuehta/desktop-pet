@@ -365,7 +365,7 @@ class PhotoApiTest(unittest.TestCase):
 
     def test_health_public_vs_token(self):
         pub = json.load(urllib.request.urlopen(self.base + "/health", timeout=5))
-        self.assertEqual(set(pub), {"ok", "service", "version"})
+        self.assertEqual(pub, {"ok": True})
         full = json.load(self.req("/health"))
         self.assertIn("llm", full)
 
@@ -373,13 +373,13 @@ class PhotoApiTest(unittest.TestCase):
         self.brain.cfg["server"]["api_token"] = ""
         tmp2 = tempfile.mkdtemp()
         try:
-            cfg = make_cfg(tmp2, "http://127.0.0.1:1/v1")
+            cfg = make_cfg(tmp2, "http://127.0.0.1:1/v1", server={"insecure_dev": False})
             httpd, port = serve_in_thread(Brain(cfg))
             r = urllib.request.Request(f"http://127.0.0.1:{port}/v1/pet/photo?pet_id=p1", data=b"\xff\xd8" + b"x" * 100,
                                        method="POST", headers={"Content-Type": "image/jpeg"})
             with self.assertRaises(urllib.error.HTTPError) as cm:
                 urllib.request.urlopen(r, timeout=5)
-            self.assertEqual(cm.exception.code, 403)
+            self.assertEqual(cm.exception.code, 503)
             httpd.shutdown()
         finally:
             shutil.rmtree(tmp2, ignore_errors=True)

@@ -30,6 +30,32 @@ from .events import make_event
 log = logging.getLogger("pet.backend")
 
 
+def _is_private_or_local(ip: ipaddress._BaseAddress) -> bool:
+    if ip.is_loopback:
+        return True
+    if ip.version == 4:
+        # RFC 1918: 10/8, 172.16/12, 192.168/16; RFC 3927: 169.254/16
+        b = ip.packed
+        if b[0] == 10:
+            return True
+        if b[0] == 172 and 16 <= b[1] <= 31:
+            return True
+        if b[0] == 192 and b[1] == 168:
+            return True
+        if b[0] == 169 and b[1] == 254:
+            return True
+        return False
+    if ip.version == 6:
+        # ULA (fc00::/7) or link-local (fe80::/10)
+        b = ip.packed
+        if (b[0] & 0xFE) == 0xFC:
+            return True
+        if b[0] == 0xFE and (b[1] & 0xC0) == 0x80:
+            return True
+        return False
+    return False
+
+
 def is_safe_for_insecure_token(url: str, allow_insecure_lan: bool = False) -> bool:
     """檢查目標後端網址是否安全可送出金鑰（HTTPS、localhost 或 RFC 1918 私有 IP）。"""
     if allow_insecure_lan:
@@ -45,12 +71,12 @@ def is_safe_for_insecure_token(url: str, allow_insecure_lan: bool = False) -> bo
             return True
         try:
             ip = ipaddress.ip_address(host)
-            return ip.is_private or ip.is_loopback
+            return _is_private_or_local(ip)
         except ValueError:
             pass
         addr = socket.gethostbyname(host)
         ip = ipaddress.ip_address(addr)
-        return ip.is_private or ip.is_loopback
+        return _is_private_or_local(ip)
     except Exception:
         return False
 
