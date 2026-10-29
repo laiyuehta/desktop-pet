@@ -81,10 +81,11 @@ def _clamp_fps(q: Optional[dict], default: int = 10) -> int:
 
 class ScreenWebAPI:
     def __init__(self, mirror: ScreenMirror, status_fn: Optional[Callable[[], dict]] = None,
-                 is_core_online_fn: Optional[Callable[[], bool]] = None):
+                 is_core_online_fn: Optional[Callable[[], bool]] = None,
+                 core_online_fn: Optional[Callable[[], bool]] = None):
         self.mirror = mirror
         self.status_fn = status_fn or (lambda: {})
-        self.is_core_online_fn = is_core_online_fn or (lambda: True)
+        self.is_core_online_fn = is_core_online_fn or core_online_fn or (lambda: True)
 
     def info(self) -> dict:
         seq, ts, data, meta = self.mirror.latest()

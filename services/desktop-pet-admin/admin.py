@@ -280,7 +280,7 @@ class AdminServer:
         self.screen_api = ScreenWebAPI(
             mirror=self.mirror,
             status_fn=get_core_status,
-            core_online_fn=lambda: self.control.connected,
+            is_core_online_fn=lambda: self.control.connected,
         )
         self.httpd: Optional[ThreadingHTTPServer] = None
         self.server_thread: Optional[threading.Thread] = None
