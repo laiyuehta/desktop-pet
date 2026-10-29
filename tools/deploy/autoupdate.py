@@ -381,7 +381,19 @@ def link_shared_resources(
                 if not dest.exists():
                     try:
                         if sys.platform != "win32":
-                            os.symlink(str(pack.resolve()), str(dest))
+                            if pack.is_symlink():
+                                target = os.readlink(pack)
+                                if not os.path.isabs(target):
+                                    target = str((pack.parent / target).resolve())
+                                os.symlink(target, str(dest))
+                            elif current_release_dir.is_symlink():
+                                os.symlink(str(pack.resolve()), str(dest))
+                            else:
+                                # current_release_dir 是一般目錄（尚未遷移為 symlink），複製資源避免循環符號連結
+                                if pack.is_dir():
+                                    shutil.copytree(pack, dest)
+                                else:
+                                    shutil.copy2(pack, dest)
                         else:
                             if pack.is_dir():
                                 shutil.copytree(pack, dest)
@@ -393,20 +405,18 @@ def link_shared_resources(
     # 2. 處理 deploy.env
     target_env = target_release_dir / "deploy.env"
     if not target_env.exists():
-        if current_release_dir and (current_release_dir / "deploy.env").exists():
-            try:
-                if sys.platform != "win32":
-                    os.symlink(str((current_release_dir / "deploy.env").resolve()), str(target_env))
-                else:
-                    shutil.copy2(current_release_dir / "deploy.env", target_env)
-            except OSError:
-                pass
-        elif Path("/etc/desktop-pet/env").exists():
+        if Path("/etc/desktop-pet/env").exists():
             try:
                 if sys.platform != "win32":
                     os.symlink("/etc/desktop-pet/env", str(target_env))
                 else:
                     shutil.copy2("/etc/desktop-pet/env", target_env)
+            except OSError:
+                pass
+        elif current_release_dir and (current_release_dir / "deploy.env").exists():
+            try:
+                # 複製現有 deploy.env，避免首次遷移一般目錄時形成循環符號連結
+                shutil.copy2(current_release_dir / "deploy.env", target_env)
             except OSError:
                 pass
 
