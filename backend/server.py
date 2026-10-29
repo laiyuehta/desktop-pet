@@ -214,7 +214,13 @@ class LimitedThreadingHTTPServer(ThreadingHTTPServer):
     def process_request_thread(self, request, client_address):
         if not self.connection_semaphore.acquire(blocking=False):
             try:
-                msg = b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nRetry-After: 5\r\nConnection: close\r\n\r\n{\"ok\":false,\"error\":\"伺服器忙碌，已達連線上限\"}"
+                msg = (
+                    "HTTP/1.1 503 Service Unavailable\r\n"
+                    "Content-Type: application/json; charset=utf-8\r\n"
+                    "Retry-After: 5\r\n"
+                    "Connection: close\r\n\r\n"
+                    "{\"ok\":false,\"error\":\"伺服器忙碌，已達連線上限\"}"
+                ).encode("utf-8")
                 request.sendall(msg)
             except Exception:
                 pass
