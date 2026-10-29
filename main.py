@@ -20,6 +20,7 @@ import sys
 import time
 
 from pet.app import PetApp
+from pet.env import expand_pet_path, load_pi_env
 from pet.events import make_event
 from pet.extensions import CameraSnapshot, CameraWebAPI, PhotoUploader
 from pet.extensions.camera import DEFAULT_PENDING_DIR, DEFAULT_PICAM_SOCKET, picam_snapshot
@@ -33,42 +34,67 @@ from pet.outputs.piscreen import DEFAULT_SOCKET
 from pet.wifi import DEFAULT_HOTSPOT_CONF, HOTSPOT_SSID, WifiManager, WifiWebAPI
 
 
-def parse_args(argv=None):
+DEFAULT_TOKEN_FILE = "~/.config/desktop-pet/backend-token"
+DEFAULT_EXTERNAL_PACKS_DIR = "~/.local/share/desktop-pet/packs"
+
+
+def parse_args(argv=None, env=None, env_file=None):
+    merged_env = load_pi_env(env_file=env_file, environ=env, warn_legacy=False)
+    # 若環境檔有設 PET_HOTSPOT_URL 且程序環境變數未設，帶入 os.environ 供 WifiManager 使用
+    if env is None and merged_env.get("PET_HOTSPOT_URL") and not os.environ.get("PET_HOTSPOT_URL"):
+        os.environ["PET_HOTSPOT_URL"] = merged_env["PET_HOTSPOT_URL"]
+
+    backend_default = merged_env.get("PET_BACKEND_URL") or merged_env.get("PET_BACKEND") or None
+    used_legacy_backend = not merged_env.get("PET_BACKEND_URL") and bool(merged_env.get("PET_BACKEND"))
+
+    explicit_token_env = expand_pet_path(merged_env.get("PET_BACKEND_TOKEN_FILE"), merged_env)
+    default_token_path = expand_pet_path(DEFAULT_TOKEN_FILE, merged_env)
+    token_file_default = explicit_token_env or (
+        default_token_path if (default_token_path and os.path.isfile(default_token_path)) else None
+    )
+
+    pack_default = expand_pet_path(merged_env.get("PET_PACK_DIR"), merged_env) or "auto"
+    web_default = merged_env.get("PET_WEB_LISTEN") or "0.0.0.0:8080"
+    pet_id_default = merged_env.get("PET_PET_ID") or "seed-001"
+    pending_default = expand_pet_path(merged_env.get("PET_CAMERA_PENDING_DIR"), merged_env) or None
+    wifi_iface_default = merged_env.get("PET_WIFI_IFACE") or "wlan0"
+    config_default = expand_pet_path(merged_env.get("PET_CONFIG"), merged_env) or None
+
     p = argparse.ArgumentParser(description="桌寵第一期原型")
     p.add_argument("--sink", choices=["piscreen", "preview", "null"], default="preview",
                    help="畫面輸出：piscreen（Pi 上的螢幕服務）、preview（寫 PNG）、null（只量 fps）")
     p.add_argument("--fps", type=float, default=None,
                    help="目標 fps（預設：動畫包的 fps；即時繪圖 20）")
-    p.add_argument("--pack", default="auto",
-                   help="預錄動畫包資料夾；auto = packs/<骨架名稱> 存在就用；none = 只用即時繪圖")
+    p.add_argument("--pack", default=pack_default,
+                   help="預錄動畫包資料夾；預設讀 PET_PACK_DIR，未設為 auto（先找 ~/.local/share/desktop-pet/packs/<骨架>，再找 packs/<骨架>）；none = 只用即時繪圖")
     p.add_argument("--input", default="keyboard",
                    help="輸入轉接器，逗號分隔：keyboard、web、none（預設 keyboard）")
-    p.add_argument("--web", default="0.0.0.0:8080", help="網頁遙控監聽位址（--input 含 web 時，預設 0.0.0.0:8080）")
+    p.add_argument("--web", default=web_default, help="網頁遙控監聽位址（預設讀 PET_WEB_LISTEN 或 0.0.0.0:8080；off 關閉）")
     p.add_argument("--socket", default=DEFAULT_SOCKET, help="piscreen Unix socket 路徑")
     p.add_argument("--jpeg-quality", type=int, default=80, help="即時繪圖／對話框重新編碼的 JPEG 品質（預設 80）")
     p.add_argument("--preview-dir", default="preview/live", help="preview 輸出資料夾（latest.png）")
     p.add_argument("--preview-every", type=int, default=2, help="preview 每幾格寫一次檔")
-    p.add_argument("--config", default=None, help="狀態機設定檔（預設 config/states.json）")
+    p.add_argument("--config", default=config_default, help="狀態機設定檔（預設讀 PET_CONFIG 或 config/states.json）")
     p.add_argument("--idle-timeout", type=float, default=None,
                    help="覆寫閒置秒數（測試用，例如 10；預設用設定檔的 600）")
     p.add_argument("--duration", type=float, default=0, help="跑幾秒後自動結束（0 = 不限）")
-    p.add_argument("--backend", default=os.environ.get("PET_BACKEND") or None,
-                   help="後端（大腦）網址，例如 http://192.0.2.100:8090；預設讀環境變數 PET_BACKEND，沒有就不接")
-    p.add_argument("--pet-id", default="seed-001", help="寵物 ID（後端存檔用）")
+    p.add_argument("--backend", default=backend_default,
+                   help="後端（大腦）網址，例如 http://192.0.2.100:8090；預設讀環境變數 PET_BACKEND_URL（舊名 PET_BACKEND 相容一版），沒有就不接")
+    p.add_argument("--pet-id", default=pet_id_default, help="寵物 ID（後端存檔用；預設讀 PET_PET_ID 或 seed-001）")
     p.add_argument("--backend-token", default="", help="後端 api_token（不建議：會出現在 ps；請用 --backend-token-file）")
-    p.add_argument("--backend-token-file", default=os.environ.get("PET_BACKEND_TOKEN_FILE") or None,
-                   help="從檔案讀後端 api_token（建議，例如 ~/.config/desktop-pet/backend-token，權限 600）；預設讀環境變數 PET_BACKEND_TOKEN_FILE")
+    p.add_argument("--backend-token-file", default=token_file_default,
+                   help="從檔案讀後端 api_token（建議，例如 ~/.config/desktop-pet/backend-token，權限 600）；預設讀 PET_BACKEND_TOKEN_FILE")
     p.add_argument("--camera", choices=["auto", "on", "off"], default="auto",
                    help="拍照能力模組 camera.snapshot（picam 的 client；auto = 有 picam socket 或 rpicam-still 才開）")
     p.add_argument("--camera-socket", default=DEFAULT_PICAM_SOCKET, help="相機常駐服務 picam 的 socket")
-    p.add_argument("--camera-pending-dir", default=None, help="上傳失敗的照片暫存資料夾（預設 ~/.local/share/desktop-pet/pending-photos）")
+    p.add_argument("--camera-pending-dir", default=pending_default, help="上傳失敗的照片暫存資料夾（預設讀 PET_CAMERA_PENDING_DIR 或 ~/.local/share/desktop-pet/pending-photos）")
     p.add_argument("--mirror", choices=["on", "off"], default="on",
                    help="網頁遙控的螢幕畫面同步（/screen.mjpg、/screen.jpg）")
     p.add_argument("--mirror-viewers", type=int, default=3, help="螢幕畫面同時觀看人數上限（預設 3）")
     p.add_argument("--font", default=None, help="對話框中文字型路徑（預設自動尋找）")
     p.add_argument("--wifi", choices=["auto", "on", "off"], default="auto",
                    help="網頁 Wi‑Fi 設定與自動重連（auto = 有 nmcli 和 Wi‑Fi 介面才開）")
-    p.add_argument("--wifi-iface", default="wlan0", help="要管理的 Wi‑Fi 介面（只動這個介面）")
+    p.add_argument("--wifi-iface", default=wifi_iface_default, help="要管理的 Wi‑Fi 介面（預設讀 PET_WIFI_IFACE 或 wlan0）")
     p.add_argument("--wifi-hotspot", choices=["on", "off"], default="on",
                    help="連不上已記錄的網路時開設定熱點（預設 on）")
     p.add_argument("--wifi-hotspot-ssid", default=HOTSPOT_SSID, help="設定熱點名稱")
@@ -79,7 +105,13 @@ def parse_args(argv=None):
     p.add_argument("--frames-socket", default=DEFAULT_FRAMES_SOCKET,
                    help="畫面供應 Unix socket 路徑（預設 /run/desktop-pet/frames.sock；off 關閉）")
     p.add_argument("-v", "--verbose", action="store_true")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    args._used_legacy_backend = used_legacy_backend and (args.backend == backend_default)
+    if args._used_legacy_backend:
+        logging.getLogger("main").warning("環境變數 PET_BACKEND 已改名為 PET_BACKEND_URL（舊名僅相容一版）")
+    if not args.backend:
+        logging.getLogger("main").warning("未設定後端（大腦）網址（PET_BACKEND_URL 或 --backend），以離線單機模式執行")
+    return args
 
 
 def make_sink(args, mirror=None, frames_server=None):
@@ -95,10 +127,14 @@ def make_sink(args, mirror=None, frames_server=None):
 
 
 def main(argv=None) -> int:
+    # 先觸發一次舊版 deploy.env 警告（若使用舊檔）
+    load_pi_env(warn_legacy=True)
     args = parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log = logging.getLogger("main")
+    if not args.backend:
+        log.warning("未設定後端（大腦）網址（PET_BACKEND_URL 或 --backend），以離線單機模式執行")
     overrides = {"idle_timeout": args.idle_timeout} if args.idle_timeout else None
     token = args.backend_token
     if args.backend_token_file:
@@ -125,8 +161,14 @@ def main(argv=None) -> int:
     sink = make_sink(args, mirror=mirror, frames_server=frames_server)
     pack_dir = args.pack
     if pack_dir == "auto":
-        pack_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs", app.renderer.skeleton.name)
-    pack = AnimationPack.try_load(pack_dir) if pack_dir and pack_dir != "none" else None
+        skel_name = app.renderer.skeleton.name
+        ext_pack = os.path.join(os.path.expanduser(DEFAULT_EXTERNAL_PACKS_DIR), skel_name)
+        repo_pack = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs", skel_name)
+        pack = AnimationPack.try_load(ext_pack) or AnimationPack.try_load(repo_pack)
+    elif pack_dir and pack_dir != "none":
+        pack = AnimationPack.try_load(os.path.expanduser(pack_dir))
+    else:
+        pack = None
     if args.pack not in ("auto", "none") and pack is None:
         log.warning("找不到動畫包 %s，改用即時繪圖", args.pack)
     driver = PackDriver(pack, app, sink, quality=args.jpeg_quality) if pack else None

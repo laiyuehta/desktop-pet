@@ -13,7 +13,7 @@
 5. **規格**先走 `spec/` PR 給使用者核准，實作 PR 再引用那個規格版本或 PR。
 6. **不要 force push、不要改寫歷史**。分支推上去以後，要跟上 main 就 merge main 進來，不要 rebase。
 7. **負責範圍**看 `.github/CODEOWNERS`；改到別人負責的路徑要在 PR 標出來，請負責的人確認。
-8. **不要放進 repo**：密碼、token、正式網址、區網 IP、Wi‑Fi 名稱、Windows 使用者路徑、照片、`deploy.env`、`backend/config.json`。CI 會掃。
+8. **不要放進 repo**：密碼、token、正式網址、區網 IP、Wi‑Fi 名稱、Windows 使用者路徑、照片、`deploy.env`、`/etc/desktop-pet/env`、`backend/config.json`。CI 會掃。新增的設定值一律做成環境變數並補進 `deploy.env.example`（見 PROPOSAL.md 16.2）。
 
 本機測試：`python -m pip install -r requirements.txt pytest && python -m pytest -q`（遙控頁的 script 測試需要 node）。
 

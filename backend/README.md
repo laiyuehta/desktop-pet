@@ -59,10 +59,21 @@ python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 網頁遙控（`http://192.0.2.43:8080/`）多了「跟寵物說話」輸入框；寵物說的話會以對話框顯示在螢幕上。
 對話框需要中文字型：`sudo apt install fonts-wqy-microhei`（小）或 `fonts-noto-cjk`，也可以用 `--font 路徑` 指定。
 
-## 設定（backend/config.example.json ＋ 本機 backend/config.json）
+## 設定（環境變數與環境檔 ＋ config.json ＋ config.example.json）
 
-repo 只放預設值 `config.example.json`。實際設定（例如 `server.api_token`）寫在本機的 `backend/config.json`（已列入 `.gitignore`，不會進 repo），
-可以只寫要改的欄位，例如 `{"server": {"api_token": "..."}}`；後端啟動時先讀 example 再疊上本機 config.json。程式不會建立、覆蓋或刪除 config.json。
+設定讀取依四層優先順序（高 → 低，詳見 [PROPOSAL.md 16.2](../PROPOSAL.md#162-環境變數與設定的優先順序)）：
+
+1. **命令列參數**：`--config`、`--host`、`--port`
+2. **環境變數與環境檔**：程序環境變數優先於環境檔 `%LOCALAPPDATA%\desktop-pet\env`（可用 `PET_ENV_FILE` 指定路徑；格式為 `KEY=VALUE`，支援 `%LOCALAPPDATA%` 展開，範本見 `deploy.env.example`）：
+   - `PET_BACKEND_HOST` / `PET_BACKEND_PORT`：覆寫 `server.host` / `server.port`（`start_hidden.cmd` 與 `supervise.py` 也會讀 `PET_BACKEND_PORT` 與 `PET_SUPERVISOR_LOCK_PORT`）
+   - `PET_BACKEND_CONFIG`：指定本機 `config.json` 路徑（例如 `%LOCALAPPDATA%\desktop-pet\config\config.json`）
+   - `PET_BACKEND_DATA_DIR`：覆寫 `data_dir`（例如 `%LOCALAPPDATA%\desktop-pet\data`，讓存檔與照片放在版本目錄外）
+   - `PET_BACKEND_LOG_DIR`：`supervise.py` 與 `start_hidden.cmd` 的日誌資料夾（預設為 repo 根目錄）
+   - `PET_BACKEND_API_TOKEN_FILE`：從檔案讀取 `server.api_token`（機密只放檔案，不直接寫在環境檔）
+   - `PET_LLM_LOCAL_URL` / `PET_LLM_LOCAL_MODEL`：覆寫 `llm.local.base_url` / `llm.local.model`
+   - `PET_CONSOLE_LISTEN`：控制頁監聽位址（`console.listen`）
+3. **本機 `config.json`**：讀 `PET_BACKEND_CONFIG` 指定的路徑，未設則讀 `backend/config.json`（已列入 `.gitignore`，不會進 repo）。可以只寫要改的欄位，例如 `{"server": {"api_token": "..."}}`。
+4. **內建預設 `backend/config.example.json`**：repo 裡的預設範本。程式只讀不寫，不會建立、覆蓋或刪除任何設定檔。
 
 | 欄位 | 說明 |
 |---|---|

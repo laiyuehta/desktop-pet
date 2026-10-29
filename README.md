@@ -7,9 +7,7 @@
 
 ![示範動畫](preview/demo.gif)
 
-**部署到自己的裝置**：repo 裡的 service／polkit 檔只有佔位（`@USER@`、`@HOME@`、`@BACKEND_URL@`）。先 `cp deploy.env.example deploy.env`
-並填入實際值（`deploy.env` 不進 repo），再跑各自的 `install.sh`。後端的實際設定寫在本機 `backend/config.json`（不進 repo，預設值見
-`backend/config.example.json`）。授權：程式碼 MIT、assets/ 為 CC BY-NC 4.0（見下方〈[授權](#授權)〉）。
+**部署到自己的裝置**：repo 裡的 service／polkit 檔只有佔位（`@USER@`、`@HOME@`）。Pi 端將 `deploy.env.example` 複製到 `/etc/desktop-pet/env`（權限 `root:<使用者> 0640`；過渡期也相容 repo 根目錄的 `deploy.env`）並填入實際值，再跑各自的 `install.sh`；執行期設定由 systemd `EnvironmentFile=-/etc/desktop-pet/env` 或 Python 載入（優先順序：命令列參數 > 環境變數 > 環境檔 > 內建預設，見 [PROPOSAL.md 16.2](PROPOSAL.md#162-環境變數與設定的優先順序)）。後端（R7）的環境檔放在 `%LOCALAPPDATA%\desktop-pet\env`，本機設定檔可放 `%LOCALAPPDATA%\desktop-pet\config\config.json` 或 `backend/config.json`（不進 repo，預設值見 `backend/config.example.json`）。授權：程式碼 MIT、assets/ 為 CC BY-NC 4.0（見下方〈[授權](#授權)〉）。
 
 ## 目前進度（第一版程式原型 v0.1）
 
@@ -61,7 +59,7 @@ python3 tools/bench.py --pack packs/seed               # 量播放成本
 python3 main.py --sink piscreen --input web --web 0.0.0.0:8080 --pack packs/seed
 ```
 
-- `--pack auto`（預設）：`packs/<骨架名稱>/` 存在就播動畫包，沒有就即時繪圖；`--pack none` 強制即時繪圖。
+- `--pack auto`（預設，或由 `PET_PACK_DIR` 指定）：先找 `~/.local/share/desktop-pet/packs/<骨架名稱>/`，再找 `packs/<骨架名稱>/`，存在就播動畫包，沒有就即時繪圖；`--pack none` 強制即時繪圖。
 - fps 預設跟動畫包一樣（20）；即時繪圖模式在 Pi 3B 只有 10~14 fps（`python3 tools/bench.py --stages` 可看各段毫秒）。
 
 - 手機或電腦開 `http://192.0.2.43:8080/` 就是網頁遙控。
