@@ -1,0 +1,5 @@
+# 交叉編譯給 Pi 3B（64-bit PiOS，aarch64-unknown-linux-musl 靜態執行檔）
+# 使用 rust 內附的 rust-lld 與自含 musl CRT，不依賴目標機器的 glibc 版本。
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-self-contained=yes"]

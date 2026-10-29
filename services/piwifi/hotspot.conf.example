@@ -1,0 +1,13 @@
+# /etc/piwifi/hotspot.conf
+#
+# piwifi 救援熱點（pi-hotspot）設定範本
+# 建議權限：chown root:piwifi /etc/piwifi/hotspot.conf && chmod 0640 /etc/piwifi/hotspot.conf
+#
+# 注意：請勿將真實密碼提交至 Git 版本控制。
+# install.sh 首次安裝時若 /etc/piwifi/hotspot.conf 不存在，會自動建立並隨機產生密碼。
+
+# 救援熱點廣播名稱（1..32 bytes，留空則預設為 DesktopPet-<主機後四碼>）
+SSID=DesktopPet-Setup
+
+# WPA2-PSK 密碼（8..63 字元）
+PASSPHRASE=CHANGE_ME_AT_INSTALL

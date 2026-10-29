@@ -1,0 +1,33 @@
+# /etc/systemd/system/piwifi.service
+#
+# piwifi — Raspberry Pi Wi-Fi 與救援熱點守護程式（Rust）
+# 由 install.sh 將 @USER@ 替換為目標系統使用者名稱後安裝至 /etc/systemd/system/piwifi.service
+
+[Unit]
+Description=Desktop Pet Wi-Fi & Rescue Hotspot Daemon (piwifi)
+After=NetworkManager.service
+Wants=NetworkManager.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=piwifi
+Group=@USER@
+RuntimeDirectory=piwifi
+RuntimeDirectoryMode=0755
+Environment=PIWIFI_SOCKET=/run/piwifi/piwifi.sock
+Environment=PIWIFI_STATUS_FILE=/run/piwifi/status.json
+Environment=PIWIFI_HOTSPOT_CONF=/etc/piwifi/hotspot.conf
+ExecStart=/usr/local/bin/piwifi daemon
+Restart=always
+RestartSec=2
+
+# 權限最小化與沙盒防護（需透過 D-Bus / polkit 與 NetworkManager 通訊）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/piwifi
+
+[Install]
+WantedBy=multi-user.target
