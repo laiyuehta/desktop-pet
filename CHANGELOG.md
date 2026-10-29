@@ -6,6 +6,7 @@
 ## [未發佈]
 
 ### 新增
+- 前後端連線安全與 API 金鑰（#32）：依 PROPOSAL v2.7 實作「每台裝置一把金鑰、綁定 pet_ids」安全架構，後端設定僅存 SHA-256 雜湊；新增 `python -m backend.keys` CLI 工具（支援 new、list、enable、disable、revoke，金鑰寫入 0600 檔案且不印出至螢幕）；後端 `/v1/*` 端點強制要求 `X-Pet-Token`，以 `hmac.compare_digest` 進行常數時間比對避免時序攻擊；落實「沒設定就不開放」（無金鑰回 503，`insecure_dev` 僅限綁定 127.0.0.1）；公開 `/health` 精簡為只回 `{"ok": true}`，詳細指標移至 `GET /v1/health`；實作記憶體安全守護（每金鑰 120/分、照片 10/分、同 IP 5 分鐘錯 10 次鎖 15 分鐘、全域錯誤上限、信任反向代理 `X-Forwarded-For`、錯誤嘗試聚合記錄）；連線逾時 15 秒、最多 32 條連線、標頭單行上限 8 KB、非法 Content-Length 回 400；Pi 端客戶端非 HTTPS 且非私有 IP/localhost 時拒送金鑰（可由 `--allow-insecure-lan` 放行），收到 401 自動重新讀取金鑰檔重試。
 - 情緒強度狀態接上主程式（#19）：`config/states.json` 新增 `emotions` 設定（上限等級、`sleep` 僅接受 `surprised`、觸控時間窗與次數）；`pet/app.py` 支援 `emotion_*` 觸發、同系列升級到上限並重設計時器、`pat`（`happy_1..3`）與 `poke`（`surprised_1` → 連戳進 `annoyed_1..2`）輸入對應；`pet/backend_client.py` 支援 `emotion` 指令帶 `level` 切換狀態（未帶 `level` 維持只換眼睛）；`backend/mood.py` 依心情值決定摸頭起始等級；`pet/web/remote.html` 改由 `/status` 動態產生全部狀態按鈕。
 - `services/piwifi/`：Rust 實作的 Wi‑Fi 與救援熱點守護程式（Protocol v1 `/run/piwifi/piwifi.sock`、`/run/piwifi/status.json`、`--observe` 唯讀觀察模式、CLI 除錯子指令、假 `nmcli` 測試、`aarch64-unknown-linux-musl` 交叉編譯與 CI `rust (piwifi)` 檢查）。
 - 拆出前端後台 desktop-pet-admin（#6）：獨立 Python 程式提供管理網頁（:8080）與 Wi‑Fi 管理；桌寵主程式新增 control.sock 與 frames.sock 接口，主程式重啟時網頁與救援熱點不中斷。

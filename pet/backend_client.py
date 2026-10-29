@@ -12,19 +12,47 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
 import queue
+import socket
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .events import make_event
 
 log = logging.getLogger("pet.backend")
+
+
+def is_safe_for_insecure_token(url: str, allow_insecure_lan: bool = False) -> bool:
+    """檢查目標後端網址是否安全可送出金鑰（HTTPS、localhost 或 RFC 1918 私有 IP）。"""
+    if allow_insecure_lan:
+        return True
+    try:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme == "https":
+            return True
+        host = parsed.hostname or ""
+        if not host:
+            return True
+        if host.lower() in ("localhost", "127.0.0.1", "::1"):
+            return True
+        try:
+            ip = ipaddress.ip_address(host)
+            return ip.is_private or ip.is_loopback
+        except ValueError:
+            pass
+        addr = socket.gethostbyname(host)
+        ip = ipaddress.ip_address(addr)
+        return ip.is_private or ip.is_loopback
+    except Exception:
+        return False
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -155,7 +183,9 @@ class BackendClient:
                  status_fn: Optional[Callable[[], dict]] = None, timeout: float = 2.0,
                  talk_timeout: float = 15.0, token: str = "", heartbeat_s: float = 60.0,
                  queue_size: int = 32, backoff_max: float = 60.0,
-                 max_levels: Optional[Dict[str, int]] = None):
+                 max_levels: Optional[Dict[str, int]] = None,
+                 token_file: Optional[str] = None,
+                 allow_insecure_lan: bool = False):
         self.base_url = base_url.rstrip("/")
         self.pet_id = pet_id
         self.publish = publish
@@ -163,6 +193,8 @@ class BackendClient:
         self.timeout = timeout
         self.talk_timeout = talk_timeout
         self.token = token
+        self.token_file = token_file
+        self.allow_insecure_lan = allow_insecure_lan
         self.heartbeat_s = heartbeat_s
         self.q: "queue.Queue[dict]" = queue.Queue(maxsize=queue_size)
         self.online: Optional[bool] = None
@@ -219,14 +251,34 @@ class BackendClient:
                 "queued": self.q.qsize()}
 
     # -- 背景執行緒 -----------------------------------------------------------------
-    def _post(self, path: str, body: dict, timeout: float) -> dict:
+    def _post_request(self, path: str, body: dict, timeout: float, token: str) -> dict:
         headers = {"Content-Type": "application/json"}
-        if self.token:
-            headers["X-Pet-Token"] = self.token
+        if token and is_safe_for_insecure_token(self.base_url, self.allow_insecure_lan):
+            headers["X-Pet-Token"] = token
+        elif token:
+            log.warning("非 HTTPS 且非私有 IP/localhost，拒絕送出金鑰（可設定 --allow-insecure-lan 放行）：%s", self.base_url)
         req = urllib.request.Request(self.base_url + path, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
                                      headers=headers, method="POST")
         with _OPENER.open(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
+
+    def _post(self, path: str, body: dict, timeout: float) -> dict:
+        try:
+            return self._post_request(path, body, timeout, self.token)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401 and self.token_file:
+                try:
+                    exp_path = os.path.expanduser(self.token_file)
+                    if os.path.isfile(exp_path):
+                        with open(exp_path, "r", encoding="utf-8") as fh:
+                            new_tok = fh.read().strip()
+                        if new_tok and new_tok != self.token:
+                            log.info("收到 401，已自 %s 重新載入新金鑰並重試一次", exp_path)
+                            self.token = new_tok
+                            return self._post_request(path, body, timeout, self.token)
+                except Exception as read_exc:
+                    log.warning("重新讀取金鑰檔失敗：%s", read_exc)
+            raise
 
     def _mark(self, ok: bool, err: Optional[str] = None) -> None:
         if ok:

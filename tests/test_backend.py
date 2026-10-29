@@ -23,11 +23,15 @@ from backend.store import PetStore, atomic_write_json  # noqa: E402
 
 def make_cfg(tmp, base_url, **extra):
     over = {"data_dir": tmp,
+            "server": {"insecure_dev": True},
             "llm": {"local": {"base_url": base_url, "model": "fake", "timeout_s": 2, "retries": 1},
                     "health_cache_s": 0},
             "chatter": {"enabled": False}}
+    if "server" in extra:
+        over["server"].update(extra["server"])
     for k, v in extra.items():
-        over[k] = v
+        if k != "server":
+            over[k] = v
     return load_config(overrides=over)
 
 
