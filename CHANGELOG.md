@@ -17,6 +17,7 @@
 - `.github/CODEOWNERS`、PR 範本、Issue 範本（Bug、任務）、`CONTRIBUTING.md`。
 
 ### 變更
+- 狀態機與後端情緒等級重構（#23）：`pet/backend_client.py` 的情緒最高等級改由 `config/states.json`（`emotions.levels`）單一來源載入；`pet/state_machine.py` 新增 `reset_input_timers()` 公開方法，`pet/app.py` 不再直接存取私有 `_timers` 欄位。
 - `pet/baker.py`、`pet/pack.py`：動畫包替所有狀態配對烘焙過渡片段（16 個狀態 × 15 = 240 組），未烘到的轉移在切換點或非循環片段結尾直接退回目標狀態第 0 格播放（#18）。
 - `services/piwifi/`：`piwifi.service` 狀態檔環境變數對齊為 `PIWIFI_STATUS`（程式同時相容 `PIWIFI_STATUS_FILE`），`README.md` 硬體目標修正為 Pi 3B 並補上實測 RSS（約 0.8 MB）。
 - `desktop-pet-admin` 無觀看者時取消 `frames.sock` 訂閱以降低主程式與後台閒置 CPU；有人觀看時再以 20 fps 訂閱，且 `/screen.jpg` 與 `/screen.info` 在無訂閱時直接以 `latest` 取得最新畫面（#11）。

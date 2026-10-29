@@ -93,6 +93,12 @@ class StateMachine:
         return self.table.get((state, event_name)) or self.table.get(("*", event_name))
 
     # -- 計時 ------------------------------------------------------------------
+    def reset_input_timers(self) -> None:
+        """重設所有標記為 reset_on_input 的計時器（互動事件時呼叫）。"""
+        for t in self._timers:
+            if t["reset_on_input"]:
+                t["elapsed"], t["fired"] = 0.0, False
+
     def _reset_timers(self) -> None:
         self._timers = []
         for t in self.states[self.state].get("timers", []):
@@ -124,9 +130,7 @@ class StateMachine:
             return None   # 過期的計時事件（狀態已經換了）
         self.last_event = ev
         if ev.get("type") in INTERACTION_TYPES:
-            for t in self._timers:
-                if t["reset_on_input"]:
-                    t["elapsed"], t["fired"] = 0.0, False
+            self.reset_input_timers()
         nxt = self.lookup(self.state, name)
         if nxt is None:
             return None
