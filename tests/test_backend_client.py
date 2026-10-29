@@ -102,6 +102,78 @@ class DirectiveConversionTest(unittest.TestCase):
         self.assertEqual(EMOTION_MAX_LEVEL, expected)
         self.assertEqual(load_emotion_levels(), expected)
 
+    def test_directive_with_custom_max_levels(self):
+        custom = {"happy": 2, "custom": 3}
+        e_capped = directive_to_event({"type": "emotion", "emotion": "happy", "level": 3}, max_levels=custom)
+        self.assertEqual((e_capped["type"], e_capped["name"], e_capped["state"]), ("control", "set_state", "happy_2"))
+        e_custom = directive_to_event({"type": "emotion", "emotion": "custom", "level": 2}, max_levels=custom)
+        self.assertEqual((e_custom["type"], e_custom["name"], e_custom["state"]), ("control", "set_state", "custom_2"))
+        self.assertIsNone(directive_to_event({"type": "emotion", "emotion": "custom", "level": 2}))
+
+    def test_load_emotion_levels_failure_logs_warning(self):
+        from pet.backend_client import load_emotion_levels
+        with self.assertLogs("pet.backend", level="WARNING") as cm:
+            res = load_emotion_levels("/non/existent/path/states.json")
+            self.assertEqual(res, {})
+            self.assertTrue(any("載入情緒等級設定失敗" in msg for msg in cm.output))
+
+        tmp = tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8")
+        try:
+            tmp.write("{corrupt_json")
+            tmp.close()
+            with self.assertLogs("pet.backend", level="WARNING") as cm:
+                res = load_emotion_levels(tmp.name)
+                self.assertEqual(res, {})
+                self.assertTrue(any("載入情緒等級設定失敗" in msg for msg in cm.output))
+        finally:
+            os.unlink(tmp.name)
+
+        # JSON 有效但無 emotions.levels 時，回傳 {} 且輸出 warning（必修 3）
+        tmp_no_levels = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+        try:
+            json.dump({"states": {"idle": {}}}, tmp_no_levels)
+            tmp_no_levels.close()
+            with self.assertLogs("pet.backend", level="WARNING") as cm:
+                res = load_emotion_levels(tmp_no_levels.name)
+                self.assertEqual(res, {})
+                self.assertTrue(any("未設定 emotions.levels" in msg for msg in cm.output))
+        finally:
+            os.unlink(tmp_no_levels.name)
+
+    def test_pet_config_environment_variable_override(self):
+        from pet.backend_client import load_emotion_levels, get_default_emotion_levels
+        import pet.backend_client as bc
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+        try:
+            json.dump({"emotions": {"levels": {"env_mood": 4}}}, tmp)
+            tmp.close()
+            old = os.environ.get("PET_CONFIG")
+            try:
+                os.environ["PET_CONFIG"] = tmp.name
+                self.assertEqual(load_emotion_levels(), {"env_mood": 4})
+                self.assertEqual(get_default_emotion_levels(), {"env_mood": 4})
+                self.assertEqual(bc.EMOTION_MAX_LEVEL, {"env_mood": 4})
+            finally:
+                if old is not None:
+                    os.environ["PET_CONFIG"] = old
+                else:
+                    os.environ.pop("PET_CONFIG", None)
+        finally:
+            os.unlink(tmp.name)
+
+    def test_get_default_emotion_levels_caches_result(self):
+        from pet.backend_client import get_default_emotion_levels, emotion_state_name
+        import pet.backend_client as bc
+        bc._DEFAULT_LEVELS_CACHE = None
+        levels1 = get_default_emotion_levels()
+        levels2 = get_default_emotion_levels()
+        self.assertIs(levels1, levels2)
+        # emotion_state_name 在 max_levels is None 時使用快取，不重複讀檔
+        st1 = emotion_state_name("happy", 2)
+        st2 = emotion_state_name("happy", 2)
+        self.assertEqual(st1, "happy_2")
+        self.assertEqual(st2, "happy_2")
+
 
 class DeviceBackendTest(unittest.TestCase):
     def test_directives_applied_through_app(self):
@@ -228,6 +300,94 @@ class DeviceBackendTest(unittest.TestCase):
         app.step(0.05)
         self.assertEqual(app.renderer.bubble.text, "（還沒接上大腦）")
         self.assertIsNone(app.status()["backend"])
+
+    def test_backend_client_max_levels_passed_from_app_config(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "config", "states.json"), encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        cfg["emotions"]["levels"] = {"custom_emo": 2, "happy": 1}
+        cfg["emotions"].setdefault("accept", {}).setdefault("*", []).append("custom_emo")
+        cfg["states"]["custom_emo_1"] = dict(cfg["states"]["happy_1"])
+        cfg["states"]["custom_emo_2"] = dict(cfg["states"]["happy_2"])
+
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+        try:
+            json.dump(cfg, tmp, ensure_ascii=False)
+            tmp.close()
+            app = PetApp(config_path=tmp.name, use_clock=False, eye_seed=0,
+                         backend_url="http://127.0.0.1:9999", backend_opts={"heartbeat_s": 0})
+            try:
+                self.assertIsNotNone(app.backend)
+                self.assertEqual(app.backend.max_levels, {"custom_emo": 2, "happy": 1})
+
+                events = []
+                app.bus.subscribe("control", events.append, owner="test")
+                app.backend.apply([{"type": "emotion", "emotion": "custom_emo", "level": 2}])
+                app.bus.dispatch_pending()
+                self.assertTrue(any(ev.get("state") == "custom_emo_2" for ev in events))
+                self.assertEqual(app.fsm.state, "custom_emo_2")
+
+                # happy 上限為 1，level 3 應被截斷為 happy（單一等級不加 _1）
+                app.backend.apply([{"type": "emotion", "emotion": "happy", "level": 3}])
+                app.bus.dispatch_pending()
+                self.assertTrue(any(ev.get("state") == "happy" for ev in events))
+                self.assertEqual(app.fsm.state, "happy")
+            finally:
+                app.stop()
+        finally:
+            os.unlink(tmp.name)
+
+    def test_app_without_emotions_falls_back_with_warning(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "config", "states.json"), encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        del cfg["emotions"]
+
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+        try:
+            json.dump(cfg, tmp, ensure_ascii=False)
+            tmp.close()
+            with self.assertLogs("pet.app", level="WARNING") as cm:
+                app = PetApp(config_path=tmp.name, use_clock=False, eye_seed=0,
+                             backend_url="http://127.0.0.1:9999", backend_opts={"heartbeat_s": 0})
+            try:
+                self.assertTrue(any("未設定 emotions.levels" in msg for msg in cm.output))
+                self.assertIsNone(app.backend.max_levels)
+
+                # apply 帶等級的情緒指令退回預設等級，不會回傳 0 且被丟掉
+                applied = app.backend.apply([{"type": "emotion", "emotion": "happy", "level": 2}])
+                self.assertEqual(applied, 1)
+                app.bus.dispatch_pending()
+                # 驗證 FSM 最終狀態切換至 happy_2
+                self.assertEqual(app.fsm.state, "happy_2")
+            finally:
+                app.stop()
+        finally:
+            os.unlink(tmp.name)
+
+    def test_sleep_rejects_happy_emotion_directive(self):
+        fb = FakeBackend([{"type": "emotion", "emotion": "happy", "level": 2}])
+        app = make_app(fb.url)
+        try:
+            app.fsm.force("sleep")
+            self.assertEqual(app.fsm.state, "sleep")
+            app.backend.apply([{"type": "emotion", "emotion": "happy", "level": 2}])
+            app.bus.dispatch_pending()
+            # sleep 中不接受 happy（只接受 surprised），必須維持 sleep
+            self.assertEqual(app.fsm.state, "sleep")
+        finally:
+            app.stop()
+            fb.close()
+
+    def test_backend_client_direct_instantiation(self):
+        from pet.backend_client import BackendClient
+        events = []
+        client = BackendClient("http://127.0.0.1:9999", "pet-1", events.append,
+                               max_levels={"custom": 2})
+        self.assertEqual(client.max_levels, {"custom": 2})
+        client.apply([{"type": "emotion", "emotion": "custom", "level": 2}])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["state"], "custom_2")
 
 
 if __name__ == "__main__":

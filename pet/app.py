@@ -65,8 +65,13 @@ class PetApp:
         self.backend = None
         if backend_url:
             from .backend_client import BackendClient
+            backend_kwargs = dict(backend_opts or {})
+            levels = self._emotion_levels()
+            if levels is None:
+                log.warning("設定檔未設定 emotions.levels，後端情緒等級退回預設設定")
+            backend_kwargs.setdefault("max_levels", levels)
             self.backend = BackendClient(backend_url, pet_id, self.bus.publish, status_fn=self.status,
-                                         token=backend_token, **(backend_opts or {}))
+                                         token=backend_token, **backend_kwargs)
             _ = self.renderer.bubble     # 先載入中文字型，避免第一次說話時卡一下
 
         self.fsm.state_listeners.append(self._on_state_change)
@@ -129,9 +134,18 @@ class PetApp:
         if t == "control":
             try:
                 if ev.get("name") == "set_state":
-                    if ev.get("emotion"):
-                        self.trigger_emotion(str(ev["emotion"]), ev.get("level"),
-                                             source=ev.get("source", "control"), escalate=False)
+                    emo = ev.get("emotion")
+                    if emo:
+                        levels = self._emotion_levels() or {}
+                        emo_str = str(emo)
+                        if emo_str in levels:
+                            if self._can_enter_emotion(emo_str):
+                                self.trigger_emotion(emo_str, ev.get("level"),
+                                                     source=ev.get("source", "control"), escalate=False)
+                            else:
+                                log.info("目前狀態 %s 不接受情緒指令 %s，忽略", self.fsm.state, emo_str)
+                        elif ev.get("state") in self.fsm.states:
+                            self.fsm.force(ev["state"], reason=ev.get("source", "control"))
                     else:
                         self.fsm.force(ev["state"], reason=ev.get("source", "control"))
                 elif ev.get("name") == "set_stage":
@@ -150,11 +164,14 @@ class PetApp:
             self._forward(ev)
 
     # -- 情緒強度狀態（觸發、升級、輸入對應）--------------------------------------
-    def _emotion_levels(self) -> Dict[str, int]:
-        return {str(k): int(v) for k, v in self.emotion_cfg.get("levels", {}).items()}
+    def _emotion_levels(self) -> Optional[Dict[str, int]]:
+        raw = self.emotion_cfg.get("levels")
+        if not raw:
+            return None
+        return {str(k): int(v) for k, v in raw.items()}
 
     def _parse_emotion_state(self, state: str) -> Tuple[Optional[str], int]:
-        levels = self._emotion_levels()
+        levels = self._emotion_levels() or {}
         if state in levels and levels[state] == 1:
             return state, 1
         if "_" in state:
@@ -164,7 +181,7 @@ class PetApp:
         return None, 0
 
     def _emotion_state_name(self, emotion: str, level: int) -> Optional[str]:
-        levels = self._emotion_levels()
+        levels = self._emotion_levels() or {}
         if emotion not in levels:
             return None
         max_lv = levels[emotion]
@@ -174,13 +191,13 @@ class PetApp:
 
     def _can_enter_emotion(self, emotion: str) -> bool:
         accept = self.emotion_cfg.get("accept", {})
-        allowed = accept.get(self.fsm.state, accept.get("*", list(self._emotion_levels())))
+        allowed = accept.get(self.fsm.state, accept.get("*", list(self._emotion_levels() or {})))
         return emotion in allowed
 
     def trigger_emotion(self, emotion: str, level: Optional[Any] = None, source: str = "emotion",
                         escalate: bool = True) -> Optional[str]:
         """依情緒與等級切換到對應狀態；同類情緒狀態下再收到事件會升級（到上限為止並重設計時器）。"""
-        levels = self._emotion_levels()
+        levels = self._emotion_levels() or {}
         if emotion not in levels or not self._can_enter_emotion(emotion):
             return None
         max_lv = levels[emotion]
@@ -201,7 +218,7 @@ class PetApp:
 
     def _handle_emotion_event(self, ev: dict) -> bool:
         name = str(ev.get("name") or "")
-        levels = self._emotion_levels()
+        levels = self._emotion_levels() or {}
         if not levels:
             return False
 
