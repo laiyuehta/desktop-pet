@@ -203,15 +203,21 @@ class EmotionAppIntegrationTest(unittest.TestCase):
             app.step(0.05)
             self.assertEqual(app.fsm.state, "sleep", ignored)
 
-        # 睡覺時被摸頭也不會進入 happy_*
-        app.post(make_event("touch", "pat"))
-        app.step(0.05)
-        self.assertEqual(app.fsm.state, "sleep")
-
         # 睡覺時收到 surprised 會被吵醒進入 surprised_*
         app.post(make_event("sim", "emotion_surprised", level=2))
         app.step(0.05)
         self.assertEqual(app.fsm.state, "surprised_2")
+
+        # 睡覺時被摸頭會照轉移規則叫醒到 idle（而非卡在 sleep），醒來後再摸進 happy_1
+        app.post(make_event("control", "set_state", state="sleep"))
+        app.step(0.05)
+        self.assertEqual(app.fsm.state, "sleep")
+        app.post(make_event("touch", "pat"))
+        app.step(0.05)
+        self.assertEqual(app.fsm.state, "idle")
+        app.post(make_event("touch", "pat"))
+        app.step(0.05)
+        self.assertEqual(app.fsm.state, "happy_1")
 
     def test_pat_and_poke_input_mapping_and_window(self):
         app = PetApp(use_clock=False, eye_seed=0)
