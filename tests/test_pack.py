@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PIL import Image  # noqa: E402
 
 from pet.app import PetApp  # noqa: E402
-from pet.baker import bake  # noqa: E402
+from pet.baker import bake, transition_pairs  # noqa: E402
 from pet.events import make_event  # noqa: E402
 from pet.outputs import PiscreenSink  # noqa: E402
 from pet.outputs.base import OutputSink  # noqa: E402
@@ -294,6 +294,77 @@ class PlayerTest(unittest.TestCase):
 
     def test_try_load_missing(self):
         self.assertIsNone(AnimationPack.try_load(os.path.join(self.d, "nope")))
+
+    def test_unbaked_transition_from_non_looping_clip_never_gets_stuck(self):
+        pk = make_fake_pack(self.d, {"sad_1": {"n": 3, "cuts": [0]}, "shy": {"n": 4, "cuts": [0]}})
+        pk.clips["sad_1/base"]["loop"] = False
+        p = PackPlayer(pk)
+        self.assertEqual(p.next("sad_1"), ("sad_1/base", 0))
+        self.assertEqual(p.next("sad_1"), ("sad_1/base", 1))
+        self.assertEqual(p.next("shy"), ("sad_1/base", 2))
+        self.assertEqual(p.next("shy"), ("shy/base", 0))
+        pk.close()
+
+
+class TransitionBakeTest(unittest.TestCase):
+    """驗證所有狀態配對皆產生過渡片段（16 個狀態 × 15 = 240 組），播放器在缺少轉移片段時退回第 0 格。"""
+
+    def test_transition_pairs_generates_all_pairs(self):
+        with open(os.path.join(ROOT, "config", "states.json"), encoding="utf-8") as fh:
+            sc = json.load(fh)
+        states = list(sc["states"])
+        self.assertEqual(len(states), 16)
+        pairs = transition_pairs(sc, states)
+        self.assertEqual(len(pairs), 16 * 15)
+
+        for a in states:
+            for b in states:
+                if a != b:
+                    self.assertIn((a, b), pairs)
+                else:
+                    self.assertNotIn((a, b), pairs)
+
+    def test_bake_generates_all_pairs_and_player_falls_back_when_missing(self):
+        d = tempfile.mkdtemp()
+        try:
+            out = os.path.join(d, "seed")
+            selected = ["idle", "bored", "sad_1"]
+            m = bake(out, only_states=selected, fps=5, expressions=[],
+                     preview=False, log=lambda *_: None)
+            tr = m["transitions"]
+            for a in selected:
+                for b in selected:
+                    if a != b:
+                        self.assertIn(f"{a}>{b}", tr)
+
+            pk = AnimationPack(out)
+            try:
+                p = PackPlayer(pk, rng=random.Random(0))
+                # 有烘過渡片段：idle -> sad_1
+                self.assertEqual(p.next("idle")[1], 0)
+                clip, idx = p.next("sad_1")
+                self.assertTrue(clip.startswith("trans/idle>sad_1@"))
+                self.assertEqual(idx, 0)
+                while p.mode == "trans":
+                    clip, idx = p.next("sad_1")
+                self.assertEqual(p.state, "sad_1")
+
+                # 若手動構造缺少過渡片段的 pack，在切換點直接退回第 0 格開始播
+                pk_incomplete = make_fake_pack(d, {"sad_1": {"n": 4, "cuts": [0, 2]}, "sleep": {"n": 3}})
+                try:
+                    p2 = PackPlayer(pk_incomplete)
+                    self.assertEqual(p2.next("sad_1"), ("sad_1/base", 0))
+                    self.assertEqual(p2.next("sad_1"), ("sad_1/base", 1))
+                    # 在非切換點第 1 格切換：播到下一個切換點第 2 格後退回 sleep 第 0 格
+                    self.assertEqual(p2.next("sleep"), ("sad_1/base", 2))
+                    self.assertEqual(p2.next("sleep"), ("sleep/base", 0))
+                    self.assertEqual(p2.state, "sleep")
+                finally:
+                    pk_incomplete.close()
+            finally:
+                pk.close()
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 class StateChangeTimestampTest(unittest.TestCase):

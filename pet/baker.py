@@ -20,7 +20,7 @@ import math
 import os
 import time
 from dataclasses import replace
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from PIL import Image
 
@@ -31,6 +31,12 @@ from .skeleton import Skeleton
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE_FILES = ["pet/skeleton.py", "pet/renderer.py", "pet/eyes.py", "pet/baker.py"]
+
+
+def transition_pairs(sc: dict, states: Optional[Iterable[str]] = None) -> Set[Tuple[str, str]]:
+    """產生所有狀態之間的轉移配對（每個來源狀態到除自己以外的每個目標狀態）。"""
+    state_list = list(sc.get("states", {}) if states is None else states)
+    return {(a, b) for a in state_list for b in state_list if a != b}
 
 
 def encode(img: Image.Image, quality: int) -> bytes:
@@ -227,10 +233,11 @@ def bake(out_dir: str, bake_cfg: Optional[str] = None, states_cfg: Optional[str]
 
     trans_out: Dict[str, Dict[str, dict]] = {}
     if do_trans:
+        allowed_pairs = transition_pairs(sc, list(plan))
         n_tr = 0
         for a_name, A in plan.items():
             for b_name, B in plan.items():
-                if a_name == b_name:
+                if (a_name, b_name) not in allowed_pairs:
                     continue
                 anims = sk.animations
                 fade = max(c for c in (renderer.player.fade, anims[B["anim"]].fade_in, anims[A["anim"]].fade_out)

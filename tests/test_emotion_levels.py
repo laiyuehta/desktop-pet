@@ -139,17 +139,20 @@ PACK = os.path.join(ROOT, "packs", "seed")
 
 @unittest.skipUnless(os.path.exists(os.path.join(PACK, "manifest.json")), "沒有 packs/seed（先跑 tools/bake.py）")
 class EmotionFullPackTest(unittest.TestCase):
-    """tools/bake.py 產生的完整動畫包：新狀態都在、都有回 idle 的過渡片段。"""
+    """tools/bake.py 產生的完整動畫包：新狀態都在、16 個狀態的 240 組過渡配對皆有片段。"""
 
     def test_full_pack(self):
         with open(os.path.join(PACK, "manifest.json"), encoding="utf-8") as fh:
             m = json.load(fh)
+        all_states = list(STATES["states"])
         for name in NEW_STATES:
             with self.subTest(name):
                 self.assertIn(name, m["states"])
-                self.assertIn(f"{name}>idle", m["transitions"])
-                self.assertIn(f"idle>{name}", m["transitions"])
                 self.assertEqual(list(m["transitions"][f"{name}>idle"]), ["0"])
+        for a in all_states:
+            for b in all_states:
+                if a != b:
+                    self.assertIn(f"{a}>{b}", m["transitions"])
 
 
 class EmotionAppIntegrationTest(unittest.TestCase):
