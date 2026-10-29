@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import socket
 import threading
 import time
 from typing import Callable, Optional, Tuple
@@ -21,7 +22,7 @@ BOUNDARY = b"petframe"
 
 
 class ScreenMirror:
-    def __init__(self, max_viewers: int = 3):
+    def __init__(self, max_viewers: int = 3, on_viewers_change: Optional[Callable[[int], None]] = None):
         self.cond = threading.Condition()
         self.data: Optional[bytes] = None
         self.seq = 0
@@ -32,6 +33,7 @@ class ScreenMirror:
         self.rejected = 0
         self.streamed = 0
         self.closed = False
+        self.on_viewers_change = on_viewers_change
 
     def publish(self, data: bytes, meta: Optional[dict] = None) -> None:
         with self.cond:
@@ -59,11 +61,23 @@ class ScreenMirror:
                 self.rejected += 1
                 return False
             self.viewers += 1
-            return True
+            v = self.viewers
+        if self.on_viewers_change:
+            try:
+                self.on_viewers_change(v)
+            except Exception:
+                log.exception("on_viewers_change 發生錯誤")
+        return True
 
     def release(self) -> None:
         with self.cond:
             self.viewers = max(0, self.viewers - 1)
+            v = self.viewers
+        if self.on_viewers_change:
+            try:
+                self.on_viewers_change(v)
+            except Exception:
+                log.exception("on_viewers_change 發生錯誤")
 
     def close(self) -> None:
         with self.cond:
@@ -82,12 +96,16 @@ def _clamp_fps(q: Optional[dict], default: int = 10) -> int:
 class ScreenWebAPI:
     def __init__(self, mirror: ScreenMirror, status_fn: Optional[Callable[[], dict]] = None,
                  is_core_online_fn: Optional[Callable[[], bool]] = None,
-                 core_online_fn: Optional[Callable[[], bool]] = None):
+                 core_online_fn: Optional[Callable[[], bool]] = None,
+                 ensure_fresh_fn: Optional[Callable[[], bool]] = None):
         self.mirror = mirror
         self.status_fn = status_fn or (lambda: {})
         self.is_core_online_fn = is_core_online_fn or core_online_fn or (lambda: True)
+        self.ensure_fresh_fn = ensure_fresh_fn
 
     def info(self) -> dict:
+        if self.ensure_fresh_fn is not None:
+            self.ensure_fresh_fn()
         seq, ts, data, meta = self.mirror.latest()
         raw_st = self.status_fn()
         if isinstance(raw_st, bytes):
@@ -128,6 +146,8 @@ class ScreenWebAPI:
         if path == "/screen.info":
             return 200, self.info()
         if path == "/screen.jpg":
+            if self.ensure_fresh_fn is not None:
+                self.ensure_fresh_fn()
             seq, ts, frame, meta = self.mirror.latest()
             if frame is None or not self.is_core_online_fn():
                 return 503, {"ok": False, "error": "桌寵主程式未執行"}
@@ -157,11 +177,23 @@ class ScreenWebAPI:
             h.send_header("Pragma", "no-cache")
             h.send_header("Connection", "close")
             h.end_headers()
+            h.wfile.flush()
             h.connection.settimeout(10)
+            _, latest_ts, latest_data, _ = m.latest()
+            if (latest_data is None or (time.time() - latest_ts) > 0.5) and self.ensure_fresh_fn is not None:
+                self.ensure_fresh_fn()
             seq, next_t = 0, 0.0
             while not m.closed:
-                f = m.wait_newer(seq, 2.0)
+                f = m.wait_newer(seq, 0.2)
                 if f is None:
+                    try:
+                        if hasattr(socket, "MSG_DONTWAIT"):
+                            if h.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b"":
+                                break
+                    except BlockingIOError:
+                        continue
+                    except OSError:
+                        break
                     continue
                 now = time.monotonic()
                 if now < next_t:
@@ -171,6 +203,7 @@ class ScreenWebAPI:
                 head = (b"--" + BOUNDARY + b"\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n"
                         b"X-Frame-Seq: %d\r\nX-Frame-Ts: %.3f\r\n\r\n" % (len(frame), seq, ts))
                 h.wfile.write(head + frame + b"\r\n")
+                h.wfile.flush()
                 sent += 1
                 next_t = max(next_t + interval, time.monotonic() - interval) if next_t else time.monotonic() + interval
         except (OSError, ValueError):

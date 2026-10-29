@@ -82,6 +82,11 @@ class FramesServer:
         with self._lock:
             return self._latest_frame
 
+    @property
+    def subscriber_count(self) -> int:
+        with self._lock:
+            return len(self._subscribers)
+
     def start(self) -> None:
         if not hasattr(socket, "AF_UNIX"):
             log.warning("此平台不支援 AF_UNIX，無法啟動 frames.sock")
@@ -151,6 +156,7 @@ class FramesServer:
                     header = {
                         "ok": True, "proto": 1, "seq": seq, "ts": round(ts, 3),
                         "mode": meta.get("mode", "live"), "clip": meta.get("clip"),
+                        "frame": meta.get("frame"),
                         "w": meta.get("w", 800), "h": meta.get("h", 480), "size": len(data),
                     }
                     payload = (json.dumps(header, ensure_ascii=False).encode("utf-8") + b"\n" +
@@ -191,8 +197,16 @@ class FramesServer:
         try:
             while self._running and not sub.closed:
                 try:
-                    item = sub.queue.get(timeout=1.0)
+                    item = sub.queue.get(timeout=0.1)
                 except queue.Empty:
+                    try:
+                        if hasattr(socket, "MSG_DONTWAIT"):
+                            if sub.sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b"":
+                                break
+                    except BlockingIOError:
+                        continue
+                    except OSError:
+                        break
                     continue
 
                 now = time.monotonic()
@@ -208,6 +222,7 @@ class FramesServer:
                 header = {
                     "seq": seq, "ts": round(ts, 3),
                     "mode": meta.get("mode", "live"), "clip": meta.get("clip"),
+                    "frame": meta.get("frame"),
                     "w": meta.get("w", 800), "h": meta.get("h", 480), "size": len(data),
                 }
                 payload = (json.dumps(header, ensure_ascii=False).encode("utf-8") + b"\n" +
