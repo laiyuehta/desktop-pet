@@ -1,6 +1,7 @@
 """Wi‑Fi 模組測試：nmcli 全部用假的（不碰真的網路）。"""
 import json
 import threading
+import time
 import urllib.request
 
 import pytest
@@ -435,3 +436,49 @@ def test_hotspot_retry_when_interrupted(env):
         return real_up(uuid, iface, wait)
     nm.up = flaky
     assert mgr.set_hotspot(True)["ok"] and mgr.mode == "hotspot"
+
+def test_wifi_manager_lock_missing_directory_still_manages_wifi(env, tmp_path):
+    nm, _, _, _, _ = env
+    bad_dir = tmp_path / "missing_sub" / "deep_dir"
+    bad_lock = str(bad_dir / "wifi.lock")
+    mgr = WifiManager(nm=nm, lock_file=bad_lock)
+    try:
+        mgr.start(interval=0.05)
+        time.sleep(0.1)
+        assert mgr.has_lock is True
+        assert mgr.mode != "disabled"
+    finally:
+        mgr.stop()
+
+
+def test_wifi_manager_lock_conflict_and_handover(env, tmp_path):
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+    if fcntl is None:
+        pytest.skip("需要 fcntl")
+
+    nm, _, _, _, _ = env
+    lock_file = str(tmp_path / "wifi.lock")
+    mgr1 = WifiManager(nm=nm, lock_file=lock_file)
+    mgr2 = WifiManager(nm=nm, lock_file=lock_file)
+    try:
+        mgr1.start(interval=0.05)
+        time.sleep(0.05)
+        assert mgr1.has_lock is True
+
+        # 第二個實例啟動時鎖被佔用
+        mgr2.start(interval=0.05, retry_lock_interval=0.1)
+        time.sleep(0.05)
+        assert mgr2.has_lock is False
+
+        # 第一個實例釋放鎖
+        mgr1.stop()
+        time.sleep(0.25)
+
+        # 第二個實例接手
+        assert mgr2.has_lock is True
+    finally:
+        mgr1.stop()
+        mgr2.stop()

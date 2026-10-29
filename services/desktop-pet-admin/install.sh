@@ -24,6 +24,13 @@ if systemctl is-active --quiet desktop-pet 2>/dev/null; then
     fi
 fi
 
+# 如果目前已有後台在跑，先停止以便更新（避免 8080 檢查擋到自己）
+if systemctl is-active --quiet desktop-pet-admin 2>/dev/null; then
+    echo "停止目前的 desktop-pet-admin"
+    sudo systemctl stop desktop-pet-admin
+fi
+
+# 檢查是否仍有其他非後台程序佔用 8080
 if command -v ss >/dev/null 2>&1; then
     if ss -ltn | grep -q ':8080 '; then
         echo "錯誤：連接埠 8080 已被佔用。請先確認佔用程序或改用 switch.sh 切換。" >&2
@@ -41,10 +48,6 @@ sudo install -m 644 "$tmp" "$UNIT"
 rm -f "$tmp"
 echo "== systemd-analyze verify"
 sudo systemd-analyze verify "$UNIT" && echo "verify OK"
-if systemctl is-active --quiet desktop-pet-admin; then
-  echo "停止目前的 desktop-pet-admin"
-  sudo systemctl stop desktop-pet-admin
-fi
 sudo systemctl reset-failed desktop-pet-admin 2>/dev/null || true
 sudo systemctl daemon-reload
 sudo systemctl enable desktop-pet-admin

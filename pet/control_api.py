@@ -112,7 +112,7 @@ class ControlAPIHandler(BaseHTTPRequestHandler):
 
         try:
             if path == "/v1/event":
-                ev = normalize_event(data, default_source="control")
+                ev = normalize_event(data, default_source="web-remote")
                 server.post_event(ev)
                 self._json(200, {"ok": True, "event": ev})
                 return
@@ -120,9 +120,9 @@ class ControlAPIHandler(BaseHTTPRequestHandler):
             if path == "/v1/control":
                 cmd = data.get("cmd")
                 if cmd == "set_state":
-                    ev = make_event("control", "set_state", source="control", state=str(data["state"]))
+                    ev = make_event("control", "set_state", source=str(data.get("source") or "web-remote"), state=str(data["state"]))
                 elif cmd == "set_stage":
-                    ev = make_event("control", "set_stage", source="control", stage=int(data["stage"]))
+                    ev = make_event("control", "set_stage", source=str(data.get("source") or "web-remote"), stage=int(data["stage"]))
                 else:
                     self._json(400, {"ok": False, "error": f"未知的 cmd：{cmd}"})
                     return
@@ -134,7 +134,7 @@ class ControlAPIHandler(BaseHTTPRequestHandler):
                 if not data.get("motion"):
                     self._json(400, {"ok": False, "error": "缺少 motion"})
                     return
-                ev = make_event("action", "motion", source="control", params=data)
+                ev = make_event("action", "motion", source=str(data.get("source") or "web-remote"), params=data)
                 server.post_event(ev)
                 self._json(200, {"ok": True, "event": ev})
                 return
@@ -144,7 +144,7 @@ class ControlAPIHandler(BaseHTTPRequestHandler):
                 if not isinstance(text, str) or not text.strip():
                     self._json(400, {"ok": False, "error": "text 不能是空的"})
                     return
-                ev = make_event("talk", "talk", source="control", text=text.strip()[:200])
+                ev = make_event("talk", "talk", source=str(data.get("source") or "web-remote"), text=text.strip()[:200])
                 server.post_event(ev)
                 self._json(200, {"ok": True, "event": ev})
                 return
@@ -171,7 +171,7 @@ class ControlAPIHandler(BaseHTTPRequestHandler):
                     self._json(503, {"ok": False, "error": "相機功能未啟用"})
                     return
                 wait = bool(data.pop("wait", False))
-                r = camera.trigger(data, source=str(data.pop("source", "control"))[:24] or "control")
+                r = camera.trigger(data, source=str(data.pop("source", "web-remote"))[:24] or "web-remote")
                 if not r.get("ok"):
                     self._json(503 if r.get("kind") == "service_down" else 400, r)
                     return

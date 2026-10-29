@@ -22,9 +22,11 @@ import uuid as uuidlib
 from typing import Callable, Dict, List, Optional, Tuple
 
 try:
+    import errno
     import fcntl
 except ImportError:
     fcntl = None
+    errno = None
 
 log = logging.getLogger("pet.wifi")
 
@@ -691,34 +693,59 @@ class WifiManager:
         finally:
             self.lock.release()
 
-    def start(self, interval: float = 5.0) -> None:
-        if fcntl is not None and self.lock_file:
-            try:
+    def _try_acquire_lock(self) -> bool:
+        if fcntl is None or not self.lock_file:
+            self.has_lock = True
+            return True
+        if self.has_lock and self._lock_fd:
+            return True
+        try:
+            if self._lock_fd is None:
                 os.makedirs(os.path.dirname(self.lock_file), exist_ok=True)
                 self._lock_fd = open(self.lock_file, "a+")
-                fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                self.has_lock = True
-            except (IOError, OSError) as exc:
-                log.warning("無法取得 Wi‑Fi 管理鎖 %s，已略過啟動 Wi‑Fi 管理（可能已有其他實例在跑）: %s", self.lock_file, exc)
-                if self._lock_fd:
-                    try:
-                        self._lock_fd.close()
-                    except Exception:
-                        pass
-                    self._lock_fd = None
-                self.has_lock = False
-                self.mode = "disabled"
-                return
-        else:
+            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.has_lock = True
+            return True
+        except BlockingIOError:
+            self.has_lock = False
+            return False
+        except (IOError, OSError) as exc:
+            err = getattr(exc, "errno", None)
+            if errno is not None and err in (getattr(errno, "EAGAIN", 11), getattr(errno, "EWOULDBLOCK", 11), getattr(errno, "EACCES", 13)):
+                self.has_lock = False
+                return False
+            # 權限不足或目錄不存在等問題：不應擋住 Wi-Fi 管理與救援熱點
+            log.warning("無法建立或開啟 Wi‑Fi 鎖檔 %s (%s)，略過互斥鎖直接啟用 Wi‑Fi 管理", self.lock_file, exc)
+            if self._lock_fd:
+                try:
+                    self._lock_fd.close()
+                except Exception:
+                    pass
+                self._lock_fd = None
+            self.has_lock = True
+            return True
+
+    def start(self, interval: float = 5.0, retry_lock_interval: float = 10.0) -> None:
+        self._stop.clear()
+        acquired = self._try_acquire_lock()
+        if not acquired:
+            log.warning("無法取得 Wi‑Fi 管理鎖 %s（可能已有其他實例在跑），已排定每 %.0f 秒重試接手",
+                        self.lock_file, retry_lock_interval)
 
         def loop():
             while not self._stop.is_set():
+                if not self.has_lock:
+                    if self._try_acquire_lock():
+                        log.info("已成功取得 Wi‑Fi 管理鎖，接手管理")
+                    else:
+                        self._stop.wait(retry_lock_interval)
+                        continue
                 try:
                     self.tick()
                 except Exception:
                     log.exception("Wi‑Fi 背景檢查出錯")
                 self._stop.wait(interval)
+
         self._thread = threading.Thread(target=loop, name="wifi", daemon=True)
         self._thread.start()
 
@@ -732,7 +759,7 @@ class WifiManager:
             except Exception:
                 pass
             self._lock_fd = None
-            self.has_lock = False
+        self.has_lock = False
 
     @staticmethod
     def available(iface: str = "wlan0") -> bool:
