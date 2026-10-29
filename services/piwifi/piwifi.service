@@ -16,7 +16,7 @@ Group=@USER@
 RuntimeDirectory=piwifi
 RuntimeDirectoryMode=0755
 Environment=PIWIFI_SOCKET=/run/piwifi/piwifi.sock
-Environment=PIWIFI_STATUS_FILE=/run/piwifi/status.json
+Environment=PIWIFI_STATUS=/run/piwifi/status.json
 Environment=PIWIFI_HOTSPOT_CONF=/etc/piwifi/hotspot.conf
 ExecStart=/usr/local/bin/piwifi daemon
 Restart=always

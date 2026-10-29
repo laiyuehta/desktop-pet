@@ -133,6 +133,7 @@ fn main() -> ExitCode {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_SOCKET_PATH));
     let mut status_path = env::var("PIWIFI_STATUS")
+        .or_else(|_| env::var("PIWIFI_STATUS_FILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_STATUS_PATH));
     let mut group = env::var("PIWIFI_GROUP").ok().filter(|s| !s.is_empty());
