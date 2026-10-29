@@ -3,26 +3,73 @@
 - 用 CREATE_NO_WINDOW 跑 backend\\start_hidden.cmd（後端有自己隱藏的主控台，不受別的視窗 Ctrl+C／關閉影響）。
 - 後端結束 → 5 秒後重啟；跑不到 2 分鐘就掛的話退避加倍，最多 60 秒。
 - 防重複：127.0.0.1:18090 當鎖（第二個 supervise 直接結束）；8090 已經有人在聽就不啟動，每 15 秒看一次，等它停了才接手。
-- 紀錄寫在 <repo>\\backend_supervisor.log（超過 1 MB 自動截掉舊的）。
+- 紀錄寫在 PET_BACKEND_LOG_DIR\\backend_supervisor.log（未設時預設 <repo>\\backend_supervisor.log；超過 1 MB 自動截掉舊的）。
 """
 import os
+import re
 import socket
 import subprocess
 import sys
 import time
+from typing import Dict, Mapping, Optional
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BACKEND = os.path.dirname(HERE)
 ROOT = os.path.dirname(BACKEND)
 CMD = os.path.join(BACKEND, "start_hidden.cmd")
-LOG = os.path.join(ROOT, "backend_supervisor.log")
-PORT = int(os.environ.get("PET_BACKEND_PORT", "8090"))
-LOCK_PORT = int(os.environ.get("PET_SUPERVISOR_LOCK_PORT", "18090"))
 CREATE_NO_WINDOW = 0x08000000
+
+
+def _expand_vars(val: str, environ: Optional[Mapping[str, str]] = None) -> str:
+    env_map = os.environ if environ is None else environ
+
+    def _repl(m: re.Match) -> str:
+        name = m.group(1)
+        return env_map.get(name) or os.environ.get(name) or m.group(0)
+
+    return os.path.expandvars(re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", _repl, val))
+
+
+def _load_env(env_file: Optional[str] = None, environ: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    raw_proc = dict(os.environ if environ is None else environ)
+    proc = {k: _expand_vars(v, raw_proc) for k, v in raw_proc.items() if v != ""}
+    no_local = proc.get("PET_BACKEND_NO_LOCAL_CONFIG") == "1"
+    chosen = env_file or proc.get("PET_ENV_FILE")
+    if not chosen and not no_local:
+        local_app_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local")
+        candidate = os.path.join(local_app_data, "desktop-pet", "env")
+        if os.path.isfile(candidate):
+            chosen = candidate
+    out: Dict[str, str] = {}
+    if chosen and os.path.isfile(chosen):
+        try:
+            with open(chosen, "r", encoding="utf-8") as fh:
+                for raw in fh.read().splitlines():
+                    line = raw.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    k, v = k.strip(), v.strip()
+                    if k and v:
+                        out[k] = _expand_vars(v, raw_proc)
+        except OSError:
+            pass
+    out.update(proc)
+    return out
+
+
+_ENV = _load_env()
+LOG_DIR = os.path.expanduser(_ENV.get("PET_BACKEND_LOG_DIR") or ROOT)
+LOG = os.path.join(LOG_DIR, "backend_supervisor.log")
+PORT = int(_ENV.get("PET_BACKEND_PORT") or "8090")
+LOCK_PORT = int(_ENV.get("PET_SUPERVISOR_LOCK_PORT") or "18090")
 
 
 def log(msg: str) -> None:
     try:
+        log_dir = os.path.dirname(LOG)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
         if os.path.exists(LOG) and os.path.getsize(LOG) > 1 << 20:
             with open(LOG, "rb") as fh:
                 tail = fh.read()[-(256 << 10):]

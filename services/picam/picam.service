@@ -14,6 +14,7 @@ TimeoutStopSec=15
 RuntimeDirectory=picam
 RuntimeDirectoryMode=0755
 Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/desktop-pet/env
 
 [Install]
 WantedBy=multi-user.target

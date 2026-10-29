@@ -1,6 +1,6 @@
 # desktop-pet.service — 桌寵開機自動啟動（Pi）
 
-- `desktop-pet.service`：正式 systemd unit，`Restart=always`。檔案裡的 `@USER@`／`@HOME@`／`@BACKEND_URL@` 是佔位，`install.sh` 依 repo 根目錄的 `deploy.env`（不進 repo；範本 `deploy.env.example`）代換；`install.sh` 只讀不寫 `deploy.env`。
+- `desktop-pet.service`：正式 systemd unit，`Restart=always`。檔案裡的 `@USER@`／`@HOME@` 是佔位，`install.sh` 依 `/etc/desktop-pet/env`（過渡期也相容 repo 根目錄的 `deploy.env`；範本 `deploy.env.example`）代換；執行期設定（`PET_BACKEND_URL`、`PET_BACKEND_TOKEN_FILE`、`PET_PACK_DIR`、`PET_WEB_LISTEN` 等）由 `EnvironmentFile=-/etc/desktop-pet/env` 載入，`install.sh` 只讀不寫環境檔。
   - 排在 `piscreen.service`、`picam.service`、`network-online.target` 之後。
   - 依賴只用 `Wants=`，所以桌寵停止或失敗時永遠不會停止或重啟 piscreen。
 - `install.sh`：安裝或更新。它會裝 unit、跑 `systemd-analyze verify`、停掉舊的 desktop-pet（包含以前用 systemd-run 開的臨時 unit），再 enable 並啟動。

@@ -17,6 +17,7 @@
 - `.github/CODEOWNERS`、PR 範本、Issue 範本（Bug、任務）、`CONTRIBUTING.md`。
 
 ### 變更
+- 設定改用環境變數與環境檔（自動部署第 1 步，#12）：Pi 主程式、前端後台、安裝腳本與 systemd unit 支援從 `/etc/desktop-pet/env`（過渡期相容 `deploy.env`）讀取設定並移除 `@BACKEND_URL@` 佔位；R7 後端、`supervise.py`、`start_hidden.cmd` 支援 `%LOCALAPPDATA%\desktop-pet\env` 與四層設定優先順序，設定、token 檔、存檔、照片、動畫包與日誌皆可透過環境變數放至版本目錄外；取消 `deploy.env.example` 範本變數註解。
 - 狀態機與後端情緒等級重構（#23）：`pet/backend_client.py` 的情緒最高等級改由 `config/states.json`（`emotions.levels`）單一來源載入；`pet/state_machine.py` 新增 `reset_input_timers()` 公開方法，`pet/app.py` 不再直接存取私有 `_timers` 欄位。
 - `pet/baker.py`、`pet/pack.py`：動畫包替所有狀態配對烘焙過渡片段（16 個狀態 × 15 = 240 組），未烘到的轉移在切換點或非循環片段結尾直接退回目標狀態第 0 格播放（#18）。
 - `services/piwifi/`：`piwifi.service` 狀態檔環境變數對齊為 `PIWIFI_STATUS`（程式同時相容 `PIWIFI_STATUS_FILE`），`README.md` 硬體目標修正為 Pi 3B 並補上實測 RSS（約 0.8 MB）。

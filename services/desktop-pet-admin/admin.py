@@ -37,9 +37,45 @@ log = logging.getLogger("admin")
 DEFAULT_LISTEN = "0.0.0.0:8080"
 DEFAULT_CONTROL_SOCKET = "/run/desktop-pet/control.sock"
 DEFAULT_FRAMES_SOCKET = "/run/desktop-pet/frames.sock"
+DEFAULT_PI_ENV_FILE = "/etc/desktop-pet/env"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_HTML_PATH = os.path.join(ROOT, "pet", "web", "remote.html")
 MAX_BODY = 64 * 1024
+
+
+def _parse_env_file(path: str) -> dict:
+    out = {}
+    if not path or not os.path.isfile(path):
+        return out
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return out
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if k and v:
+            out[k] = v
+    return out
+
+
+def _load_admin_env(env_file: Optional[str] = None, environ: Optional[dict] = None) -> dict:
+    proc = {k: v for k, v in (os.environ if environ is None else environ).items() if v != ""}
+    chosen = env_file or proc.get("PET_ENV_FILE")
+    if not chosen:
+        if os.path.isfile(DEFAULT_PI_ENV_FILE):
+            chosen = DEFAULT_PI_ENV_FILE
+        else:
+            legacy = os.path.join(ROOT, "deploy.env")
+            if os.path.isfile(legacy):
+                chosen = legacy
+    merged = _parse_env_file(chosen) if chosen else {}
+    merged.update(proc)
+    return merged
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -622,10 +658,16 @@ class AdminServer:
         log.info("前端後台已結束")
 
 
-def parse_args(argv=None):
+def parse_args(argv=None, env=None, env_file=None):
+    merged_env = _load_admin_env(env_file=env_file, environ=env)
+    if env is None and merged_env.get("PET_HOTSPOT_URL") and not os.environ.get("PET_HOTSPOT_URL"):
+        os.environ["PET_HOTSPOT_URL"] = merged_env["PET_HOTSPOT_URL"]
+    listen_default = merged_env.get("PET_WEB_LISTEN") or DEFAULT_LISTEN
+    wifi_iface_default = merged_env.get("PET_WIFI_IFACE") or "wlan0"
+
     p = argparse.ArgumentParser(description="桌寵前端後台 desktop-pet-admin")
-    p.add_argument("--listen", "--web", default=DEFAULT_LISTEN,
-                   help="監聽位址（預設 0.0.0.0:8080；測試可用 127.0.0.1:8081）")
+    p.add_argument("--listen", "--web", default=listen_default,
+                   help="監聽位址（預設讀 PET_WEB_LISTEN 或 0.0.0.0:8080；測試可用 127.0.0.1:8081）")
     p.add_argument("--control-socket", default=DEFAULT_CONTROL_SOCKET,
                    help="主程式控制 API Unix socket 路徑")
     p.add_argument("--frames-socket", default=DEFAULT_FRAMES_SOCKET,
@@ -636,7 +678,7 @@ def parse_args(argv=None):
                    help="螢幕畫面同時觀看人數上限（預設 3）")
     p.add_argument("--wifi", choices=["auto", "on", "off"], default="auto",
                    help="Wi‑Fi 設定與救援熱點（預設 auto）")
-    p.add_argument("--wifi-iface", default="wlan0", help="管理的 Wi‑Fi 介面")
+    p.add_argument("--wifi-iface", default=wifi_iface_default, help="管理的 Wi‑Fi 介面（預設讀 PET_WIFI_IFACE 或 wlan0）")
     p.add_argument("--wifi-hotspot", choices=["on", "off"], default="on", help="開救援熱點")
     p.add_argument("--wifi-hotspot-ssid", default=HOTSPOT_SSID, help="熱點名稱")
     p.add_argument("--wifi-hotspot-conf", default=DEFAULT_HOTSPOT_CONF, help="熱點密碼設定檔")

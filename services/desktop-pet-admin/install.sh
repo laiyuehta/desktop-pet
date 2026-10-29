@@ -10,7 +10,7 @@ if systemctl is-active --quiet desktop-pet 2>/dev/null; then
     if [ -z "$CMD" ]; then
         CMD=$(systemctl show -p ExecStart --value desktop-pet 2>/dev/null || true)
     fi
-    if printf '%s\n' "$CMD" | grep -Eq -- '--web +[0-9]'; then
+    if printf '%s\n' "$CMD" | grep -qv -- '--web off'; then
         echo "錯誤：desktop-pet.service 目前仍在監聽網頁埠（未加上 --web off）。" >&2
         echo "為避免連接埠衝突並確保任何時候只有一個 Wi-Fi 管理，請改以切換腳本一次完成：" >&2
         echo "  sh services/desktop-pet-admin/switch.sh" >&2
