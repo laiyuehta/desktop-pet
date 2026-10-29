@@ -480,16 +480,16 @@ def test_wifi_web_api_rejects_writes_when_no_lock(env):
         ("/wifi/priority", {"uuid": "some-uuid", "priority": 10}),
         ("/wifi/hotspot", {"enable": True}),
     ]:
-        status, res = api.handle(path, method="POST", data=data)
+        status, res = api.handle("POST", path, data)
         assert status == 409
         assert res == {"ok": False, "error": "另一個 Wi‑Fi 管理在執行"}
 
     # 讀取操作不受影響
-    status, _ = api.handle("/wifi/status", method="GET")
+    status, _ = api.handle("GET", "/wifi/status", None)
     assert status == 200
-    status, _ = api.handle("/wifi/saved", method="GET")
+    status, _ = api.handle("GET", "/wifi/saved", None)
     assert status == 200
-    status, _ = api.handle("/wifi/scan", method="GET")
+    status, _ = api.handle("GET", "/wifi/scan", None)
     assert status == 200
 
 
@@ -517,11 +517,11 @@ def test_wifi_manager_lock_conflict_and_handover(env, tmp_path):
         assert mgr2.has_lock is False
 
         # 第二個實例寫入操作應回傳 409
-        status, res = api2.handle("/wifi/hotspot", method="POST", data={"enable": True})
+        status, res = api2.handle("POST", "/wifi/hotspot", {"enable": True})
         assert status == 409
         assert res == {"ok": False, "error": "另一個 Wi‑Fi 管理在執行"}
 
-        status, res = api2.handle("/wifi/connect", method="POST", data={"ssid": "HomeAP"})
+        status, res = api2.handle("POST", "/wifi/connect", {"ssid": "HomeAP"})
         assert status == 409
         assert res == {"ok": False, "error": "另一個 Wi‑Fi 管理在執行"}
 
@@ -533,7 +533,7 @@ def test_wifi_manager_lock_conflict_and_handover(env, tmp_path):
         assert mgr2.has_lock is True
 
         # 第二個實例接手後寫入操作成功（不再是 409）
-        status, res = api2.handle("/wifi/hotspot", method="POST", data={"enable": True})
+        status, res = api2.handle("POST", "/wifi/hotspot", {"enable": True})
         assert status == 200
         assert res.get("ok") is True
     finally:
