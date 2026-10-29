@@ -380,16 +380,15 @@ class AdminServer:
                 if path in ("/screen.mjpg", "/screen.jpg", "/screen.info"):
                     res = screen_api.handle("GET", path, query, self.headers)
                     if res is not None:
-                        mode, val = res
-                        if mode == "json":
-                            self._json(200, val)
-                            return
-                        if mode == "jpeg":
-                            self._send(200, val, "image/jpeg", {"Cache-Control": "no-store, no-cache"})
-                            return
-                        if mode == "stream":
-                            val(self)
-                            return
+                        if res[0] == "stream":
+                            res[1](self)
+                        elif len(res) == 4:
+                            self._send(res[0], res[1], res[2], res[3])
+                        elif len(res) == 3:
+                            self._send(res[0], res[1], res[2])
+                        else:
+                            self._json(res[0], res[1])
+                        return
 
                 # 5. 主程式狀態路由（合併 Wi-Fi 狀態）
                 if path == "/status":
