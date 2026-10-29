@@ -31,8 +31,28 @@ EMOTION_TO_EXPRESSION = {
     "bored": "bored", "sad": "sad", "shy": "squint",
 }
 
+# 後端情緒（含 level）→ 情緒強度狀態最高等級（shy 為單一狀態）
+EMOTION_MAX_LEVEL = {
+    "happy": 3, "surprised": 3, "sad": 3, "shy": 1, "annoyed": 2,
+}
+
 OFFLINE_LINES = "嗯…？（大腦在休息）"
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def emotion_state_name(emotion: str, level: Any) -> Optional[str]:
+    """把 (emotion, level) 轉成對應的情緒強度狀態名稱；不認得或等級不合法回傳 None。"""
+    max_lv = EMOTION_MAX_LEVEL.get(emotion)
+    if max_lv is None or isinstance(level, bool):
+        return None
+    try:
+        lv = int(level)
+    except (TypeError, ValueError):
+        return None
+    if lv < 1:
+        return None
+    lv = min(max_lv, lv)
+    return emotion if max_lv == 1 else f"{emotion}_{lv}"
 
 
 def directive_to_event(d: Dict[str, Any]) -> Optional[dict]:
@@ -51,7 +71,14 @@ def directive_to_event(d: Dict[str, Any]) -> Optional[dict]:
             return make_event("action", "say", source=src,
                               params={"text": text[:80], "seconds": float(d.get("seconds", 4))})
         if t == "emotion":
-            expr = EMOTION_TO_EXPRESSION.get(str(d.get("emotion")), None)
+            emo = str(d.get("emotion"))
+            if d.get("level") is not None:
+                st = emotion_state_name(emo, d.get("level"))
+                if not st:
+                    return None
+                return make_event("control", "set_state", source=src, state=st,
+                                  emotion=emo, level=int(d["level"]))
+            expr = EMOTION_TO_EXPRESSION.get(emo, None)
             if not expr:
                 return None
             return make_event("action", "expression", source=src,

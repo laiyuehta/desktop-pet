@@ -119,6 +119,9 @@ class AppIntegrationTest(unittest.TestCase):
         try:
             self.assertTrue(post("/event", {"type": "touch", "name": "pat"})["ok"])
             app.step(0.05)
+            self.assertEqual(app.fsm.state, "happy_1")
+            self.assertTrue(post("/control", {"cmd": "set_state", "state": "happy"})["ok"])
+            app.step(0.05)
             app.step(0.05)   # on_enter 的動作請求在下一格派送
             self.assertEqual(app.fsm.state, "happy")
             self.assertTrue(any("nod" in h for h in act.history))

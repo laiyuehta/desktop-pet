@@ -103,12 +103,7 @@
 
 <div class="card">
   <h2>強制切換狀態</h2>
-  <div class="grid" id="states">
-    <button data-state="idle">待機</button>
-    <button data-state="happy">開心</button>
-    <button data-state="bored">無聊</button>
-    <button data-state="sleep">睡覺</button>
-  </div>
+  <div class="grid" id="states"></div>
 </div>
 
 <div class="card">
@@ -176,6 +171,7 @@
 
 <script>
 const $ = (s) => document.querySelector(s);
+const esc = (t) => String(t == null ? "" : t).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.style.opacity = 1; clearTimeout(t._h); t._h = setTimeout(() => t.style.opacity = 0, 1200); }
 async function post(path, body, label) {
   try {
@@ -185,8 +181,23 @@ async function post(path, body, label) {
     setTimeout(poll, 150);
   } catch (e) { toast("送出失敗"); }
 }
+let statesSig = "";
+function renderStates(s) {
+  const box = $("#states");
+  if (!box || !Array.isArray(s.states) || !s.states.length) return;
+  const labels = s.state_labels || {};
+  const sig = s.states.map(k => k + ":" + (labels[k] || "")).join("|");
+  if (sig !== statesSig) {
+    statesSig = sig;
+    box.innerHTML = s.states.map(k => {
+      const lbl = labels[k] ? labels[k] : k;
+      return '<button data-state="' + esc(k) + '">' + esc(lbl) + "</button>";
+    }).join("");
+    box.querySelectorAll("[data-state]").forEach(b => b.onclick = () => post("/control", { cmd: "set_state", state: b.dataset.state }, b.textContent.trim()));
+  }
+  box.querySelectorAll("[data-state]").forEach(b => b.classList.toggle("on", b.dataset.state === s.state));
+}
 document.querySelectorAll("[data-ev]").forEach(b => b.onclick = () => post("/event", JSON.parse(b.dataset.ev), b.textContent.trim()));
-document.querySelectorAll("[data-state]").forEach(b => b.onclick = () => post("/control", { cmd: "set_state", state: b.dataset.state }, b.textContent.trim()));
 document.querySelectorAll("[data-stage]").forEach(b => b.onclick = () => post("/control", { cmd: "set_stage", stage: +b.dataset.stage }, b.textContent.trim()));
 document.querySelectorAll("[data-act]").forEach(b => b.onclick = () => post("/actuator", JSON.parse(b.dataset.act), b.textContent.trim()));
 $("#talk-form").onsubmit = (e) => {
@@ -220,7 +231,7 @@ async function poll() {
     $("#st-backend").textContent = !b ? "未設定" : (b.online === true ? "已連線" : b.online === false ? "離線（" + (b.last_error || "") + "）" : "連線中…");
     $("#st-say").textContent = s.bubble || s.last_say || "—";
     $("#log").textContent = (s.actuator_log || []).slice(-6).reverse().join("\n");
-    document.querySelectorAll("[data-state]").forEach(b => b.classList.toggle("on", b.dataset.state === s.state));
+    renderStates(s);
     document.querySelectorAll("[data-stage]").forEach(b => b.classList.toggle("on", +b.dataset.stage === s.stage));
     $("#st-conn").textContent = "已連線 · 每秒更新";
   } catch (e) {
@@ -232,7 +243,6 @@ async function poll() {
 poll(); setInterval(poll, 1000);
 
 // ---- Wi‑Fi 設定 ----
-const esc = (t) => String(t == null ? "" : t).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const MODE = { connected: "已連線", disconnected: "沒有網路（自動嘗試中）", connecting: "連線中…", hotspot: "設定熱點開著",
                unavailable: "Wi‑Fi 介面不可用", unknown: "檢查中…" };
 let wfOp = null, wfOpDone = null;
