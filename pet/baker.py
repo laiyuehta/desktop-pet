@@ -31,66 +31,12 @@ from .skeleton import Skeleton
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE_FILES = ["pet/skeleton.py", "pet/renderer.py", "pet/eyes.py", "pet/baker.py"]
-CORE_STATES = ("idle", "happy", "bored", "sleep")
 
 
 def transition_pairs(sc: dict, states: Optional[Iterable[str]] = None) -> Set[Tuple[str, str]]:
-    """決定哪些 (來源狀態, 目標狀態) 需要烘過渡片段。
-
-    包含：
-    1. config/states.json 的 transitions 轉移表（含 from="*" 展開）
-    2. 狀態計時器的 *_done 轉移（回 idle）
-    3. 既有四個核心狀態（idle / happy / bored / sleep）之間的所有配對（維持既有 set_state 行為）
-    4. 情緒狀態：從 idle 進入、同系列等級升級（含 surprised_* 連戳進 annoyed_1）、回 idle
-    """
+    """產生所有狀態之間的轉移配對（每個來源狀態到除自己以外的每個目標狀態）。"""
     state_list = list(sc.get("states", {}) if states is None else states)
-    st_set = set(state_list)
-    pairs: Set[Tuple[str, str]] = set()
-
-    for tr in sc.get("transitions", []):
-        src, dst = tr.get("from"), tr.get("to")
-        if dst not in st_set:
-            continue
-        if src == "*":
-            for a in state_list:
-                if a != dst:
-                    pairs.add((a, dst))
-        elif src in st_set and src != dst:
-            pairs.add((src, dst))
-
-    if "idle" in st_set:
-        for s in state_list:
-            for tm in sc.get("states", {}).get(s, {}).get("timers", []):
-                if str(tm.get("event", "")).endswith("_done") and s != "idle":
-                    pairs.add((s, "idle"))
-
-    for a in CORE_STATES:
-        for b in CORE_STATES:
-            if a in st_set and b in st_set and a != b:
-                pairs.add((a, b))
-
-    for s in state_list:
-        if s not in CORE_STATES and "idle" in st_set:
-            pairs.add(("idle", s))
-            pairs.add((s, "idle"))
-
-    levels: Dict[str, List[Tuple[int, str]]] = {}
-    for s in state_list:
-        if "_" in s:
-            fam, lv = s.rsplit("_", 1)
-            if lv.isdigit():
-                levels.setdefault(fam, []).append((int(lv), s))
-    for items in levels.values():
-        items.sort()
-        for idx, (_, a) in enumerate(items):
-            for _, b in items[idx + 1:]:
-                pairs.add((a, b))
-
-    for a in ("surprised_1", "surprised_2", "surprised_3"):
-        if a in st_set and "annoyed_1" in st_set:
-            pairs.add((a, "annoyed_1"))
-
-    return pairs
+    return {(a, b) for a in state_list for b in state_list if a != b}
 
 
 def encode(img: Image.Image, quality: int) -> bytes:
