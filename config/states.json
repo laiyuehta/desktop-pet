@@ -148,5 +148,31 @@
       "3": {"name": "長耳朵", "skeleton": "assets/skeletons/ears.json"}
     }
   },
+  "emotions": {
+    "comment": "情緒強度狀態設定：各情緒最高等級、各狀態可進入的情緒（* 代表其餘狀態）、觸控輸入對應與時間窗。",
+    "levels": {
+      "happy": 3,
+      "surprised": 3,
+      "sad": 3,
+      "shy": 1,
+      "annoyed": 2
+    },
+    "accept": {
+      "sleep": ["surprised"],
+      "*": ["happy", "surprised", "sad", "shy", "annoyed"]
+    },
+    "inputs": {
+      "pat": {
+        "emotion": "happy",
+        "window_s": 4.0
+      },
+      "poke": {
+        "emotion": "surprised",
+        "window_s": 5.0,
+        "annoyed_after": 3,
+        "annoyed_emotion": "annoyed"
+      }
+    }
+  },
   "clock": {"night_start": 23, "night_end": 7, "enabled": true}
 }

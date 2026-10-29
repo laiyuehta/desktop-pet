@@ -11,7 +11,9 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from pet.app import PetApp  # noqa: E402
 from pet.baker import bake  # noqa: E402
+from pet.events import make_event  # noqa: E402
 from pet.eyes import EXPRESSIONS  # noqa: E402
 from pet.pack import AnimationPack  # noqa: E402
 from pet.skeleton import Skeleton  # noqa: E402
@@ -153,6 +155,119 @@ class EmotionFullPackTest(unittest.TestCase):
         for edge in ("happy_1>happy_2", "happy_2>happy_3", "surprised_1>surprised_2", "surprised_2>surprised_3",
                      "sad_1>sad_2", "sad_2>sad_3", "annoyed_1>annoyed_2", "surprised_1>annoyed_1"):
             self.assertIn(edge, m["transitions"])
+
+
+class EmotionAppIntegrationTest(unittest.TestCase):
+    """主程式情緒事件觸發、同系列升級到上限、計時回 idle、sleep 只接受 surprised、觸控輸入對應與遙控頁狀態清單。"""
+
+    def test_trigger_all_emotions_escalate_to_cap_and_return_to_idle(self):
+        cases = [
+            ("emotion_happy", ["happy_1", "happy_2", "happy_3", "happy_3"]),
+            ("emotion_surprised", ["surprised_1", "surprised_2", "surprised_3", "surprised_3"]),
+            ("emotion_sad", ["sad_1", "sad_2", "sad_3", "sad_3"]),
+            ("emotion_annoyed", ["annoyed_1", "annoyed_2", "annoyed_2"]),
+            ("emotion_shy", ["shy", "shy"]),
+        ]
+        for ev_name, expected_seq in cases:
+            with self.subTest(ev_name):
+                app = PetApp(use_clock=False, eye_seed=0)
+                for expected_state in expected_seq:
+                    app.step(0.5)
+                    app.post(make_event("sim", ev_name))
+                    app.step(0.05)
+                    self.assertEqual(app.fsm.state, expected_state)
+                    # 升級（或到頂重觸發）時計時器會重設
+                    self.assertLessEqual(app.fsm.time_in_state, 0.06)
+
+                # 沒有新事件時照計時器自動回 idle
+                after = STATES["states"][expected_seq[-1]]["timers"][0]["after"]
+                steps = int(after / 0.05) + 5
+                for _ in range(steps):
+                    if app.fsm.state == "idle":
+                        break
+                    app.step(0.05)
+                self.assertEqual(app.fsm.state, "idle")
+
+    def test_trigger_with_explicit_level(self):
+        app = PetApp(use_clock=False, eye_seed=0)
+        app.post(make_event("sim", "emotion_sad", level=2))
+        app.step(0.05)
+        self.assertEqual(app.fsm.state, "sad_2")
+        app.post(make_event("sim", "emotion_sad"))
+        app.step(0.05)
+        self.assertEqual(app.fsm.state, "sad_3")
+
+    def test_sleep_only_accepts_surprised(self):
+        app = PetApp(use_clock=False, eye_seed=0)
+        app.post(make_event("control", "set_state", state="sleep"))
+        app.step(0.05)
+        self.assertEqual(app.fsm.state, "sleep")
+
+        for ignored in ("emotion_happy", "emotion_sad", "emotion_shy", "emotion_annoyed"):
+            app.post(make_event("sim", ignored, level=2))
+            app.step(0.05)
+            self.assertEqual(app.fsm.state, "sleep", ignored)
+
+        # 睡覺時收到 surprised 會被吵醒進入 surprised_*
+        app.post(make_event("sim", "emotion_surprised", level=2))
+        app.step(0.05)
+        self.assertEqual(app.fsm.state, "surprised_2")
+
+        # 睡覺時被摸頭會照轉移規則叫醒到 idle（而非卡在 sleep），醒來後再摸進 happy_1
+        app.post(make_event("control", "set_state", state="sleep"))
+        app.step(0.05)
+        self.assertEqual(app.fsm.state, "sleep")
+        app.post(make_event("touch", "pat"))
+        app.step(0.05)
+        self.assertEqual(app.fsm.state, "idle")
+        app.post(make_event("touch", "pat"))
+        app.step(0.05)
+        self.assertEqual(app.fsm.state, "happy_1")
+
+    def test_pat_and_poke_input_mapping_and_window(self):
+        app = PetApp(use_clock=False, eye_seed=0)
+        # 摸頭一次 happy_1、短時間連續摸升級到 happy_2 -> happy_3
+        app.post(make_event("touch", "pat"))
+        app.step(0.1)
+        self.assertEqual(app.fsm.state, "happy_1")
+        app.post(make_event("touch", "pat"))
+        app.step(0.1)
+        self.assertEqual(app.fsm.state, "happy_2")
+        app.post(make_event("touch", "pat"))
+        app.step(0.1)
+        self.assertEqual(app.fsm.state, "happy_3")
+
+        # 超過時間窗並回到 idle 後，再摸頭重新從 happy_1 開始
+        for _ in range(100):
+            app.step(0.1)
+        self.assertEqual(app.fsm.state, "idle")
+        app.post(make_event("touch", "pat"))
+        app.step(0.1)
+        self.assertEqual(app.fsm.state, "happy_1")
+
+        # 戳一下 surprised_1；一直戳進 annoyed_1 -> annoyed_2
+        app.post(make_event("touch", "poke"))
+        app.step(0.1)
+        self.assertEqual(app.fsm.state, "surprised_1")
+        app.post(make_event("touch", "poke"))
+        app.step(0.1)
+        self.assertEqual(app.fsm.state, "surprised_1")
+        app.post(make_event("touch", "poke"))
+        app.step(0.1)
+        self.assertEqual(app.fsm.state, "annoyed_1")
+        app.post(make_event("touch", "poke"))
+        app.step(0.1)
+        self.assertEqual(app.fsm.state, "annoyed_2")
+        app.post(make_event("touch", "poke"))
+        app.step(0.1)
+        self.assertEqual(app.fsm.state, "annoyed_2")
+
+    def test_status_exposes_all_states_and_labels_for_remote(self):
+        app = PetApp(use_clock=False, eye_seed=0)
+        st = app.status()
+        for name in OLD_STATES + NEW_STATES:
+            self.assertIn(name, st["states"])
+            self.assertEqual(st["state_labels"][name], STATES["states"][name]["label"])
 
 
 if __name__ == "__main__":

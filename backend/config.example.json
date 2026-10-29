@@ -36,6 +36,7 @@
     "decay_per_hour": {"happiness": 6, "affection": 1.5, "energy_awake": 8},
     "energy_recover_per_hour_sleep": 25,
     "neutral": {"happiness": 50, "affection": 30, "energy": 70},
+    "happy_level_thresholds": {"2": 70, "3": 90},
     "events": {
       "pat":         {"happiness": 8, "affection": 3, "growth": 1.0},
       "poke":        {"happiness": 3, "affection": 1, "growth": 0.5},

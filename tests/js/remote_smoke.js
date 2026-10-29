@@ -32,6 +32,11 @@ global.URL.revokeObjectURL = () => {};
 global.fetch = async (url) => {
   fetched.push(String(url));
   let body = {};
+  if (String(url).startsWith("/status")) body = {
+    state: "idle", state_label: "待機", stage: 1, stage_name: "種子", growth: { value: 0 }, fps: 20,
+    states: ["idle", "happy", "bored", "sleep", "happy_1", "happy_2", "happy_3", "surprised_1", "surprised_2", "surprised_3", "sad_1", "sad_2", "sad_3", "shy", "annoyed_1", "annoyed_2"],
+    state_labels: { idle: "待機", happy: "開心", bored: "無聊", sleep: "睡覺", happy_1: "微笑", happy_2: "開心", happy_3: "超開心", surprised_1: "愣一下", surprised_2: "往後縮", surprised_3: "嚇到彈起", sad_1: "垂眼", sad_2: "低頭縮小", sad_3: "哭哭", shy: "害羞", annoyed_1: "皺眉", annoyed_2: "生氣" }
+  };
   if (String(url).startsWith("/screen.info")) body = { ok: true, mode: "pack", pack: "seed", fps: 20, state: "idle", clip: "idle/base", frame: 1, viewers: 0, max_viewers: 3 };
   return { ok: true, status: 200, json: async () => body, blob: async () => ({}) };
 };
@@ -44,6 +49,7 @@ try {
 setTimeout(() => {
   const img = els["#scr-img"] || { srcLog: [] };
   console.log(JSON.stringify({ ok: true, srcLog: img.srcLog.map(s => String(s).split("?")[0]), info: (els["#scr-info"] || {}).textContent,
-    screenJpgFetches: fetched.filter(u => u.startsWith("/screen.jpg")).length, status: (els["#st-state"] || {}).textContent }));
+    screenJpgFetches: fetched.filter(u => u.startsWith("/screen.jpg")).length, status: (els["#st-state"] || {}).textContent,
+    statesHtml: (els["#states"] || {}).innerHTML || "" }));
   process.exit(0);
 }, mode === "mjpeg" ? 1500 : 6000);
