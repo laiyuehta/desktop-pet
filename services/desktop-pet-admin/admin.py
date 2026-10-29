@@ -167,36 +167,148 @@ class ControlClient:
 
 
 class FramesSubscriber:
-    """背景連接 frames.sock 並餵畫面給 ScreenMirror。"""
+    """背景連接 frames.sock 並餵畫面給 ScreenMirror。無觀看者時取消訂閱以節省 CPU。"""
 
-    def __init__(self, socket_path: str, mirror: ScreenMirror):
+    def __init__(self, socket_path: str, mirror: ScreenMirror, fps: int = 20):
         self.socket_path = socket_path
         self.mirror = mirror
+        self.target_fps = max(1, min(20, int(fps)))
         self.connected = False
+        self.subscribed = False
+        self.current_fps = 0
         self.last_ok: Optional[float] = None
         self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._sock_lock = threading.Lock()
+        self._active_sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
+        self.mirror.on_viewers_change = self._on_viewers_change
+
+    def _on_viewers_change(self, viewers: int) -> None:
+        if viewers > 0:
+            self._wake.set()
+        else:
+            self.subscribed = False
+            self.connected = False
+            self.current_fps = 0
+            self._close_active_sock()
+            self._wake.set()
+
+    def _close_active_sock(self) -> None:
+        with self._sock_lock:
+            sock = self._active_sock
+            self._active_sock = None
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def start(self) -> None:
+        self._stop.clear()
+        if self.mirror.viewers > 0:
+            self._wake.set()
         self._thread = threading.Thread(target=self._run, name="frames-subscriber", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        self.subscribed = False
+        self.connected = False
+        self.current_fps = 0
+        self._close_active_sock()
+        self._wake.set()
+
+    def fetch_latest(self, timeout: float = 1.0) -> bool:
+        """單次向 frames.sock 請求最新畫面（cmd=latest），供無訂閱時的 /screen.jpg 與 /screen.info 使用。"""
+        if not hasattr(socket, "AF_UNIX") or not os.path.exists(self.socket_path):
+            return False
+
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(timeout)
+            sock.connect(self.socket_path)
+            sock.sendall(json.dumps({"v": 1, "cmd": "latest"}).encode("utf-8") + b"\n")
+            buf = b""
+            while b"\n" not in buf:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise OSError("連線關閉")
+                buf += chunk
+            line, buf = buf.split(b"\n", 1)
+            header = json.loads(line.decode("utf-8").strip() or "{}")
+            if not header.get("ok"):
+                return False
+
+            while len(buf) < 4:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise OSError("連線關閉")
+                buf += chunk
+            n = int.from_bytes(buf[:4], "big")
+            buf = buf[4:]
+
+            while len(buf) < n:
+                chunk = sock.recv(min(65536, n - len(buf) + 4096))
+                if not chunk:
+                    raise OSError("連線關閉")
+                buf += chunk
+            jpeg_bytes = buf[:n]
+            self.mirror.publish(jpeg_bytes, meta=header)
+            self.last_ok = time.time()
+            return True
+        except Exception as exc:
+            log.debug("向 frames.sock 取得 latest 失敗：%s", exc)
+            return False
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def ensure_fresh(self, max_age: float = 0.5) -> bool:
+        """確保 mirror 中有近期畫面：若正在訂閱且已有畫面則直接沿用，否則向 frames.sock 請求 latest。"""
+        _, ts, data, _ = self.mirror.latest()
+        if self.subscribed and data is not None and (time.time() - ts) <= max_age:
+            return True
+        return self.fetch_latest()
 
     def _run(self) -> None:
         while not self._stop.is_set():
+            self._wake.clear()
+            if self.mirror.viewers <= 0:
+                self.connected = False
+                self.subscribed = False
+                self.current_fps = 0
+                self._wake.wait(1.0)
+                continue
+
             if not hasattr(socket, "AF_UNIX") or not os.path.exists(self.socket_path):
                 self.connected = False
-                self._stop.wait(2.0)
+                self.subscribed = False
+                self.current_fps = 0
+                self._stop.wait(0.5)
                 continue
 
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            with self._sock_lock:
+                if self.mirror.viewers <= 0 or self._stop.is_set():
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+                    continue
+                self._active_sock = sock
+
             try:
                 sock.settimeout(3.0)
                 sock.connect(self.socket_path)
-                # 以 20 fps 訂閱主程式畫面，再由 ScreenMirror / ScreenWebAPI 依觀看者需求降頻
-                sock.sendall(json.dumps({"v": 1, "cmd": "subscribe", "fps": 20}).encode("utf-8") + b"\n")
+                # 有觀看者時以 20 fps 訂閱主程式畫面，再由 ScreenMirror / ScreenWebAPI 依觀看者需求降頻
+                sock.sendall(json.dumps({"v": 1, "cmd": "subscribe", "fps": self.target_fps}).encode("utf-8") + b"\n")
                 buf = b""
                 while b"\n" not in buf:
                     chunk = sock.recv(1024)
@@ -207,13 +319,19 @@ class FramesSubscriber:
                 first_cmd = json.loads(first_line.decode("utf-8").strip() or "{}")
                 if not first_cmd.get("ok"):
                     log.warning("訂閱畫面失敗：%s", first_cmd.get("error"))
-                    sock.close()
+                    self._close_active_sock()
                     self._stop.wait(2.0)
                     continue
 
+                if self.mirror.viewers <= 0 or self._stop.is_set():
+                    self._close_active_sock()
+                    continue
+
                 self.connected = True
+                self.subscribed = True
+                self.current_fps = self.target_fps
                 sock.settimeout(5.0)
-                while not self._stop.is_set():
+                while not self._stop.is_set() and self.mirror.viewers > 0:
                     while b"\n" not in buf:
                         chunk = sock.recv(4096)
                         if not chunk:
@@ -242,9 +360,16 @@ class FramesSubscriber:
                     self.last_ok = time.time()
             except Exception as exc:
                 self.connected = False
-                log.debug("frames.sock 斷線或異常：%s", exc)
-                self._stop.wait(2.0)
+                self.subscribed = False
+                self.current_fps = 0
+                if self.mirror.viewers > 0 and not self._stop.is_set():
+                    log.debug("frames.sock 斷線或異常：%s", exc)
+                    self._stop.wait(1.0)
             finally:
+                self.connected = False
+                self.subscribed = False
+                self.current_fps = 0
+                self._close_active_sock()
                 try:
                     sock.close()
                 except OSError:
@@ -277,10 +402,19 @@ class AdminServer:
                 pass
             return {}
 
+        def is_core_online() -> bool:
+            if not os.path.exists(self.control.socket_path):
+                self.control.connected = False
+                return False
+            if self.control.connected:
+                return True
+            return self.control.check_health()
+
         self.screen_api = ScreenWebAPI(
             mirror=self.mirror,
             status_fn=get_core_status,
-            is_core_online_fn=lambda: self.control.connected,
+            is_core_online_fn=is_core_online,
+            ensure_fresh_fn=self.frames.ensure_fresh,
         )
         self.httpd: Optional[ThreadingHTTPServer] = None
         self.server_thread: Optional[threading.Thread] = None
@@ -360,6 +494,8 @@ class AdminServer:
                         },
                         "frames": {
                             "connected": frames.connected,
+                            "subscribed": frames.subscribed,
+                            "fps": frames.current_fps,
                             "socket": frames.socket_path,
                             "last_ok": frames.last_ok,
                             "viewers": mirror.viewers,
@@ -474,12 +610,13 @@ class AdminServer:
 
     def stop(self) -> None:
         log.info("正在停止前端後台...")
+        self.mirror.close()
+        self.frames.stop()
         if self.httpd:
             self.httpd.shutdown()
             self.httpd.server_close()
             self.httpd = None
         self.control.stop_monitor()
-        self.frames.stop()
         if self.wifi:
             self.wifi.stop()
         log.info("前端後台已結束")

@@ -15,6 +15,7 @@
 - `.github/CODEOWNERS`、PR 範本、Issue 範本（Bug、任務）、`CONTRIBUTING.md`。
 
 ### 變更
+- `desktop-pet-admin` 無觀看者時取消 `frames.sock` 訂閱以降低主程式與後台閒置 CPU；有人觀看時再以 20 fps 訂閱，且 `/screen.jpg` 與 `/screen.info` 在無訂閱時直接以 `latest` 取得最新畫面（#11）。
 - 部署規則改成**跟著 main**（項目書 v2.9）：main 只收 CI 綠燈的 PR，所以正式機器部署 main 的最新 commit；tag 只當里程碑，不是部署條件。PR 範本的「回退方式」同步更新。
 
 ### 規劃（尚未實作）
