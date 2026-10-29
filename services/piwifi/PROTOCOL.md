@@ -3,7 +3,7 @@
 本文件定義 `piwifi` 守護程式對外提供的 Unix domain socket 協定（Protocol v1）與狀態快照檔格式。
 
 - **端點路徑**：`/run/piwifi/piwifi.sock`（可由 `PIWIFI_SOCKET` 或 `--socket` 覆寫）
-- **狀態快照檔**：`/run/piwifi/status.json`（可由 `PIWIFI_STATUS_FILE` 或 `--status-file` 覆寫）
+- **狀態快照檔**：`/run/piwifi/status.json`（可由 `PIWIFI_STATUS` 或 `--status` 覆寫）
 - **協定版本**：`1`
 
 ---

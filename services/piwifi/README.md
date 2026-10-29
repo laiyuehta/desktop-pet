@@ -1,6 +1,6 @@
 # piwifi — Wi‑Fi 與救援熱點守護程式（Rust）
 
-`piwifi` 是專為 Raspberry Pi 3B+（1 GB RAM）設計的輕量級 Wi‑Fi 與救援熱點（`pi-hotspot`）系統守護程式，負責收斂所有 `NetworkManager` / `nmcli` 權限與網路狀態管理，並透過 `/run/piwifi/piwifi.sock`（Protocol v1）對桌寵主程式（`desktop-pet`）與管理面板（`desktop-pet-admin`）提供查詢與控制介面。
+`piwifi` 是專為 Raspberry Pi 3B（1 GB RAM）設計的輕量級 Wi‑Fi 與救援熱點（`pi-hotspot`）系統守護程式，負責收斂所有 `NetworkManager` / `nmcli` 權限與網路狀態管理，並透過 `/run/piwifi/piwifi.sock`（Protocol v1）對桌寵主程式（`desktop-pet`）與管理面板（`desktop-pet-admin`）提供查詢與控制介面。
 
 ---
 
@@ -12,7 +12,7 @@
    - 熱點密碼集中於 `/etc/piwifi/hotspot.conf`（`root:piwifi 0640`），不進 Git、亦不外洩至 socket 回應或日誌。
 2. **救援生命線獨立於主程式**：
    - 即使 Python 主程式因重構、更新或崩潰而停機，`piwifi.service` 仍獨立維持 Wi‑Fi 連線與失聯超時自動開啟 `pi-hotspot` 救援熱點，確保 SSH 與網頁管理面板不會失聯。
-3. **極低資源佔用（Pi 3B+ 友善）**：
+3. **極低資源佔用（Pi 3B 友善）**：
    - 純 `std` 執行緒模型（不引入 `tokio`），僅依賴 `serde` 與 `serde_json`。
    - 交叉編譯產出 `aarch64-unknown-linux-musl` 單一靜態執行檔，部署免安裝 Rust 工具鏈。
 
@@ -22,8 +22,8 @@
 
 | 項目 | 實測／估算數值 | 說明 |
 |---|---|---|
-| **`aarch64-unknown-linux-musl` Release Binary 大小** | **741,248 bytes（約 724 KiB / 0.71 MiB）** | 啟用 `opt-level = "s"`、`lto = true`、`codegen-units = 1`、`panic = "abort"`、`strip = true` 與 `+crt-static` |
-| **`--observe` 模式預估常駐記憶體（RSS）** | **約 1.8 ～ 3.2 MiB**（目標 `< 8 MiB`） | 靜態 musl 連結、無執行期 GC、僅 2～3 個 `std::thread`（8 MiB stack 虛擬位址空間按需配置實體頁） |
+| **`aarch64-unknown-linux-musl` Release Binary 大小** | **741,232 bytes（約 724 KiB / 0.71 MiB）** | 啟用 `opt-level = "s"`、`lto = true`、`codegen-units = 1`、`panic = "abort"`、`strip = true` 與 `+crt-static` |
+| **`--observe` 模式常駐記憶體（RSS）** | **Pi 3B 實測約 0.8 MB**（預估 1.8 ～ 3.2 MiB，目標 `< 8 MiB`） | 靜態 musl 連結、無執行期 GC、僅 2～3 個 `std::thread`（8 MiB stack 虛擬位址空間按需配置實體頁） |
 
 ---
 
