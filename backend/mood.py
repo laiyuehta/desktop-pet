@@ -58,6 +58,18 @@ class MoodEngine:
             m["energy"] = clamp(m["energy"] - d["energy_awake"] * hours)
 
     # -- 事件 -------------------------------------------------------------------
+    def emotion_level(self, rec: Dict[str, Any], event_name: str = "pat") -> int:
+        """依心情值決定互動的起始情緒等級（心情好時摸頭直接 happy_2 / happy_3）。"""
+        happiness = float(rec.get("mood", {}).get("happiness", 50.0))
+        raw = self.mood_cfg.get("happy_level_thresholds", {"2": 70, "3": 90})
+        thresholds = sorted((int(k), float(v)) for k, v in raw.items())
+        lv = 1
+        if event_name in ("pat", "person_near"):
+            for stage_lv, need in thresholds:
+                if happiness >= need and stage_lv > lv:
+                    lv = stage_lv
+        return lv
+
     def apply_event(self, rec: Dict[str, Any], event: Dict[str, Any], now: Optional[float] = None) -> List[dict]:
         """更新心情/成長，回傳要給裝置的指令列表。"""
         now = time.time() if now is None else now
@@ -70,7 +82,12 @@ class MoodEngine:
                 if key in bonus:
                     rec["mood"][key] = clamp(rec["mood"][key] + bonus[key])
             directives += self.add_growth(rec, float(bonus.get("growth", 0.0)))
-            directives += self._chatter(rec, name, now)
+            chatter_dirs = self._chatter(rec, name, now)
+            directives += chatter_dirs
+            if name == "pat" and rec.get("device_state") != "sleep":
+                lv = self.emotion_level(rec, name)
+                if lv >= 2 and not any(d.get("type") == "emotion" for d in chatter_dirs):
+                    directives.append({"type": "emotion", "emotion": "happy", "level": lv, "seconds": 2})
         # 精神太低又醒著 → 建議去睡覺（只在心跳時判斷，且 30 分鐘最多一次，
         # 避免使用者剛叫醒又被送回去睡）
         low = self.mood_cfg.get("sleep_when_energy_below")
@@ -95,7 +112,12 @@ class MoodEngine:
         rec["last_chatter"] = now
         out = [{"type": "say", "text": self.rng.choice(lines), "seconds": 3}]
         if name in EMOTION_FOR_EVENT:
-            out.append({"type": "emotion", "emotion": EMOTION_FOR_EVENT[name], "seconds": 2})
+            emo_dir: Dict[str, Any] = {"type": "emotion", "emotion": EMOTION_FOR_EVENT[name], "seconds": 2}
+            if name == "pat":
+                lv = self.emotion_level(rec, name)
+                if lv >= 2:
+                    emo_dir["level"] = lv
+            out.append(emo_dir)
         return out
 
     # -- 成長 -------------------------------------------------------------------

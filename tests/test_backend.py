@@ -285,6 +285,23 @@ class MoodTest(unittest.TestCase):
         d = eng.apply_event(rec, {"name": "pat"}, now=1)
         self.assertEqual(d[0]["type"], "say")
 
+    def test_mood_determines_initial_happy_level_on_pat(self):
+        eng = MoodEngine(self.cfg(chatter={"enabled": False}))
+        rec_normal = {"mood": {"happiness": 50, "affection": 30, "energy": 70}, "device_state": "idle",
+                      "growth": {"value": 0, "stage": 1}, "counters": {}}
+        self.assertEqual(eng.apply_event(rec_normal, {"name": "pat"}, now=1), [])
+        self.assertEqual(eng.emotion_level(rec_normal, "pat"), 1)
+
+        rec_good = {"mood": {"happiness": 70, "affection": 30, "energy": 70}, "device_state": "idle",
+                    "growth": {"value": 0, "stage": 1}, "counters": {}}
+        d_good = eng.apply_event(rec_good, {"name": "pat"}, now=2)
+        self.assertIn({"type": "emotion", "emotion": "happy", "level": 2, "seconds": 2}, d_good)
+
+        rec_great = {"mood": {"happiness": 85, "affection": 30, "energy": 70}, "device_state": "idle",
+                     "growth": {"value": 0, "stage": 1}, "counters": {}}
+        d_great = eng.apply_event(rec_great, {"name": "pat"}, now=3)
+        self.assertIn({"type": "emotion", "emotion": "happy", "level": 3, "seconds": 2}, d_great)
+
 
 if __name__ == "__main__":
     unittest.main()

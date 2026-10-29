@@ -13,7 +13,7 @@ import logging
 import os
 import threading
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from .actuators import ActuatorHub, LoggingActuator
 from .events import INTERACTION_TYPES, make_event
@@ -51,6 +51,9 @@ class PetApp:
         self.clock = (ClockEvents(self.bus.publish, clock_cfg.get("night_start", 23), clock_cfg.get("night_end", 7))
                       if use_clock and clock_cfg.get("enabled", True) else None)
         self._clock_acc = 0.0
+        self._sim_time = 0.0
+        self.emotion_cfg: dict = self.config.get("emotions", {})
+        self._input_streaks: Dict[str, dict] = {}
         self.fps = 0.0
         self.started = time.time()
         self._status: dict = {}
@@ -70,6 +73,7 @@ class PetApp:
         self.fsm.stage_listeners.append(self._on_stage_change)
         self.bus.subscribe("*", self._route, owner="core")
         self._apply_state(None)
+        self._update_status()
 
     # -- 生命週期 ---------------------------------------------------------------
     def start(self) -> None:
@@ -91,6 +95,7 @@ class PetApp:
     # -- 每格 -------------------------------------------------------------------
     def step(self, dt: float) -> None:
         self.bus.dispatch_pending()
+        self._sim_time += dt
         self.fsm.update(dt)
         if self.clock:
             self._clock_acc += dt
@@ -124,7 +129,11 @@ class PetApp:
         if t == "control":
             try:
                 if ev.get("name") == "set_state":
-                    self.fsm.force(ev["state"], reason=ev.get("source", "control"))
+                    if ev.get("emotion"):
+                        self.trigger_emotion(str(ev["emotion"]), ev.get("level"),
+                                             source=ev.get("source", "control"), escalate=False)
+                    else:
+                        self.fsm.force(ev["state"], reason=ev.get("source", "control"))
                 elif ev.get("name") == "set_stage":
                     self.fsm.set_stage(int(ev["stage"]))
             except (KeyError, ValueError) as exc:
@@ -135,9 +144,122 @@ class PetApp:
             return
         if t == "skill":
             return                                  # 能力模組自己訂閱處理，不進狀態機
-        self.fsm.handle_event(ev)
-        if t in INTERACTION_TYPES and t != "talk" or t == "time":
+        if not self._handle_emotion_event(ev):
+            self.fsm.handle_event(ev)
+        if t in INTERACTION_TYPES and t != "talk" or t == "time" or t == "emotion":
             self._forward(ev)
+
+    # -- 情緒強度狀態（觸發、升級、輸入對應）--------------------------------------
+    def _emotion_levels(self) -> Dict[str, int]:
+        return {str(k): int(v) for k, v in self.emotion_cfg.get("levels", {}).items()}
+
+    def _parse_emotion_state(self, state: str) -> Tuple[Optional[str], int]:
+        levels = self._emotion_levels()
+        if state in levels and levels[state] == 1:
+            return state, 1
+        if "_" in state:
+            emo, lv_s = state.rsplit("_", 1)
+            if emo in levels and lv_s.isdigit():
+                return emo, int(lv_s)
+        return None, 0
+
+    def _emotion_state_name(self, emotion: str, level: int) -> Optional[str]:
+        levels = self._emotion_levels()
+        if emotion not in levels:
+            return None
+        max_lv = levels[emotion]
+        lv = max(1, min(max_lv, int(level)))
+        cand = emotion if max_lv == 1 and emotion in self.fsm.states else f"{emotion}_{lv}"
+        return cand if cand in self.fsm.states else None
+
+    def _can_enter_emotion(self, emotion: str) -> bool:
+        accept = self.emotion_cfg.get("accept", {})
+        allowed = accept.get(self.fsm.state, accept.get("*", list(self._emotion_levels())))
+        return emotion in allowed
+
+    def trigger_emotion(self, emotion: str, level: Optional[Any] = None, source: str = "emotion",
+                        escalate: bool = True) -> Optional[str]:
+        """依情緒與等級切換到對應狀態；同類情緒狀態下再收到事件會升級（到上限為止並重設計時器）。"""
+        levels = self._emotion_levels()
+        if emotion not in levels or not self._can_enter_emotion(emotion):
+            return None
+        max_lv = levels[emotion]
+        try:
+            req_lv = 1 if level is None else max(1, min(max_lv, int(level)))
+        except (TypeError, ValueError):
+            req_lv = 1
+        cur_emo, cur_lv = self._parse_emotion_state(self.fsm.state)
+        if escalate and cur_emo == emotion:
+            target_lv = min(max_lv, max(cur_lv + 1, req_lv))
+        else:
+            target_lv = req_lv
+        target = self._emotion_state_name(emotion, target_lv)
+        if not target:
+            return None
+        self.fsm.force(target, reason=source)
+        return target
+
+    def _handle_emotion_event(self, ev: dict) -> bool:
+        name = str(ev.get("name") or "")
+        levels = self._emotion_levels()
+        if not levels:
+            return False
+
+        emo: Optional[str] = None
+        if name.startswith("emotion_"):
+            cand = name[len("emotion_"):]
+            if cand in levels:
+                emo = cand
+        elif ev.get("type") == "emotion" and name in levels:
+            emo = name
+
+        if emo is not None:
+            self.fsm.last_event = ev
+            if ev.get("type") in INTERACTION_TYPES:
+                for tm in self.fsm._timers:
+                    if tm["reset_on_input"]:
+                        tm["elapsed"], tm["fired"] = 0.0, False
+            self.trigger_emotion(emo, ev.get("level"), source=ev.get("source", name), escalate=True)
+            return True
+
+        inputs = self.emotion_cfg.get("inputs", {})
+        if name in inputs and ev.get("type") in INTERACTION_TYPES:
+            icfg = inputs[name]
+            base_emo = str(icfg.get("emotion", ""))
+            annoyed_after = icfg.get("annoyed_after")
+            annoyed_emo = str(icfg.get("annoyed_emotion", "annoyed"))
+            if not self._can_enter_emotion(base_emo):
+                return False
+            self.fsm.last_event = ev
+            for tm in self.fsm._timers:
+                if tm["reset_on_input"]:
+                    tm["elapsed"], tm["fired"] = 0.0, False
+            window_s = float(icfg.get("window_s", 4.0))
+            now_ts = float(ev.get("ts") or time.time())
+            prev = self._input_streaks.get(name)
+            if prev is not None:
+                dt_wall = max(0.0, now_ts - prev["ts"])
+                dt_sim = max(0.0, self._sim_time - prev["sim_ts"])
+                elapsed = max(dt_wall, dt_sim)
+                streak = prev["count"] + 1 if elapsed <= window_s else 1
+            else:
+                streak = 1
+            self._input_streaks[name] = {"count": streak, "ts": now_ts, "sim_ts": self._sim_time}
+
+            cur_emo, _ = self._parse_emotion_state(self.fsm.state)
+            if annoyed_after is not None and (streak >= int(annoyed_after) or cur_emo == annoyed_emo):
+                if cur_emo == annoyed_emo:
+                    self.trigger_emotion(annoyed_emo, ev.get("level"), source=name, escalate=True)
+                else:
+                    lv = ev.get("level") or (streak - int(annoyed_after) + 1)
+                    self.trigger_emotion(annoyed_emo, lv, source=name, escalate=False)
+            elif annoyed_after is not None:
+                self.trigger_emotion(base_emo, ev.get("level") or 1, source=name, escalate=False)
+            else:
+                lv = ev.get("level") or streak
+                self.trigger_emotion(base_emo, lv, source=name, escalate=(streak > 1))
+            return True
+        return False
 
     # -- 後端 ---------------------------------------------------------------------
     def _forward(self, ev: dict) -> None:
@@ -221,6 +343,7 @@ class PetApp:
             "state": self.fsm.state,
             "state_label": self.fsm.info.get("label", self.fsm.state),
             "states": list(self.fsm.states),
+            "state_labels": {k: v.get("label", k) for k, v in self.fsm.states.items()},
             "time_in_state": round(self.fsm.time_in_state, 1),
             "stage": self.fsm.growth.stage,
             "stage_name": self.fsm.stage_name(),

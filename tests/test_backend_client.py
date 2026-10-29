@@ -80,10 +80,18 @@ class DirectiveConversionTest(unittest.TestCase):
         self.assertEqual(directive_to_event({"type": "set_stage", "stage": "2"})["stage"], 2)
         e = directive_to_event({"type": "emotion", "emotion": "shy"})
         self.assertEqual(e["params"]["expression"], "squint")
+        e_lv = directive_to_event({"type": "emotion", "emotion": "sad", "level": 2})
+        self.assertEqual((e_lv["type"], e_lv["name"], e_lv["state"]), ("control", "set_state", "sad_2"))
+        e_shy = directive_to_event({"type": "emotion", "emotion": "shy", "level": 1})
+        self.assertEqual((e_shy["type"], e_shy["name"], e_shy["state"]), ("control", "set_state", "shy"))
+        e_cap = directive_to_event({"type": "emotion", "emotion": "annoyed", "level": 3})
+        self.assertEqual(e_cap["state"], "annoyed_2")
         self.assertEqual(directive_to_event({"type": "actuator", "motion": "nod"})["params"], {"motion": "nod"})
         self.assertIsNone(directive_to_event({"type": "say", "text": "  "}))
         self.assertIsNone(directive_to_event({"type": "rm -rf"}))
         self.assertIsNone(directive_to_event({"type": "emotion", "emotion": "angry"}))
+        self.assertIsNone(directive_to_event({"type": "emotion", "emotion": "angry", "level": 1}))
+        self.assertIsNone(directive_to_event({"type": "emotion", "emotion": "sad", "level": 0}))
 
 
 class DeviceBackendTest(unittest.TestCase):
@@ -104,12 +112,34 @@ class DeviceBackendTest(unittest.TestCase):
             self.assertEqual(path, "/v1/pet/event")
             self.assertEqual(body["pet_id"], "test-pet")
             self.assertEqual(body["event"]["name"], "pat")
-            self.assertEqual(body["state"], "happy")
+            self.assertEqual(body["state"], "happy_1")
             frame = app.render()                 # 有泡泡也能正常繪圖
             self.assertEqual(frame.size, (800, 480))
         finally:
             app.stop()
             fb.close()
+
+    def test_emotion_directive_with_and_without_level(self):
+        fb_lv = FakeBackend([{"type": "emotion", "emotion": "sad", "level": 2}])
+        app = make_app(fb_lv.url)
+        try:
+            app.post(make_event("touch", "press", source="test"))
+            self.assertTrue(pump(app, lambda: app.fsm.state == "sad_2"), app.status())
+            self.assertIsNone(app.eyes._override)
+        finally:
+            app.stop()
+            fb_lv.close()
+
+        fb_nolv = FakeBackend([{"type": "emotion", "emotion": "sad", "seconds": 3}])
+        app2 = make_app(fb_nolv.url)
+        try:
+            app2.post(make_event("touch", "press", source="test"))
+            self.assertTrue(pump(app2, lambda: app2.eyes._override is not None), app2.status())
+            self.assertEqual(app2.fsm.state, "happy")      # 沒帶 level：只換眼睛，不改情緒強度狀態
+            self.assertEqual(app2.eyes._override[0], "sad")
+        finally:
+            app2.stop()
+            fb_nolv.close()
 
     def test_backend_directives_not_echoed_back(self):
         fb = FakeBackend([{"type": "set_state", "state": "bored"}])

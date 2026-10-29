@@ -304,7 +304,7 @@ class StateChangeTimestampTest(unittest.TestCase):
         self.assertEqual(app.state_changed_ts, 1000.0)
         app.post(make_event("touch", "pat", ts=2000.0))
         app.step(0.05)
-        self.assertEqual(app.fsm.state, "happy")
+        self.assertEqual(app.fsm.state, "happy_1")
         self.assertEqual(app.state_changed_ts, 2000.0)
 
 
