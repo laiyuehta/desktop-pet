@@ -6,6 +6,7 @@
 ## [未發佈]
 
 ### 新增
+- Pi 自動更新器（自動部署第 2 步，#13）：依 PROPOSAL.md 16 實作 Pi 端自動更新器 `tools/deploy/autoupdate.py`（純標準函式庫），使用 Git smart HTTP 查詢 main 最新 commit，驗證 GitHub Actions CI check-runs（tests 與 secrets scan 必過），下載 tarball 至 `.staging/` 並安全解壓防止路徑穿越；寫入 `RELEASE.json` 與 `MANIFEST.sha256`；支援切換前檢查（`compileall`、`main.py --help`、`autoupdate.py --self-test`）；依檔案變更雜湊選擇性重啟服務（`desktop-pet`、`picam`，純文件/資源改動不重啟）；執行切換後健康檢查（unit active、fps ≥ 18、畫面幀數遞增、piscreen 與 picam 唯讀檢查），失敗自動原子回退上一版並記進 `failed.json`；保留目前版本 + 上一版 + 3 個舊版；支援 `PET_AUTOUPDATE=0`、`PAUSE` 暫停檔、`PET_AUTOUPDATE_PIN` 與本地修改自動暫停；提供 `desktop-pet-update.service`、`desktop-pet-update.timer`（5 分鐘間隔）與 polkit 規則 `51-desktop-pet-update.rules`（僅允許重啟特定服務，嚴禁碰觸 piscreen、嚴禁重開機）；遙控頁新增唯讀「版本與部署」面板；`deploy.env.example` 解除自動更新變數註解。
 - 情緒強度狀態接上主程式（#19）：`config/states.json` 新增 `emotions` 設定（上限等級、`sleep` 僅接受 `surprised`、觸控時間窗與次數）；`pet/app.py` 支援 `emotion_*` 觸發、同系列升級到上限並重設計時器、`pat`（`happy_1..3`）與 `poke`（`surprised_1` → 連戳進 `annoyed_1..2`）輸入對應；`pet/backend_client.py` 支援 `emotion` 指令帶 `level` 切換狀態（未帶 `level` 維持只換眼睛）；`backend/mood.py` 依心情值決定摸頭起始等級；`pet/web/remote.html` 改由 `/status` 動態產生全部狀態按鈕。
 - `services/piwifi/`：Rust 實作的 Wi‑Fi 與救援熱點守護程式（Protocol v1 `/run/piwifi/piwifi.sock`、`/run/piwifi/status.json`、`--observe` 唯讀觀察模式、CLI 除錯子指令、假 `nmcli` 測試、`aarch64-unknown-linux-musl` 交叉編譯與 CI `rust (piwifi)` 檢查）。
 - 拆出前端後台 desktop-pet-admin（#6）：獨立 Python 程式提供管理網頁（:8080）與 Wi‑Fi 管理；桌寵主程式新增 control.sock 與 frames.sock 接口，主程式重啟時網頁與救援熱點不中斷。

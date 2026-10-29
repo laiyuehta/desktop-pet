@@ -374,6 +374,12 @@ class PetApp:
             "last_say": getattr(self, "last_say", None),
             "render": dict(self.render_info) if self.render_info else {"mode": "live"},
         }
+        try:
+            from .version import get_release_info, get_autoupdate_status
+            st["version"] = get_release_info()
+            st["autoupdate"] = get_autoupdate_status()
+        except Exception:
+            pass
         with self._status_lock:
             self._status = st
 

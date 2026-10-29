@@ -1,0 +1,22 @@
+// desktop-pet：讓自動更新器（使用者 @USER@）不用 sudo 即可重啟指定服務。
+// 依 PROPOSAL.md 16.6、16.11：
+// - 僅允許 start、stop、restart、try-restart、reload-or-restart
+// - 僅允許 desktop-pet、desktop-pet-admin、picam、piwifi
+// - 嚴格禁止 piscreen.service，禁止重開機與 daemon-reload
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        subject.user == "@USER@") {
+        var verb = action.lookup("verb");
+        var unit = action.lookup("unit");
+        var allowedVerbs = ["start", "stop", "restart", "try-restart", "reload-or-restart"];
+        var allowedUnits = [
+            "desktop-pet.service",
+            "desktop-pet-admin.service",
+            "picam.service",
+            "piwifi.service"
+        ];
+        if (allowedVerbs.indexOf(verb) >= 0 && allowedUnits.indexOf(unit) >= 0) {
+            return polkit.Result.YES;
+        }
+    }
+});
