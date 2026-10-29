@@ -45,8 +45,9 @@ from pet.version import get_autoupdate_status, get_release_info
 class TestGitSmartHttp(unittest.TestCase):
     def test_parse_pkt_lines(self):
         # 建立模擬 pkt-line 資料
-        # 000a = 10 bytes: "000a" (4) + "test\n" (5) + 1 byte
-        raw = b"000a# test\n0000003b870020a123456789abcdef0123456789abcdef01 refs/heads/main\n"
+        payload = "870020a123456789abcdef0123456789abcdef01 refs/heads/main\n"
+        pkt_len = f"{len(payload.encode('utf-8')) + 4:04x}".encode("ascii")
+        raw = b"000a# test\n0000" + pkt_len + payload.encode("utf-8")
         lines = parse_pkt_lines(raw)
         self.assertIn("# test", lines[0])
         self.assertTrue(any("refs/heads/main" in line for line in lines))
@@ -374,17 +375,19 @@ class TestPolkitRuleAndSystemdTemplates(unittest.TestCase):
         rule_file = Path(__file__).resolve().parents[1] / "services" / "desktop-pet-update" / "51-desktop-pet-update.rules"
         self.assertTrue(rule_file.exists(), f"找不到 {rule_file}")
         content = rule_file.read_text(encoding="utf-8")
+        code_lines = [l for l in content.splitlines() if not l.strip().startswith("//")]
+        code = "\n".join(code_lines)
 
         # 必須包含 allowedUnits
-        self.assertIn("desktop-pet.service", content)
-        self.assertIn("desktop-pet-admin.service", content)
-        self.assertIn("picam.service", content)
-        self.assertIn("piwifi.service", content)
+        self.assertIn("desktop-pet.service", code)
+        self.assertIn("desktop-pet-admin.service", code)
+        self.assertIn("picam.service", code)
+        self.assertIn("piwifi.service", code)
 
-        # 絕對不可包含 piscreen.service 或 reboot
-        self.assertNotIn("piscreen.service", content)
-        self.assertNotIn("reboot", content)
-        self.assertNotIn("reload-daemon", content)
+        # 程式碼邏輯中絕對不可包含 piscreen.service 或 reboot 或 reload-daemon
+        self.assertNotIn("piscreen.service", code)
+        self.assertNotIn("reboot", code)
+        self.assertNotIn("reload-daemon", code)
 
     def test_systemd_service_and_timer_templates(self):
         base = Path(__file__).resolve().parents[1] / "services" / "desktop-pet-update"

@@ -2,7 +2,7 @@
 // 依 PROPOSAL.md 16.6、16.11：
 // - 僅允許 start、stop、restart、try-restart、reload-or-restart
 // - 僅允許 desktop-pet、desktop-pet-admin、picam、piwifi
-// - 嚴格禁止 piscreen.service，禁止重開機與 daemon-reload
+// - 嚴格限定上述四個服務，禁止碰觸其他服務、禁止重開機與 daemon-reload
 polkit.addRule(function(action, subject) {
     if (action.id == "org.freedesktop.systemd1.manage-units" &&
         subject.user == "@USER@") {

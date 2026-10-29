@@ -307,7 +307,10 @@ def safe_extract_tarball(tar_path: Path, extract_to: Path) -> Path:
                 target = member.linkname
                 if os.path.isabs(target) or ".." in target.split("/"):
                     raise ValueError(f"安全防護：拒絕外部符號連結：{member.name} -> {target}")
-        tar.extractall(path=extract_to)
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(path=extract_to, filter="data")
+        else:
+            tar.extractall(path=extract_to)
 
     # Codeload 頂層目錄通常是 <repo>-<commit>
     subdirs = [p for p in extract_to.iterdir() if p.is_dir()]
