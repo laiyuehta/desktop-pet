@@ -46,6 +46,40 @@ load_deploy_env() {
     PET_BACKEND_URL="${PET_BACKEND_URL:-}"
 }
 
+# require_sys_env：檢查環境檔是否存在；若完全沒有環境檔則中止，若僅有舊版 deploy.env 則印警告相容
+require_sys_env() {
+    if [ -n "${PET_DEPLOY_ENV:-}" ]; then
+        if [ ! -f "$PET_DEPLOY_ENV" ]; then
+            echo "錯誤：PET_DEPLOY_ENV 指定的環境檔不存在：$PET_DEPLOY_ENV" >&2
+            return 1
+        fi
+        return 0
+    fi
+    _sys_env="${PET_SYS_ENV:-/etc/desktop-pet/env}"
+    if [ -f "$_sys_env" ]; then
+        return 0
+    fi
+    u="${SUDO_USER:-$PET_USER}"
+    [ "$u" = "root" ] && u="<使用者>"
+    if [ -f "$PET_REPO_ROOT/deploy.env" ]; then
+        echo "警告：找不到環境檔 $_sys_env，目前暫由舊版 $PET_REPO_ROOT/deploy.env 提供設定。" >&2
+        echo "為確保自動更新（從 release 目錄啟動）上線後能正常運作，請盡快建立 $_sys_env（權限 root:$u 0640）：" >&2
+        echo "  sudo mkdir -p \"\$(dirname \"$_sys_env\")\"" >&2
+        echo "  sudo cp \"$PET_REPO_ROOT/deploy.env\" \"$_sys_env\"" >&2
+        echo "  sudo chown root:\"$u\" \"$_sys_env\"" >&2
+        echo "  sudo chmod 640 \"$_sys_env\"" >&2
+        return 0
+    fi
+    echo "錯誤：找不到環境檔 $_sys_env（且無舊版 $PET_REPO_ROOT/deploy.env）。" >&2
+    echo "systemd 服務透過 $_sys_env 載入設定（如 PET_BACKEND_URL），自動更新亦依賴此檔案。" >&2
+    echo "請先建立 $_sys_env（權限 root:$u 0640，見 deploy.env.example）：" >&2
+    echo "  sudo mkdir -p \"\$(dirname \"$_sys_env\")\"" >&2
+    echo "  sudo cp \"$PET_REPO_ROOT/deploy.env.example\" \"$_sys_env\"" >&2
+    echo "  sudo chown root:\"$u\" \"$_sys_env\"" >&2
+    echo "  sudo chmod 640 \"$_sys_env\"" >&2
+    return 1
+}
+
 # render_template <模板檔>：把佔位換成環境變數值輸出到 stdout；還有沒換掉的 @XXX@ 就失敗
 render_template() {
     out="$(sed -e "s#@USER@#$PET_USER#g" -e "s#@HOME@#$PET_HOME#g" -e "s#@BACKEND_URL@#$PET_BACKEND_URL#g" "$1")" || return 1

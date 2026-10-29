@@ -9,7 +9,8 @@ UNIT=/etc/systemd/system/desktop-pet.service
 PET_REPO_ROOT="$(cd ../.. && pwd)"
 . "$PET_REPO_ROOT/tools/deploy/common.sh"
 load_deploy_env
-[ -n "$PET_BACKEND_URL" ] || { echo "環境檔（/etc/desktop-pet/env 或 deploy.env）沒設 PET_BACKEND_URL（見 deploy.env.example）" >&2; exit 1; }
+require_sys_env
+[ -n "$PET_BACKEND_URL" ] || { echo "環境檔（${PET_SYS_ENV:-/etc/desktop-pet/env} 或 deploy.env）沒設 PET_BACKEND_URL（見 deploy.env.example）" >&2; exit 1; }
 tmp=$(mktemp)
 render_template desktop-pet.service > "$tmp" || { rm -f "$tmp"; exit 1; }
 sudo install -m 644 "$tmp" "$UNIT"

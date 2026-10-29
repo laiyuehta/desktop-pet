@@ -17,6 +17,7 @@
 - `.github/CODEOWNERS`、PR 範本、Issue 範本（Bug、任務）、`CONTRIBUTING.md`。
 
 ### 變更
+- 部署防呆與日誌警告整理（#26）：將建立 `/etc/desktop-pet/env` 列為各服務安裝與切換腳本（`install.sh`、`switch.sh`）之檢查步驟，相容舊版 `deploy.env` 並輸出警告，緊急回退（`rollback.sh`）改為只警示不阻擋；更正 `deploy.env.example` 範本描述（自動更新與示範用位址維持註解）；移除 `main.py` 於 `parse_args` 階段在 `logging.basicConfig` 前輸出的未設定後端重複警告，統整於 `main` 中格式化輸出一次。
 - 設定改用環境變數與環境檔（自動部署第 1 步，#12）：Pi 主程式、前端後台、安裝腳本與 systemd unit 支援從 `/etc/desktop-pet/env`（過渡期相容 `deploy.env`）讀取設定並移除 `@BACKEND_URL@` 佔位；R7 後端、`supervise.py`、`start_hidden.cmd` 支援 `%LOCALAPPDATA%\desktop-pet\env` 與四層設定優先順序，設定、token 檔、存檔、照片、動畫包與日誌皆可透過環境變數放至版本目錄外；取消 `deploy.env.example` 範本變數註解。
 - 狀態機與後端情緒等級重構（#23、#27）：後端情緒等級以狀態設定檔為單一來源延遲解析（支援 `PET_CONFIG` 與 `PetApp` 的 `--config` 覆寫）；`PetApp` 將目前設定檔的 `emotions.levels` 傳入 `BackendClient` 與 `directive_to_event`，缺少設定或載入失敗時輸出警告並退回預設；`pet/state_machine.py` 新增 `reset_input_timers()` 公開方法，`pet/app.py` 不再直接存取私有 `_timers` 欄位。
 - `pet/baker.py`、`pet/pack.py`：動畫包替所有狀態配對烘焙過渡片段（16 個狀態 × 15 = 240 組），未烘到的轉移在切換點或非循環片段結尾直接退回目標狀態第 0 格播放（#18）。

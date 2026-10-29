@@ -51,6 +51,8 @@ python3 admin.py [參數]
 
 ## 部署與切換步驟（給桌寵專案機器人1）
 
+> **前置條件**：主程式與後台皆依賴 `/etc/desktop-pet/env` 載入設定。切換或安裝前建議先建立 `/etc/desktop-pet/env`（權限 `root:<使用者> 0640`，至少設定 `PET_BACKEND_URL`）；若完全無環境檔，`switch.sh` 與 `install.sh` 會阻擋，僅有舊版 `deploy.env` 則印警告相容；緊急回退 `rollback.sh` 僅警示不阻擋。
+
 ### 方式一：一鍵切換（建議）
 切換時同一次操作完成主程式與後台設定：
 ```bash

@@ -152,6 +152,54 @@ def test_common_sh_priority_order(tmp_path):
     assert r3.returncode == 0 and r3.stdout == "shell_user|/srv/shell"
 
 
+def test_require_sys_env(tmp_path):
+    import shutil
+    import subprocess
+    import pytest
+    if not shutil.which("sh"):
+        pytest.skip("sh not available")
+    sys_env = tmp_path / "etc-env"
+    custom_env = tmp_path / "custom.env"
+    missing_custom = tmp_path / "nonexistent.env"
+    no_env = tmp_path / "no-env"
+    legacy_env = tmp_path / "deploy.env"
+
+    script = f'. "{ROOT}/tools/deploy/common.sh"; load_deploy_env && require_sys_env'
+
+    # 1. 環境檔不存在且無舊版 deploy.env 時失敗（回傳碼非 0 且輸出錯誤引導）
+    r1 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                        env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path), "PET_SYS_ENV": str(no_env)})
+    assert r1.returncode != 0
+    assert "找不到環境檔" in r1.stderr
+
+    # 2. 只有舊版 deploy.env 時相容通過（rc=0），但輸出警告
+    legacy_env.write_text("PET_USER=legacy_user\nPET_HOME=/srv/legacy\n", encoding="utf-8")
+    r_legacy = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                              env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path), "PET_SYS_ENV": str(no_env)})
+    assert r_legacy.returncode == 0
+    assert "暫由舊版" in r_legacy.stderr
+
+    # 3. 系統環境檔存在時成功
+    sys_env.write_text("PET_USER=sys_user\nPET_HOME=/srv/sys\n", encoding="utf-8")
+    r2 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                        env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path), "PET_SYS_ENV": str(sys_env)})
+    assert r2.returncode == 0
+
+    # 4. 指定 PET_DEPLOY_ENV 存在時成功（自訂覆寫）
+    custom_env.write_text("PET_USER=c_user\nPET_HOME=/srv/custom\n", encoding="utf-8")
+    r3 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                        env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path),
+                             "PET_SYS_ENV": str(no_env), "PET_DEPLOY_ENV": str(custom_env)})
+    assert r3.returncode == 0
+
+    # 5. 指定 PET_DEPLOY_ENV 指向不存在檔案時失敗
+    r4 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                        env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path),
+                             "PET_SYS_ENV": str(no_env), "PET_DEPLOY_ENV": str(missing_custom)})
+    assert r4.returncode != 0
+    assert "不存在" in r4.stderr
+
+
 def test_install_scripts_never_write_deploy_env():
     for rel in ["services/desktop-pet/install.sh", "services/picam/install.sh", "tools/wifi/install.sh",
                 "tools/deploy/common.sh", "services/camcast/start.sh"]:

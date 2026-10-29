@@ -195,10 +195,26 @@ def test_admin_parse_args_priority(tmp_path):
     assert expand_pet_path("@HOME@/x", {"PET_HOME": "/srv/u"}) == "/srv/u/x"
 
 
-def test_missing_backend_url_warns(caplog, tmp_path):
+def test_missing_backend_url_warns(caplog, monkeypatch, tmp_path):
     empty_env = tmp_path / "nope"
+    # parse_args 階段不應在 basicConfig 之前輸出警告
     with caplog.at_level(logging.WARNING, logger="main"):
         a = pet_main.parse_args([], env={}, env_file=str(empty_env))
     assert a.backend is None
-    assert any("未設定後端" in r.message for r in caplog.records)
+    assert not any("未設定後端" in r.message for r in caplog.records)
+
+    # main 執行時在 basicConfig 之後格式化輸出警告，且只輸出一次
+    caplog.clear()
+    monkeypatch.setenv("PET_ENV_FILE", str(empty_env))
+    monkeypatch.delenv("PET_BACKEND_URL", raising=False)
+    monkeypatch.delenv("PET_BACKEND", raising=False)
+    monkeypatch.setattr(pet_main, "PetApp", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("stop early")))
+    with caplog.at_level(logging.WARNING, logger="main"):
+        try:
+            pet_main.main(["--input", "none", "--sink", "null", "--control-socket", "off", "--frames-socket", "off", "--wifi", "off"])
+        except RuntimeError:
+            pass
+    warns = [r.message for r in caplog.records if "未設定後端" in r.message]
+    assert len(warns) == 1
+    assert "以離線單機模式執行" in warns[0]
 
