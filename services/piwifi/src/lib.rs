@@ -1079,30 +1079,6 @@ mod tests {
         )
         .unwrap();
 
-        #[cfg(unix)]
-        let runner = {
-            use std::os::unix::fs::PermissionsExt;
-            let script_path = tmp.path.join("fake-nmcli.sh");
-            // 建立可執行的假 nmcli 腳本，驗證透過 --nmcli / PIWIFI_NMCLI 呼叫外部程式
-            let current_exe = std::env::current_exe().unwrap();
-            let _ = current_exe;
-            let script = format!(
-                "#!/bin/sh\n# fake nmcli wrapper\nSTATE=\"{}\"\n",
-                state_path.display()
-            );
-            let _ = (script_path, script, PermissionsExt::from_mode);
-            SubprocessRunner::with_extra_args(
-                std::env::current_exe()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string(),
-                vec![
-                    "--fake-nmcli".to_string(),
-                    state_path.to_string_lossy().to_string(),
-                ],
-            )
-        };
-        #[cfg(not(unix))]
         let runner = SubprocessRunner::with_extra_args(
             std::env::current_exe()
                 .unwrap()
