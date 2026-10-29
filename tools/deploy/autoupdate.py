@@ -320,14 +320,18 @@ def safe_extract_tarball(tar_path: Path, extract_to: Path) -> Path:
 
 
 def calculate_manifest(release_dir: Path) -> Dict[str, str]:
-    """計算目錄下所有一般檔案的 sha256 雜湊表。"""
+    """計算目錄下所有一般檔案的 sha256 雜湊表（排除非 git 之 packs、環境檔與 symlink）。"""
     manifest: Dict[str, str] = {}
     for root, _, files in os.walk(release_dir):
         for f in sorted(files):
-            if f in ("MANIFEST.sha256", "RELEASE.json"):
+            if f in ("MANIFEST.sha256", "RELEASE.json", "deploy.env"):
                 continue
             fpath = Path(root) / f
+            if fpath.is_symlink():
+                continue
             rel = fpath.relative_to(release_dir).as_posix()
+            if rel.startswith("packs/") or rel == "deploy.env":
+                continue
             try:
                 h = hashlib.sha256()
                 with fpath.open("rb") as fh:
@@ -337,6 +341,74 @@ def calculate_manifest(release_dir: Path) -> Dict[str, str]:
             except OSError:
                 pass
     return manifest
+
+
+def link_shared_resources(
+    target_release_dir: Path,
+    current_release_dir: Optional[Path],
+    home_dir: Optional[Path] = None,
+) -> None:
+    """為新 release 目錄連結或帶入 packs 與 deploy.env 等非 git 資源（PROPOSAL.md 16.2、16.3）。"""
+    home = home_dir or Path(os.environ.get("PET_HOME") or os.path.expanduser("~"))
+
+    # 1. 處理 packs/
+    target_packs = target_release_dir / "packs"
+    target_packs.mkdir(parents=True, exist_ok=True)
+
+    # 優先從全域共用目錄帶入：~/.local/share/desktop-pet/packs
+    shared_packs = home / ".local" / "share" / "desktop-pet" / "packs"
+    if shared_packs.exists() and shared_packs.is_dir():
+        for pack in shared_packs.iterdir():
+            dest = target_packs / pack.name
+            if not dest.exists():
+                try:
+                    if sys.platform != "win32":
+                        os.symlink(str(pack.resolve()), str(dest))
+                    else:
+                        if pack.is_dir():
+                            shutil.copytree(pack, dest)
+                        else:
+                            shutil.copy2(pack, dest)
+                except OSError:
+                    pass
+
+    # 若舊 release 目錄有 packs，也同步連結進新 release
+    if current_release_dir and current_release_dir.exists():
+        old_packs = current_release_dir / "packs"
+        if old_packs.exists() and old_packs.is_dir():
+            for pack in old_packs.iterdir():
+                dest = target_packs / pack.name
+                if not dest.exists():
+                    try:
+                        if sys.platform != "win32":
+                            os.symlink(str(pack.resolve()), str(dest))
+                        else:
+                            if pack.is_dir():
+                                shutil.copytree(pack, dest)
+                            else:
+                                shutil.copy2(pack, dest)
+                    except OSError:
+                        pass
+
+    # 2. 處理 deploy.env
+    target_env = target_release_dir / "deploy.env"
+    if not target_env.exists():
+        if current_release_dir and (current_release_dir / "deploy.env").exists():
+            try:
+                if sys.platform != "win32":
+                    os.symlink(str((current_release_dir / "deploy.env").resolve()), str(target_env))
+                else:
+                    shutil.copy2(current_release_dir / "deploy.env", target_env)
+            except OSError:
+                pass
+        elif Path("/etc/desktop-pet/env").exists():
+            try:
+                if sys.platform != "win32":
+                    os.symlink("/etc/desktop-pet/env", str(target_env))
+                else:
+                    shutil.copy2("/etc/desktop-pet/env", target_env)
+            except OSError:
+                pass
 
 
 def write_manifest(release_dir: Path, manifest: Dict[str, str]) -> Path:
@@ -488,6 +560,24 @@ def pre_switch_check(release_dir: Path, python_bin: str = sys.executable) -> Tup
 def switch_symlink(release_dir: Path, current_link: Path) -> None:
     """以原子方式切換 symlink 指向新版本（PROPOSAL.md 16.6）。"""
     current_link.parent.mkdir(parents=True, exist_ok=True)
+
+    # 首次安裝遷移（PROPOSAL.md 16.9）：
+    # 若 current_link 是一般目錄而非 symlink，先將其安全遷移為第一個 legacy release
+    if current_link.exists() and current_link.is_dir() and not current_link.is_symlink():
+        releases_dir = current_link.parent / "desktop-pet-releases"
+        releases_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        legacy_dir = releases_dir / f"{ts}-legacy"
+        log.info("偵測到 %s 為一般目錄，執行首次安裝遷移至 %s", current_link, legacy_dir)
+        shutil.move(str(current_link), str(legacy_dir))
+        if sys.platform == "win32":
+            try:
+                os.symlink(str(legacy_dir.resolve()), str(current_link), target_is_directory=True)
+            except OSError:
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(current_link), str(legacy_dir.resolve())], check=True, capture_output=True)
+        else:
+            os.symlink(str(legacy_dir.resolve()), str(current_link))
+
     tmp_link = current_link.parent / f".tmp_link_{os.getpid()}_{int(time.time())}"
     try:
         if tmp_link.exists() or tmp_link.is_symlink():
@@ -840,14 +930,39 @@ class AutoUpdater:
         current_release_dir: Optional[Path] = None
         current_commit = "unknown"
         if self.current_link.exists() or self.current_link.is_symlink():
-            try:
-                current_release_dir = self.current_link.resolve()
-                rel_json = current_release_dir / "RELEASE.json"
-                if rel_json.exists():
-                    data = json.loads(rel_json.read_text(encoding="utf-8"))
-                    current_commit = data.get("commit", "unknown")
-            except Exception:
-                pass
+            if self.current_link.is_dir() and not self.current_link.is_symlink():
+                # 首次遷移一般目錄為 legacy release
+                ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                legacy_dir = self.releases_dir / f"{ts}-legacy"
+                log.info("偵測到 %s 為一般目錄，執行首次安裝遷移至 %s", self.current_link, legacy_dir)
+                shutil.move(str(self.current_link), str(legacy_dir))
+                if not (legacy_dir / "RELEASE.json").exists():
+                    legacy_meta = {
+                        "commit": "legacy",
+                        "short": "legacy",
+                        "describe": "initial-migration",
+                        "deployed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "source": "manual",
+                    }
+                    (legacy_dir / "RELEASE.json").write_text(json.dumps(legacy_meta, indent=2), encoding="utf-8")
+                if sys.platform == "win32":
+                    try:
+                        os.symlink(str(legacy_dir.resolve()), str(self.current_link), target_is_directory=True)
+                    except OSError:
+                        subprocess.run(["cmd", "/c", "mklink", "/J", str(self.current_link), str(legacy_dir.resolve())], check=True, capture_output=True)
+                else:
+                    os.symlink(str(legacy_dir.resolve()), str(self.current_link))
+                current_release_dir = legacy_dir
+                current_commit = "legacy"
+            else:
+                try:
+                    current_release_dir = self.current_link.resolve()
+                    rel_json = current_release_dir / "RELEASE.json"
+                    if rel_json.exists():
+                        data = json.loads(rel_json.read_text(encoding="utf-8"))
+                        current_commit = data.get("commit", "unknown")
+                except Exception:
+                    pass
 
         # 檢查鎖
         lock = ProcessLock(self.state_dir / "autoupdate.lock")
@@ -993,6 +1108,9 @@ class AutoUpdater:
                     shutil.rmtree(unpacked_dir)
                 except OSError:
                     pass
+
+            # 建立非 git 共用資源連結（packs/ 與 deploy.env）
+            link_shared_resources(target_release_dir, current_release_dir)
 
             # 產生 MANIFEST.sha256 與 RELEASE.json
             manifest = calculate_manifest(target_release_dir)

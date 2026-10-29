@@ -29,6 +29,30 @@ require_sys_env
 USER_NAME="$PET_USER"
 [ "$USER_NAME" != root ] || { echo "警告：PET_USER 為 root；建議以非 root 使用者執行以符合 polkit 安全限制。" >&2; }
 
+# 首次安裝遷移（PROPOSAL.md 16.9）：
+# 若 $PET_HOME/desktop-pet 是一般目錄而非 symlink，將其遷移為第一個 release 並建立 symlink
+CURRENT_PET="$PET_HOME/desktop-pet"
+RELEASES_DIR="${PET_RELEASES_DIR:-$PET_HOME/desktop-pet-releases}"
+if [ -d "$CURRENT_PET" ] && [ ! -L "$CURRENT_PET" ]; then
+    echo "== 偵測到 $CURRENT_PET 為一般目錄，執行首次安裝遷移至 release 目錄"
+    sudo install -d -m 0755 -o "$USER_NAME" -g "$USER_NAME" "$RELEASES_DIR"
+    LEGACY_DIR="$RELEASES_DIR/$(date -u +%Y%m%dT%H%M%SZ)-legacy"
+    sudo -u "$USER_NAME" mv "$CURRENT_PET" "$LEGACY_DIR"
+    sudo -u "$USER_NAME" ln -s "$LEGACY_DIR" "$CURRENT_PET"
+    if [ ! -f "$LEGACY_DIR/RELEASE.json" ]; then
+        cat <<EOF | sudo -u "$USER_NAME" tee "$LEGACY_DIR/RELEASE.json" > /dev/null
+{
+  "commit": "legacy",
+  "short": "legacy",
+  "describe": "initial-migration",
+  "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "source": "manual"
+}
+EOF
+    fi
+    echo "已完成遷移：$CURRENT_PET -> $LEGACY_DIR"
+fi
+
 tmp_svc=$(mktemp)
 tmp_tmr=$(mktemp)
 tmp_rule=$(mktemp)

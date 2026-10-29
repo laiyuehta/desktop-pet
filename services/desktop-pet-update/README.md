@@ -27,6 +27,11 @@
 sh services/desktop-pet-update/install.sh
 ```
 
+### 首次安裝與遷移說明（PROPOSAL.md 16.9）
+若現有 Pi 環境的 `~/desktop-pet` 仍為一般資料夾（非 symlink）：
+`install.sh` 與自動更新程式會自動將現有目錄遷移至 `~/desktop-pet-releases/<時間>-legacy`，並建立 `~/desktop-pet` symlink 指向該 release。
+既有的動畫包（`packs/`）與環境設定（`deploy.env`）均會由更新器自動帶入新的 release 目錄中，無需手動複製。
+
 檢查 timer 是否正常運行：
 
 ```sh

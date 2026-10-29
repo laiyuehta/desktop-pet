@@ -26,6 +26,7 @@ from tools.deploy.autoupdate import (
     check_manual_steps,
     detect_affected_units,
     get_remote_commit,
+    link_shared_resources,
     load_env,
     load_failed_json,
     parse_pkt_lines,
@@ -351,6 +352,82 @@ class TestSymlinkSwitchAndPruning(unittest.TestCase):
 
         switch_symlink(rel_b, self.link)
         self.assertEqual((self.link / "ver.txt").read_text(encoding="utf-8"), "B")
+
+    def test_switch_symlink_from_ordinary_directory(self):
+        # 模擬 Pi 首次切換：當前的 desktop-pet 是一般目錄而非 symlink
+        cur_dir = self.tmp_dir / "desktop-pet"
+        cur_dir.mkdir()
+        (cur_dir / "main.py").write_text("initial", encoding="utf-8")
+
+        new_rel = self.tmp_dir / "releases" / "20261030T000000Z-rel1"
+        new_rel.mkdir(parents=True)
+        (new_rel / "main.py").write_text("new_code", encoding="utf-8")
+
+        # 呼叫 switch_symlink 不可丟出 IsADirectoryError
+        switch_symlink(new_rel, cur_dir)
+
+        # cur_dir 應轉為 symlink 並指向 new_rel
+        self.assertTrue(cur_dir.is_symlink())
+        self.assertEqual(cur_dir.resolve(), new_rel.resolve())
+        self.assertEqual((cur_dir / "main.py").read_text(encoding="utf-8"), "new_code")
+
+        # 原目錄應被遷移至 desktop-pet-releases 下的 legacy release
+        legacy_dirs = list((self.tmp_dir / "desktop-pet-releases").glob("*-legacy"))
+        self.assertEqual(len(legacy_dirs), 1)
+        self.assertTrue((legacy_dirs[0] / "main.py").exists())
+        self.assertEqual((legacy_dirs[0] / "main.py").read_text(encoding="utf-8"), "initial")
+
+    def test_link_shared_resources(self):
+        old_rel = self.tmp_dir / "old_rel"
+        old_rel.mkdir()
+        (old_rel / "deploy.env").write_text("PET_BACKEND_URL=https://pet.example.com\n", encoding="utf-8")
+        (old_rel / "packs" / "seed").mkdir(parents=True)
+        (old_rel / "packs" / "seed" / "idle.png").write_text("img", encoding="utf-8")
+
+        new_rel = self.tmp_dir / "new_rel"
+        new_rel.mkdir()
+
+        link_shared_resources(new_rel, old_rel, home_dir=self.tmp_dir)
+
+        # 斷言 packs 與 deploy.env 成功帶入新 release
+        self.assertTrue((new_rel / "deploy.env").exists())
+        self.assertEqual((new_rel / "deploy.env").read_text(encoding="utf-8"), "PET_BACKEND_URL=https://pet.example.com\n")
+        self.assertTrue((new_rel / "packs" / "seed" / "idle.png").exists())
+
+    def test_full_update_and_rollback_from_ordinary_directory(self):
+        # 整合測試：從一般目錄開始完整執行遷移、資源帶入、切換與回退
+        desktop_pet = self.tmp_dir / "desktop-pet"
+        desktop_pet.mkdir()
+        (desktop_pet / "main.py").write_text("version 1", encoding="utf-8")
+        (desktop_pet / "deploy.env").write_text("KEY=val1\n", encoding="utf-8")
+        (desktop_pet / "packs" / "seed").mkdir(parents=True)
+        (desktop_pet / "packs" / "seed" / "frame.png").write_text("frame1", encoding="utf-8")
+
+        new_rel = self.tmp_dir / "desktop-pet-releases" / "20261030T100000Z-rel2"
+        new_rel.mkdir(parents=True)
+        (new_rel / "main.py").write_text("version 2", encoding="utf-8")
+
+        # 1. 帶入資源
+        link_shared_resources(new_rel, desktop_pet, home_dir=self.tmp_dir)
+        self.assertTrue((new_rel / "deploy.env").exists())
+        self.assertTrue((new_rel / "packs" / "seed" / "frame.png").exists())
+
+        # 2. 首次切換（自動遷移一般目錄）
+        switch_symlink(new_rel, desktop_pet)
+        self.assertTrue(desktop_pet.is_symlink())
+        self.assertEqual((desktop_pet / "main.py").read_text(encoding="utf-8"), "version 2")
+        self.assertEqual((desktop_pet / "deploy.env").read_text(encoding="utf-8"), "KEY=val1\n")
+        self.assertTrue((desktop_pet / "packs" / "seed" / "frame.png").exists())
+
+        # 3. 執行回退至 legacy release
+        legacy_dirs = list((self.tmp_dir / "desktop-pet-releases").glob("*-legacy"))
+        self.assertEqual(len(legacy_dirs), 1)
+        legacy_rel = legacy_dirs[0]
+
+        switch_symlink(legacy_rel, desktop_pet)
+        self.assertEqual((desktop_pet / "main.py").read_text(encoding="utf-8"), "version 1")
+        self.assertEqual((desktop_pet / "deploy.env").read_text(encoding="utf-8"), "KEY=val1\n")
+        self.assertTrue((desktop_pet / "packs" / "seed" / "frame.png").exists())
 
     def test_prune_old_releases(self):
         dirs = []
