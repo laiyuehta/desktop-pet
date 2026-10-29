@@ -25,3 +25,7 @@ backend/config.local.json
 # 虛擬環境
 venv/
 .venv/
+
+# Rust 編譯與打包產物
+services/*/target/
+dist/

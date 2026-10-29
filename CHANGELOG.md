@@ -6,6 +6,7 @@
 ## [未發佈]
 
 ### 新增
+- `services/piwifi/`：Rust 實作的 Wi‑Fi 與救援熱點守護程式（Protocol v1 `/run/piwifi/piwifi.sock`、`/run/piwifi/status.json`、`--observe` 唯讀觀察模式、CLI 除錯子指令、假 `nmcli` 測試、`aarch64-unknown-linux-musl` 交叉編譯與 CI `rust (piwifi)` 檢查）。
 - Antigravity 改用自己的 GitHub 帳號 `@laiyueda12-star`：CODEOWNERS 把它負責的路徑換成該帳號，CONTRIBUTING 註明認證只設在這個 repo。
 - git 為主的開發流程（項目書 v2.8）：分支命名、PR＋CI 才能進 main、規格 PR、commit 訊息格式、squash merge、Issue、CODEOWNERS、不再改寫歷史、semver tag 與這份更新紀錄、只部署 tag（v2.9 改成跟著 main）。
 - CI（`.github/workflows/ci.yml`）：Python 3.13 跑全部測試（含 node 檢查遙控頁 script）；gitleaks 掃 PR 差異與全部歷史；個人資訊檢查（`.gitleaks.toml` 的 personal 規則＋`tools/ci/check_personal.py` 雜湊比對）。

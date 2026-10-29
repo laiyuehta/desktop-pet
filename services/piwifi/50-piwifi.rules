@@ -1,0 +1,24 @@
+// /etc/polkit-1/rules.d/50-piwifi.rules
+//
+// 僅授權系統帳號 piwifi 透過 NetworkManager 掃描、切換 Wi-Fi、
+// 增刪改連線設定，以及啟動 WPA2 保護的救援熱點（pi-hotspot）。
+// 主程式與管理面板不再直接接觸 NetworkManager，僅透過 /run/piwifi/piwifi.sock 通訊。
+
+polkit.addRule(function(action, subject) {
+    if (subject.user !== "piwifi") {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    var allowed = [
+        "org.freedesktop.NetworkManager.wifi.scan",
+        "org.freedesktop.NetworkManager.network-control",
+        "org.freedesktop.NetworkManager.settings.modify.system",
+        "org.freedesktop.NetworkManager.wifi.share.protected"
+    ];
+
+    if (allowed.indexOf(action.id) >= 0) {
+        return polkit.Result.YES;
+    }
+
+    return polkit.Result.NOT_HANDLED;
+});
