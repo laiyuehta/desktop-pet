@@ -4,6 +4,8 @@
 
 規格見 `PROPOSAL.md`「整體架構」1-2 前端後台與遷移步驟第 1 步。
 
+> **注意**：第 1 步切換後，Wi‑Fi 管理移至後台程式內執行；若後台沒在跑時將沒有救援熱點（此限制將於第 2 步由獨立常駐的 Rust `piwifi` 徹底解決）。
+
 ---
 
 ## 為什麼拆出前端後台？
@@ -13,15 +15,22 @@
 
 ---
 
+## 單一 Wi‑Fi 管理保證機制
+為了確保系統任何時候只有一個 Wi‑Fi 管理實例在運作：
+1. **檔案鎖互斥**：`WifiManager` 啟動背景檢查時，會以非阻塞（`LOCK_EX | LOCK_NB`）鎖定 `/run/desktop-pet/wifi.lock`。若主程式或後台已有實例持有此鎖，另一個實例將無法取得鎖，主動略過啟動背景檢查並記錄 WARNING 日誌，狀態標記為 disabled。
+2. **安裝指令防呆**：`services/desktop-pet-admin/install.sh` 安裝前會先檢查 `desktop-pet` 服務是否仍帶有 `--web` 或未指定 `--wifi off`，以及 `:8080` 埠號是否已被佔用。若有衝突會立刻終止並提示使用一鍵切換腳本。
+
+---
+
 ## 介面與 Socket
 後台透過兩條 Unix Domain Socket 與桌寵主程式通訊：
 - **控制 API**：`/run/desktop-pet/control.sock`（HTTP/1.1 JSON）
   - 前綴 `/v1`，包含 `/v1/status`、`/v1/event`、`/v1/control`、`/v1/actuator`、`/v1/talk`、`/v1/notice`、`/v1/skill/camera.snapshot*`。
+  - 後台背景每 2 秒主動以 `GET /v1/health` 探測連線狀態。
   - 主程式離線時，後台轉送路由回應 `503 {"ok": false, "error": "桌寵主程式未執行"}`，網頁顯示「主程式重新啟動中」。
-  - 每 2 秒自動重試連線。
 - **畫面供應**：`/run/desktop-pet/frames.sock`（串流）
-  - 訂閱主程式畫面（`subscribe` 命令，最多 2 個訂閱者）。
-  - 將收到的幀同步給多個網頁觀看者（`/screen.mjpg`、`/screen.jpg`、`/screen.info`）。
+  - 後台以 20 fps 訂閱主程式畫面（`subscribe` 命令，上限 2 個訂閱者）。
+  - 將收到的幀同步給多個網頁觀看者（`/screen.mjpg`、`/screen.jpg`、`/screen.info`），依各觀看者請求之 fps 進行降頻分送。
 
 ---
 
@@ -42,27 +51,41 @@ python3 admin.py [參數]
 
 ## 部署與切換步驟（給桌寵專案機器人1）
 
-### 切換至後台架構（第 1 步切換）
-**切換時須於同一次操作完成，確保任何時間只有一個 Wi‑Fi 管理常駐：**
-1. 更新 `desktop-pet.service` ExecStart 參數，加上 `--web off --wifi off`：
-   - 主程式不再監聽 `:8080`，也不再執行 `WifiManager`。
-2. 安裝並啟動 `desktop-pet-admin.service`：
+### 方式一：一鍵切換（建議）
+切換時同一次操作完成主程式與後台設定：
+```bash
+sh services/desktop-pet-admin/switch.sh
+```
+此腳本會：
+1. 將 `desktop-pet.service` 切換為 sockets 模式（使用 `services/desktop-pet/desktop-pet-split.service` 範本，帶有 `--web off --wifi off`）。
+2. 安裝並啟用 `desktop-pet-admin.service`（監聽 `:8080` 並接管 Wi‑Fi）。
+3. 一併重啟並檢查兩服務狀態。
+
+### 方式二：手動切換
+1. 更新 `desktop-pet.service`：
+   - 確保包含 `RuntimeDirectory=desktop-pet`、`RuntimeDirectoryMode=0750`、`RuntimeDirectoryPreserve=yes`。
+   - 修改 ExecStart 參數加上 `--web off --wifi off`（或使用 `services/desktop-pet/desktop-pet-split.service`）。
+2. 安裝並啟動後台：
    ```bash
    sh services/desktop-pet-admin/install.sh
    ```
-   - 後台於 `0.0.0.0:8080` 開啟服務，接管 Wi‑Fi 管理與遙控轉送。
-3. 驗證服務：
-   - 瀏覽器開啟 `http://<Pi-IP>:8080/` 確認狀態與畫面正常。
-   - `curl http://127.0.0.1:8080/admin/status` 確認後台與主程式 socket 連線正常。
-
-### 回退步驟（Rollback）
-若發生異常需回到主程式一體化模式：
-1. 停止並停用後台服務：
+3. 重新載入並啟動主程式：
    ```bash
-   sudo systemctl disable --now desktop-pet-admin
-   ```
-2. 將 `desktop-pet.service` 參數復原（移除 `--web off --wifi off`，恢復原本 `--web 0.0.0.0:8080 --wifi auto`），重啟主程式：
-   ```bash
+   sudo systemctl daemon-reload
    sudo systemctl restart desktop-pet
    ```
 
+### 驗證切換結果
+- 瀏覽器開啟 `http://<Pi-IP>:8080/` 確認狀態與畫面正常（20 fps）。
+- 執行狀態檢查指令：
+  ```bash
+  curl -s http://127.0.0.1:8080/admin/status
+  ```
+  確認 `control.connected` 為 `true` 且 `frames.connected` 為 `true`。
+
+### 回退步驟（Rollback）
+若需回到單體模式，執行一鍵回退腳本：
+```bash
+sh services/desktop-pet-admin/rollback.sh
+```
+或手動停用後台並將 `desktop-pet.service` 參數復原為 `--web 0.0.0.0:8080 --wifi auto` 後重啟。

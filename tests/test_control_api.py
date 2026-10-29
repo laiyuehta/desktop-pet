@@ -9,12 +9,14 @@ from pathlib import Path
 import pytest
 
 from pet.control_api import ControlAPIServer
+from main import parse_args
 
 
 class FakeCamera:
-    def __init__(self):
+    def __init__(self, wait_result={"ok": True, "photo_id": "p1"}):
         self.last_thumb = b"fake-jpeg"
         self._seq = 0
+        self.wait_result = wait_result
 
     def status(self):
         return {"ok": True, "enabled": True}
@@ -24,7 +26,7 @@ class FakeCamera:
         return {"ok": True, "request_id": self._seq, "photo_id": "p1"}
 
     def wait(self, req_id, timeout):
-        return {"ok": True, "photo_id": "p1"}
+        return self.wait_result
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -38,6 +40,22 @@ class UnixHTTPConnection(http.client.HTTPConnection):
         self.sock.connect(self.path)
 
 
+def test_main_args_web_off_and_wifi_off():
+    """測試主程式參數解析：支援 --web off 與 --wifi off 進行前端分離部署。"""
+    args = parse_args(["--web", "off", "--wifi", "off", "--sink", "null"])
+    assert args.web == "off"
+    assert args.wifi == "off"
+    assert args.sink == "null"
+
+
+def test_pet_wifi_bridge():
+    """測試 pet.wifi 橋接模組正常導出。"""
+    import pet.wifi as pw
+    assert hasattr(pw, "WifiManager")
+    assert hasattr(pw, "WifiWebAPI")
+    assert hasattr(pw, "DEFAULT_WIFI_LOCK")
+
+
 @pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="需要 socket.AF_UNIX")
 def test_control_api_routes(tmp_path):
     sock_path = str(tmp_path / "control.sock")
@@ -49,7 +67,6 @@ def test_control_api_routes(tmp_path):
         post_fn=lambda ev: events.append(ev),
         fps_fn=lambda: 20.0,
         camera=fake_cam,
-        version="0.1.0",
     )
     srv.start()
     try:
@@ -106,7 +123,7 @@ def test_control_api_routes(tmp_path):
         assert events[-1]["name"] == "say"
         assert events[-1]["params"]["text"] == "熱點開啟"
 
-        # 8. 相機路由
+        # 8. 相機路由（含 snapshot wait 成功）
         conn.request("GET", "/v1/skill/camera.snapshot")
         resp = conn.getresponse()
         assert resp.status == 200
@@ -130,3 +147,25 @@ def test_control_api_routes(tmp_path):
     finally:
         srv.stop()
 
+
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="需要 socket.AF_UNIX")
+def test_control_api_snapshot_wait_timeout(tmp_path):
+    """測試相機 snapshot wait 等待逾時回傳 504。"""
+    sock_path = str(tmp_path / "control_snap.sock")
+    fake_cam = FakeCamera(wait_result=None)  # 模擬 wait 逾時回傳 None
+    srv = ControlAPIServer(
+        path=sock_path,
+        camera=fake_cam,
+    )
+    srv.start()
+    try:
+        conn = UnixHTTPConnection(sock_path)
+        conn.request("POST", "/v1/skill/camera.snapshot", body=json.dumps({"wait": True}))
+        resp = conn.getresponse()
+        assert resp.status == 504
+        data = json.loads(resp.read().decode("utf-8"))
+        assert data["ok"] is False
+        assert data["kind"] == "timeout"
+        conn.close()
+    finally:
+        srv.stop()

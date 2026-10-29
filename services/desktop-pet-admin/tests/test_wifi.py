@@ -5,7 +5,14 @@ import urllib.request
 
 import pytest
 
-from pet.wifi import NM, NmError, WifiManager, WifiWebAPI, classify_error, key_mgmt_for, split_terse, WIFI_TYPE
+import os
+import sys
+
+_ADMIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ADMIN_DIR not in sys.path:
+    sys.path.insert(0, _ADMIN_DIR)
+
+from wifi import NM, NmError, WifiManager, WifiWebAPI, classify_error, key_mgmt_for, split_terse, WIFI_TYPE
 
 
 class FakeNM:

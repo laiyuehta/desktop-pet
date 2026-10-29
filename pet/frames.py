@@ -172,7 +172,7 @@ class FramesServer:
                         sub.offer(self._latest_frame)
 
                 conn.sendall(json.dumps({"ok": True, "proto": 1}).encode("utf-8") + b"\n")
-                conn.settimeout(None)
+                conn.settimeout(5.0)
                 self._stream_subscriber(sub)
                 return
 

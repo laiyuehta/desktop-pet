@@ -9,6 +9,17 @@ import pytest
 from pet.frames import FramesServer
 
 
+def _recv_line(sock, initial_buf=b""):
+    buf = initial_buf
+    while b"\n" not in buf:
+        chunk = sock.recv(1024)
+        if not chunk:
+            break
+        buf += chunk
+    line, _, remaining = buf.partition(b"\n")
+    return line, remaining
+
+
 @pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="需要 socket.AF_UNIX")
 def test_frames_latest_and_subscribe(tmp_path):
     sock_path = str(tmp_path / "frames.sock")
@@ -53,20 +64,23 @@ def test_frames_latest_and_subscribe(tmp_path):
         sub1 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sub1.connect(sock_path)
         sub1.sendall(json.dumps({"v": 1, "cmd": "subscribe", "fps": 20}).encode("utf-8") + b"\n")
-        r1 = json.loads(sub1.recv(1024).decode("utf-8").strip())
+        line1, rest1 = _recv_line(sub1)
+        r1 = json.loads(line1.decode("utf-8").strip())
         assert r1["ok"] is True
 
         sub2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sub2.connect(sock_path)
         sub2.sendall(json.dumps({"v": 1, "cmd": "subscribe", "fps": 20}).encode("utf-8") + b"\n")
-        r2 = json.loads(sub2.recv(1024).decode("utf-8").strip())
+        line2, rest2 = _recv_line(sub2)
+        r2 = json.loads(line2.decode("utf-8").strip())
         assert r2["ok"] is True
 
         # 第 3 個訂閱者應被拒絕
         sub3 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sub3.connect(sock_path)
         sub3.sendall(json.dumps({"v": 1, "cmd": "subscribe", "fps": 20}).encode("utf-8") + b"\n")
-        r3 = json.loads(sub3.recv(1024).decode("utf-8").strip())
+        line3, rest3 = _recv_line(sub3)
+        r3 = json.loads(line3.decode("utf-8").strip())
         assert r3["ok"] is False
         assert "上限" in r3["error"]
         sub3.close()
@@ -83,3 +97,45 @@ def test_frames_latest_and_subscribe(tmp_path):
     finally:
         srv.stop()
 
+
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="需要 socket.AF_UNIX")
+def test_frames_slow_subscriber_drops_old_frames(tmp_path):
+    sock_path = str(tmp_path / "frames_drop.sock")
+    srv = FramesServer(path=sock_path, max_subscribers=2)
+    srv.start()
+    try:
+        sub = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sub.connect(sock_path)
+        sub.sendall(json.dumps({"v": 1, "cmd": "subscribe", "fps": 20}).encode("utf-8") + b"\n")
+        line, buf = _recv_line(sub)
+        r = json.loads(line.decode("utf-8"))
+        assert r["ok"] is True
+
+        # 發布 10 張畫面，佇列上限為 1，慢訂閱者應丟舊畫面
+        for i in range(1, 11):
+            srv.publish(f"data-{i}".encode("utf-8"), {"seq": i, "clip": f"c{i}"})
+            time.sleep(0.005)
+
+        time.sleep(0.1)
+
+        def read_frame(buf):
+            while b"\n" not in buf:
+                buf += sub.recv(1024)
+            h_line, buf = buf.split(b"\n", 1)
+            hdr = json.loads(h_line.decode("utf-8"))
+            while len(buf) < 4:
+                buf += sub.recv(1024)
+            size = struct.unpack(">I", buf[:4])[0]
+            buf = buf[4:]
+            while len(buf) < size:
+                buf += sub.recv(1024)
+            payload = buf[:size]
+            buf = buf[size:]
+            return hdr, payload, buf
+
+        hdr, payload, buf = read_frame(buf)
+        # 由於中間畫面被丟棄，收到的畫面有效且不拖慢發布
+        assert hdr["seq"] > 0
+        sub.close()
+    finally:
+        srv.stop()

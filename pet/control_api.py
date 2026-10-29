@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs
 from typing import Optional
 
+from . import __version__
 from .events import make_event, normalize_event
 
 log = logging.getLogger("pet.control")
@@ -26,7 +27,7 @@ MAX_BODY = 64 * 1024
 
 
 class ControlAPIHandler(BaseHTTPRequestHandler):
-    server_version = "DesktopPetCore/1.0"
+    server_version = f"DesktopPetCore/{__version__}"
 
     def address_string(self) -> str:
         # Unix domain socket 的 client_address 可能是空字串或 None
@@ -196,11 +197,11 @@ class ControlAPIServer:
     """Unix socket 控制伺服器。"""
 
     def __init__(self, path: str = DEFAULT_CONTROL_SOCKET, app=None, camera=None,
-                 status_fn=None, post_fn=None, fps_fn=None, version: str = "0.1.0"):
+                 status_fn=None, post_fn=None, fps_fn=None, version: Optional[str] = None):
         self.path = path
         self.app = app
         self.camera = camera
-        self.version = version
+        self.version = version or __version__
         self.status_fn = status_fn or (app.status if app else lambda: {})
         self.post_fn = post_fn or (app.post if app else lambda ev: None)
         self.fps_fn = fps_fn or (lambda: getattr(app, "fps", 0.0) if app else 0.0)

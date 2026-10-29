@@ -1,13 +1,10 @@
-#!/usr/bin/env python3
-"""桌寵前端後台（desktop-pet-admin）。
+"""桌寵前端後台服務 desktop-pet-admin (v2.6 遷移第 1 步)。
 
-規格見 PROPOSAL.md「整體架構」1-2 前端後台與遷移步驟第 1 步：
-- 獨立程式，管理網頁（:8080）、遙控、螢幕畫面同步、Wi‑Fi 設定與救援熱點。
-- 透過 Unix socket 與桌寵主程式溝通：
-  - 控制 API：/run/desktop-pet/control.sock（HTTP JSON）
-  - 畫面供應：/run/desktop-pet/frames.sock（串流）
-- 主程式重啟或未執行時，網頁遙控回 503（提示重啟中），Wi‑Fi 與救援熱點照常可用。
-- 每 2 秒自動重試連線主程式 socket。
+獨立執行的網頁遙控與狀態管理服務：
+- 提供網頁介面（預設 :8080）。
+- 控制 API 轉送至主程式 Unix socket (/run/desktop-pet/control.sock)。
+- 畫面訂閱轉送至主程式 Unix socket (/run/desktop-pet/frames.sock)。
+- 整合 Wi‑Fi 管理（從 pet/wifi.py 移入），主程式不在時 Wi‑Fi 依然可用。
 """
 
 from __future__ import annotations
@@ -24,7 +21,9 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
-from typing import Callable, Optional, Tuple
+from typing import Optional, Tuple
+
+__version__ = "0.1.0"
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 if _DIR not in sys.path:
@@ -63,18 +62,70 @@ class ControlClient:
         self.last_ok: Optional[float] = None
         self.last_error: Optional[str] = None
         self.connected = False
+        self._stop_monitor = threading.Event()
+        self._monitor_thread: Optional[threading.Thread] = None
 
-    def forward(self, method: str, path: str, body: Optional[bytes] = None,
-                headers: Optional[dict] = None) -> Tuple[int, bytes, str, dict]:
-        """轉送請求給 control.sock，主程式不在時回傳 503。"""
+    def check_health(self) -> bool:
+        """主動檢查 control.sock 健康狀態（每 2 秒一次）。"""
         if not hasattr(socket, "AF_UNIX") or not os.path.exists(self.socket_path):
             self.connected = False
             self.last_error = "socket 不存在"
-            return 503, json.dumps({"ok": False, "error": "桌寵主程式未執行"}).encode("utf-8"), "application/json; charset=utf-8", {}
+            return False
 
-        conn = UnixHTTPConnection(self.socket_path, timeout=self.timeout)
+        conn = UnixHTTPConnection(self.socket_path, timeout=1.5)
         try:
-            req_headers = {"User-Agent": "desktop-pet-admin/1.0"}
+            conn.request("GET", "/v1/health", headers={"User-Agent": f"desktop-pet-admin/{__version__}"})
+            resp = conn.getresponse()
+            resp.read()
+            if resp.status == 200:
+                self.connected = True
+                self.last_ok = time.time()
+                self.last_error = None
+                return True
+            else:
+                self.connected = False
+                self.last_error = f"HTTP {resp.status}"
+                return False
+        except (socket.timeout, TimeoutError) as exc:
+            self.connected = False
+            self.last_error = f"健康檢查逾時：{exc}"
+            return False
+        except (OSError, http.client.HTTPException) as exc:
+            self.connected = False
+            self.last_error = str(exc)
+            return False
+        finally:
+            conn.close()
+
+    def start_monitor(self, interval: float = 2.0) -> None:
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            return
+        self._stop_monitor.clear()
+        def loop():
+            while not self._stop_monitor.is_set():
+                self.check_health()
+                self._stop_monitor.wait(interval)
+        self._monitor_thread = threading.Thread(target=loop, name="control-monitor", daemon=True)
+        self._monitor_thread.start()
+
+    def stop_monitor(self) -> None:
+        self._stop_monitor.set()
+        if self._monitor_thread:
+            self._monitor_thread = None
+
+    def forward(self, method: str, path: str, body: Optional[bytes] = None,
+                headers: Optional[dict] = None, timeout: Optional[float] = None) -> Tuple[int, bytes, str, dict]:
+        """轉送請求給 control.sock，主程式不在時回傳 503，逾時回傳 504。"""
+        if not hasattr(socket, "AF_UNIX") or not os.path.exists(self.socket_path):
+            self.connected = False
+            self.last_error = "socket 不存在"
+            return 503, json.dumps({"ok": False, "error": "桌寵主程式未執行"}, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8", {}
+
+        # 拍照請求最多等待 30 秒，使用至少 35 秒逾時；其餘請求使用預設 timeout
+        req_timeout = timeout if timeout is not None else (35.0 if "snapshot" in path else self.timeout)
+        conn = UnixHTTPConnection(self.socket_path, timeout=req_timeout)
+        try:
+            req_headers = {"User-Agent": f"desktop-pet-admin/{__version__}"}
             if headers:
                 for k in ("Content-Type", "Content-Length", "X-Proto"):
                     if k in headers:
@@ -92,17 +143,23 @@ class ControlClient:
             self.last_ok = time.time()
             self.last_error = None
             return resp.status, data, ctype, extra
+        except (socket.timeout, TimeoutError) as exc:
+            self.last_error = f"逾時：{exc}"
+            log.warning("轉送 control.sock 逾時：%s", exc)
+            return 504, json.dumps({"ok": False, "error": "轉送請求逾時"}, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8", {}
         except (OSError, http.client.HTTPException) as exc:
             self.connected = False
             self.last_error = str(exc)
             log.debug("連線 control.sock 失敗：%s", exc)
-            return 503, json.dumps({"ok": False, "error": "桌寵主程式未執行"}).encode("utf-8"), "application/json; charset=utf-8", {}
+            return 503, json.dumps({"ok": False, "error": "桌寵主程式未執行"}, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8", {}
         finally:
             conn.close()
 
-    def post(self, path: str, obj: dict) -> Tuple[int, dict]:
+    def post(self, path: str, obj: dict, timeout: Optional[float] = None) -> Tuple[int, dict]:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        code, resp_bytes, _, _ = self.forward("POST", path, body=body, headers={"Content-Type": "application/json"})
+        code, resp_bytes, _, _ = self.forward("POST", path, body=body,
+                                              headers={"Content-Type": "application/json"},
+                                              timeout=timeout)
         try:
             return code, json.loads(resp_bytes.decode("utf-8") or "{}")
         except Exception:
@@ -138,7 +195,8 @@ class FramesSubscriber:
             try:
                 sock.settimeout(3.0)
                 sock.connect(self.socket_path)
-                sock.sendall(json.dumps({"v": 1, "cmd": "subscribe", "fps": 10}).encode("utf-8") + b"\n")
+                # 以 20 fps 訂閱主程式畫面，再由 ScreenMirror / ScreenWebAPI 依觀看者需求降頻
+                sock.sendall(json.dumps({"v": 1, "cmd": "subscribe", "fps": 20}).encode("utf-8") + b"\n")
                 buf = b""
                 while b"\n" not in buf:
                     chunk = sock.recv(1024)
@@ -180,21 +238,22 @@ class FramesSubscriber:
                     jpeg_bytes = buf[:n]
                     buf = buf[n:]
 
-                    self.mirror.publish(jpeg_bytes, header)
+                    self.mirror.publish(jpeg_bytes, meta=header)
                     self.last_ok = time.time()
-            except (OSError, ValueError) as exc:
+            except Exception as exc:
                 self.connected = False
-                log.debug("frames.sock 連線中斷：%s（2 秒後重連）", exc)
+                log.debug("frames.sock 斷線或異常：%s", exc)
+                self._stop.wait(2.0)
             finally:
                 try:
                     sock.close()
                 except OSError:
                     pass
-            self._stop.wait(2.0)
 
 
 class AdminServer:
-    def __init__(self, listen: str = DEFAULT_LISTEN,
+    def __init__(self,
+                 listen: str = DEFAULT_LISTEN,
                  control_socket: str = DEFAULT_CONTROL_SOCKET,
                  frames_socket: str = DEFAULT_FRAMES_SOCKET,
                  html_path: str = DEFAULT_HTML_PATH,
@@ -219,17 +278,16 @@ class AdminServer:
             return {}
 
         self.screen_api = ScreenWebAPI(
-            self.mirror,
+            mirror=self.mirror,
             status_fn=get_core_status,
-            is_core_online_fn=lambda: self.control.connected or self.frames.connected,
+            core_online_fn=lambda: self.control.connected,
         )
-        self.started_ts = time.time()
         self.httpd: Optional[ThreadingHTTPServer] = None
         self.server_thread: Optional[threading.Thread] = None
-        self.port = 0
+        self.port: int = 0
+        self.started_ts = time.time()
 
     def start(self) -> None:
-        server_obj = self
         control = self.control
         mirror = self.mirror
         frames = self.frames
@@ -252,7 +310,7 @@ class AdminServer:
             return code, merged, "application/json; charset=utf-8", extra
 
         class AdminHandler(BaseHTTPRequestHandler):
-            server_version = "DesktopPetAdmin/0.1"
+            server_version = f"DesktopPetAdmin/{__version__}"
 
             def log_message(self, fmt, *args):
                 log.debug("%s - %s", self.address_string(), fmt % args)
@@ -260,10 +318,14 @@ class AdminServer:
             def _send(self, code: int, body: bytes, ctype: str = "application/json; charset=utf-8", extra=None):
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
+                has_cache_control = False
                 for k, v in (extra or {}).items():
+                    if k.lower() == "cache-control":
+                        has_cache_control = True
                     self.send_header(k, v)
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
+                if not has_cache_control:
+                    self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -288,7 +350,7 @@ class AdminServer:
                     self._json(200, {
                         "ok": True,
                         "name": "desktop-pet-admin",
-                        "version": "0.1.0",
+                        "version": __version__,
                         "uptime": round(time.time() - started_ts, 1),
                         "control": {
                             "connected": control.connected,
@@ -309,54 +371,64 @@ class AdminServer:
 
                 # 3. Wi-Fi API 路由
                 if wifi_api and path.startswith("/wifi/"):
-                    res = wifi_api.handle("GET", path, query, self.headers)
+                    res = wifi_api.handle("GET", path, None, self.headers)
                     if res is not None:
                         self._json(res[0], res[1])
                         return
 
-                # 4. 螢幕畫面 API 路由
-                if path.startswith("/screen."):
+                # 4. 畫面同步路由
+                if path in ("/screen.mjpg", "/screen.jpg", "/screen.info"):
                     res = screen_api.handle("GET", path, query, self.headers)
                     if res is not None:
-                        if res[0] == "stream":
-                            res[1](self)
-                        elif len(res) == 4:
-                            self._send(res[0], res[1], res[2], res[3])
-                        elif len(res) == 3:
-                            self._send(res[0], res[1], res[2])
-                        else:
-                            self._json(res[0], res[1])
-                        return
+                        mode, val = res
+                        if mode == "json":
+                            self._json(200, val)
+                            return
+                        if mode == "jpeg":
+                            self._send(200, val, "image/jpeg", {"Cache-Control": "no-store, no-cache"})
+                            return
+                        if mode == "stream":
+                            val(self)
+                            return
 
-                # 5. /status 路由（轉送並合併 Wi-Fi 狀態）
+                # 5. 主程式狀態路由（合併 Wi-Fi 狀態）
                 if path == "/status":
                     code, body, ctype, extra = get_status_with_wifi()
                     self._send(code, body, ctype, extra)
                     return
 
-                # 6. 相機縮圖路由轉送
+                # 6. 相機最後一張照片與狀態轉送
+                if path in ("/skill/camera.snapshot/last.jpg", "/v1/skill/camera.snapshot/last.jpg"):
+                    code, body, ctype, extra = control.forward("GET", "/v1/skill/camera.snapshot/last.jpg")
+                    self._send(code, body, ctype, extra)
+                    return
                 if path in ("/skill/camera.snapshot", "/v1/skill/camera.snapshot"):
                     code, body, ctype, extra = control.forward("GET", "/v1/skill/camera.snapshot")
                     self._send(code, body, ctype, extra)
                     return
-                if path in ("/skill/camera.snapshot/last.jpg", "/v1/skill/camera.snapshot/last.jpg"):
-                    code, body, ctype, extra = control.forward("GET", "/v1/skill/camera.snapshot/last.jpg")
+
+                # 7. 主程式通用 GET 控制 API 轉送
+                if path.startswith("/v1/"):
+                    code, body, ctype, extra = control.forward("GET", path)
                     self._send(code, body, ctype, extra)
                     return
 
                 self._json(404, {"ok": False, "error": "not found"})
 
             def do_POST(self):
-                path = self.path.split("?", 1)[0]
-                try:
-                    n = int(self.headers.get("Content-Length") or 0)
-                    if n > MAX_BODY:
-                        raise ValueError("內容太大")
-                    raw_body = self.rfile.read(n) if n else b"{}"
-                    data = json.loads(raw_body.decode("utf-8") or "{}")
-                except (ValueError, KeyError, TypeError) as exc:
-                    self._json(400, {"ok": False, "error": str(exc)})
-                    return
+                path, _, _ = self.path.partition("?")
+                cl = self.headers.get("Content-Length")
+                raw_body = b""
+                data = None
+                if cl:
+                    try:
+                        n = min(int(cl), MAX_BODY)
+                        raw_body = self.rfile.read(n)
+                        if raw_body:
+                            data = json.loads(raw_body.decode("utf-8"))
+                    except Exception as exc:
+                        self._json(400, {"ok": False, "error": f"JSON 解析失敗：{exc}"})
+                        return
 
                 # 1. Wi-Fi API 路由
                 if wifi_api and path.startswith("/wifi/"):
@@ -393,6 +465,7 @@ class AdminServer:
         self.port = self.httpd.server_address[1]
         log.info("前端後台網頁介面已開在：http://%s:%d/", host or "0.0.0.0", self.port)
 
+        self.control.start_monitor()
         self.frames.start()
         if self.wifi:
             self.wifi.start()
@@ -406,6 +479,7 @@ class AdminServer:
             self.httpd.shutdown()
             self.httpd.server_close()
             self.httpd = None
+        self.control.stop_monitor()
         self.frames.stop()
         if self.wifi:
             self.wifi.stop()

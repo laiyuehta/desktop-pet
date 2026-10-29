@@ -21,9 +21,15 @@ import time
 import uuid as uuidlib
 from typing import Callable, Dict, List, Optional, Tuple
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
 log = logging.getLogger("pet.wifi")
 
 DEFAULT_HOTSPOT_CONF = "/etc/desktop-pet/wifi-hotspot.conf"
+DEFAULT_WIFI_LOCK = "/run/desktop-pet/wifi.lock"
 HOTSPOT_SSID = "PetRescue-AP"
 HOTSPOT_PORT = 8080
 # 熱點網址：熱點開著時用 wlan0 實際拿到的 IP（NetworkManager 共用模式的閘道）組出來，不寫死；
@@ -223,9 +229,13 @@ class WifiManager:
     def __init__(self, nm: Optional[NM] = None, iface: str = "wlan0", notify: Optional[Callable[[str, float], None]] = None,
                  try_secs: int = 20, rescan_secs: float = 60, revert_secs: int = 30, hotspot_after: float = 120,
                  hotspot_retry: float = 180, hotspot: bool = True, hotspot_conf: str = DEFAULT_HOTSPOT_CONF,
-                 hotspot_ssid: str = HOTSPOT_SSID, clock: Callable[[], float] = time.monotonic, pin: Optional[str] = None):
+                 hotspot_ssid: str = HOTSPOT_SSID, clock: Callable[[], float] = time.monotonic, pin: Optional[str] = None,
+                 lock_file: Optional[str] = DEFAULT_WIFI_LOCK):
         self.nm = nm or NM()
         self.iface = iface
+        self.lock_file = lock_file
+        self._lock_fd = None
+        self.has_lock = False
         self.notify = notify or (lambda text, secs: None)
         self.try_secs, self.rescan_secs, self.revert_secs = try_secs, rescan_secs, revert_secs
         self.hotspot_after, self.hotspot_retry = hotspot_after, hotspot_retry
@@ -682,6 +692,26 @@ class WifiManager:
             self.lock.release()
 
     def start(self, interval: float = 5.0) -> None:
+        if fcntl is not None and self.lock_file:
+            try:
+                os.makedirs(os.path.dirname(self.lock_file), exist_ok=True)
+                self._lock_fd = open(self.lock_file, "a+")
+                fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.has_lock = True
+            except (IOError, OSError) as exc:
+                log.warning("無法取得 Wi‑Fi 管理鎖 %s，已略過啟動 Wi‑Fi 管理（可能已有其他實例在跑）: %s", self.lock_file, exc)
+                if self._lock_fd:
+                    try:
+                        self._lock_fd.close()
+                    except Exception:
+                        pass
+                    self._lock_fd = None
+                self.has_lock = False
+                self.mode = "disabled"
+                return
+        else:
+            self.has_lock = True
+
         def loop():
             while not self._stop.is_set():
                 try:
@@ -694,6 +724,15 @@ class WifiManager:
 
     def stop(self) -> None:
         self._stop.set()
+        if self._lock_fd:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+                self._lock_fd.close()
+            except Exception:
+                pass
+            self._lock_fd = None
+            self.has_lock = False
 
     @staticmethod
     def available(iface: str = "wlan0") -> bool:
