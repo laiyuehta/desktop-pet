@@ -1,11 +1,19 @@
 """Wi‑Fi 模組測試：nmcli 全部用假的（不碰真的網路）。"""
 import json
 import threading
+import time
 import urllib.request
 
 import pytest
 
-from pet.wifi import NM, NmError, WifiManager, WifiWebAPI, classify_error, key_mgmt_for, split_terse, WIFI_TYPE
+import os
+import sys
+
+_ADMIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ADMIN_DIR not in sys.path:
+    sys.path.insert(0, _ADMIN_DIR)
+
+from wifi import NM, NmError, WifiManager, WifiWebAPI, classify_error, key_mgmt_for, split_terse, WIFI_TYPE
 
 
 class FakeNM:
@@ -428,3 +436,106 @@ def test_hotspot_retry_when_interrupted(env):
         return real_up(uuid, iface, wait)
     nm.up = flaky
     assert mgr.set_hotspot(True)["ok"] and mgr.mode == "hotspot"
+
+def test_wifi_manager_lock_missing_directory_still_manages_wifi(env, tmp_path):
+    nm, _, _, _, _ = env
+    bad_dir = tmp_path / "missing_sub" / "deep_dir"
+    bad_lock = str(bad_dir / "wifi.lock")
+    mgr = WifiManager(nm=nm, lock_file=bad_lock)
+    try:
+        mgr.start(interval=0.05)
+        time.sleep(0.1)
+        assert mgr.has_lock is True
+        assert mgr.mode != "disabled"
+    finally:
+        mgr.stop()
+
+
+def test_wifi_manager_lock_permission_error_still_manages_wifi(env, tmp_path, monkeypatch):
+    nm, _, _, _, _ = env
+    lock_file = str(tmp_path / "noperm" / "wifi.lock")
+
+    def mock_makedirs(path, exist_ok=True):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(os, "makedirs", mock_makedirs)
+    mgr = WifiManager(nm=nm, lock_file=lock_file)
+    try:
+        mgr.start(interval=0.05)
+        time.sleep(0.1)
+        assert mgr.has_lock is True
+        assert mgr.mode != "disabled"
+    finally:
+        mgr.stop()
+
+
+def test_wifi_web_api_rejects_writes_when_no_lock(env):
+    nm, mgr, _, _, _ = env
+    mgr.has_lock = False
+    api = WifiWebAPI(mgr)
+
+    for path, data in [
+        ("/wifi/connect", {"ssid": "TestSSID", "password": "password123"}),
+        ("/wifi/forget", {"uuid": "some-uuid"}),
+        ("/wifi/priority", {"uuid": "some-uuid", "priority": 10}),
+        ("/wifi/hotspot", {"enable": True}),
+    ]:
+        status, res = api.handle("POST", path, data)
+        assert status == 409
+        assert res == {"ok": False, "error": "另一個 Wi‑Fi 管理在執行"}
+
+    # 讀取操作不受影響
+    status, _ = api.handle("GET", "/wifi/status", None)
+    assert status == 200
+    status, _ = api.handle("GET", "/wifi/saved", None)
+    assert status == 200
+    status, _ = api.handle("GET", "/wifi/scan", None)
+    assert status == 200
+
+
+def test_wifi_manager_lock_conflict_and_handover(env, tmp_path):
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+    if fcntl is None:
+        pytest.skip("需要 fcntl")
+
+    nm, _, _, _, _ = env
+    lock_file = str(tmp_path / "wifi.lock")
+    mgr1 = WifiManager(nm=nm, lock_file=lock_file)
+    mgr2 = WifiManager(nm=nm, lock_file=lock_file)
+    api2 = WifiWebAPI(mgr2)
+    try:
+        mgr1.start(interval=0.05)
+        time.sleep(0.05)
+        assert mgr1.has_lock is True
+
+        # 第二個實例啟動時鎖被佔用
+        mgr2.start(interval=0.05, retry_lock_interval=0.1)
+        time.sleep(0.05)
+        assert mgr2.has_lock is False
+
+        # 第二個實例寫入操作應回傳 409
+        status, res = api2.handle("POST", "/wifi/hotspot", {"enable": True})
+        assert status == 409
+        assert res == {"ok": False, "error": "另一個 Wi‑Fi 管理在執行"}
+
+        status, res = api2.handle("POST", "/wifi/connect", {"ssid": "HomeAP"})
+        assert status == 409
+        assert res == {"ok": False, "error": "另一個 Wi‑Fi 管理在執行"}
+
+        # 第一個實例釋放鎖
+        mgr1.stop()
+        time.sleep(0.25)
+
+        # 第二個實例接手
+        assert mgr2.has_lock is True
+
+        # 第二個實例接手後寫入操作成功（不再是 409）
+        status, res = api2.handle("POST", "/wifi/hotspot", {"enable": True})
+        assert status == 200
+        assert res.get("ok") is True
+    finally:
+        mgr1.stop()
+        mgr2.stop()

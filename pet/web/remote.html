@@ -43,6 +43,7 @@
 </head>
 <body>
 <h1>🟦 桌寵遙控</h1>
+<div id="admin-banner" style="display:none;background:#c0392b;color:#fff;padding:8px 14px;border-radius:10px;margin-bottom:12px;font-weight:600;text-align:center">主程式重新啟動中</div>
 
 <div class="card" id="scr-card">
   <h2>螢幕畫面（跟送到螢幕的同一張）</h2>
@@ -197,7 +198,15 @@ $("#talk-form").onsubmit = (e) => {
 };
 async function poll() {
   try {
-    const s = await (await fetch("/status", { cache: "no-store" })).json();
+    const res = await fetch("/status", { cache: "no-store" });
+    const s = await res.json();
+    const banner = $("#admin-banner");
+    if (!res.ok || s.error === "桌寵主程式未執行" || s.ok === false) {
+      if (banner) banner.style.display = "block";
+      $("#st-conn").textContent = "桌寵主程式未執行（重新啟動中…）";
+      return;
+    }
+    if (banner) banner.style.display = "none";
     $("#st-state").textContent = (s.state_label || "") + "（" + s.state + "）";
     $("#st-stage").textContent = s.stage + " " + (s.stage_name || "");
     $("#st-growth").textContent = s.growth ? s.growth.value : "—";
@@ -214,7 +223,11 @@ async function poll() {
     document.querySelectorAll("[data-state]").forEach(b => b.classList.toggle("on", b.dataset.state === s.state));
     document.querySelectorAll("[data-stage]").forEach(b => b.classList.toggle("on", +b.dataset.stage === s.stage));
     $("#st-conn").textContent = "已連線 · 每秒更新";
-  } catch (e) { $("#st-conn").textContent = "連不到桌寵（重試中…）"; }
+  } catch (e) {
+    const banner = $("#admin-banner");
+    if (banner) banner.style.display = "block";
+    $("#st-conn").textContent = "連不到桌寵（重試中…）";
+  }
 }
 poll(); setInterval(poll, 1000);
 

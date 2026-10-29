@@ -23,6 +23,8 @@ from pet.app import PetApp
 from pet.events import make_event
 from pet.extensions import CameraSnapshot, CameraWebAPI, PhotoUploader
 from pet.extensions.camera import DEFAULT_PENDING_DIR, DEFAULT_PICAM_SOCKET, picam_snapshot
+from pet.control_api import ControlAPIServer, DEFAULT_CONTROL_SOCKET
+from pet.frames import FrameBroadcaster, FramesServer, DEFAULT_FRAMES_SOCKET
 from pet.inputs import KeyboardInput, WebRemoteInput
 from pet.pack import AnimationPack, PackDriver
 from pet.outputs import FileSink, NullSink, PiscreenSink
@@ -72,18 +74,23 @@ def parse_args(argv=None):
     p.add_argument("--wifi-hotspot-ssid", default=HOTSPOT_SSID, help="設定熱點名稱")
     p.add_argument("--wifi-hotspot-conf", default=DEFAULT_HOTSPOT_CONF, help="熱點密碼設定檔（password=...）")
     p.add_argument("--wifi-hotspot-after", type=float, default=120, help="幾秒連不上就開熱點（預設 120）")
+    p.add_argument("--control-socket", default=DEFAULT_CONTROL_SOCKET,
+                   help="控制 API Unix socket 路徑（預設 /run/desktop-pet/control.sock；off 關閉）")
+    p.add_argument("--frames-socket", default=DEFAULT_FRAMES_SOCKET,
+                   help="畫面供應 Unix socket 路徑（預設 /run/desktop-pet/frames.sock；off 關閉）")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
 
-def make_sink(args, mirror=None):
+def make_sink(args, mirror=None, frames_server=None):
     if args.sink == "piscreen":
         sink = PiscreenSink(args.socket, quality=args.jpeg_quality)
     elif args.sink == "preview":
         sink = FileSink(args.preview_dir, every=args.preview_every)
     else:
         sink = NullSink()
-    sink.mirror = mirror
+    targets = [m for m in (mirror, frames_server) if m is not None]
+    sink.mirror = FrameBroadcaster(*targets) if targets else None
     return sink
 
 
@@ -112,7 +119,10 @@ def main(argv=None) -> int:
     app = PetApp(args.config, timer_overrides=overrides, backend_url=args.backend, pet_id=args.pet_id,
                  backend_token=token, font_path=args.font, extensions=[camera] if camera else None)
     mirror = ScreenMirror(max_viewers=args.mirror_viewers) if args.mirror == "on" else None
-    sink = make_sink(args, mirror)
+    frames_server = None
+    if args.frames_socket and args.frames_socket.lower() not in ("off", "none"):
+        frames_server = FramesServer(args.frames_socket)
+    sink = make_sink(args, mirror=mirror, frames_server=frames_server)
     pack_dir = args.pack
     if pack_dir == "auto":
         pack_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs", app.renderer.skeleton.name)
@@ -154,6 +164,9 @@ def main(argv=None) -> int:
         if name == "keyboard":
             inputs.append(KeyboardInput(app.post, on_quit=request_stop))
         elif name == "web":
+            if args.web.lower() == "off":
+                log.info("網頁遙控：已由 --web off 關閉")
+                continue
             host, _, port = args.web.rpartition(":")
             inputs.append(WebRemoteInput(app.post, host or "0.0.0.0", int(port), status_fn=status_with_wifi,
                                           routes=([WifiWebAPI(wifi)] if wifi else [])
@@ -163,6 +176,15 @@ def main(argv=None) -> int:
             log.error("未知的輸入：%s", name)
             return 2
 
+    control_server = None
+    if args.control_socket and args.control_socket.lower() not in ("off", "none"):
+        control_server = ControlAPIServer(args.control_socket, app=app, camera=camera,
+                                          fps_fn=lambda: getattr(app, "fps", 0.0))
+
+    if frames_server:
+        frames_server.start()
+    if control_server:
+        control_server.start()
     app.start()
     sink.open()
     for i in inputs:
@@ -202,6 +224,10 @@ def main(argv=None) -> int:
             else:
                 next_frame = time.monotonic()  # 跑不動就不追趕
     finally:
+        if control_server:
+            control_server.stop()
+        if frames_server:
+            frames_server.stop()
         for i in inputs:
             i.stop()
         if wifi:
