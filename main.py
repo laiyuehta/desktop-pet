@@ -109,8 +109,6 @@ def parse_args(argv=None, env=None, env_file=None):
     args._used_legacy_backend = used_legacy_backend and (args.backend == backend_default)
     if args._used_legacy_backend:
         logging.getLogger("main").warning("環境變數 PET_BACKEND 已改名為 PET_BACKEND_URL（舊名僅相容一版）")
-    if not args.backend:
-        logging.getLogger("main").warning("未設定後端（大腦）網址（PET_BACKEND_URL 或 --backend），以離線單機模式執行")
     return args
 
 

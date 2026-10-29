@@ -7,7 +7,9 @@
 
 ![示範動畫](preview/demo.gif)
 
-**部署到自己的裝置**：repo 裡的 service／polkit 檔只有佔位（`@USER@`、`@HOME@`）。Pi 端將 `deploy.env.example` 複製到 `/etc/desktop-pet/env`（權限 `root:<使用者> 0640`；過渡期也相容 repo 根目錄的 `deploy.env`）並填入實際值，再跑各自的 `install.sh`；執行期設定由 systemd `EnvironmentFile=-/etc/desktop-pet/env` 或 Python 載入（優先順序：命令列參數 > 環境變數 > 環境檔 > 內建預設，見 [PROPOSAL.md 16.2](PROPOSAL.md#162-環境變數與設定的優先順序)）。後端（R7）的環境檔放在 `%LOCALAPPDATA%\desktop-pet\env`，本機設定檔可放 `%LOCALAPPDATA%\desktop-pet\config\config.json` 或 `backend/config.json`（不進 repo，預設值見 `backend/config.example.json`）。授權：程式碼 MIT、assets/ 為 CC BY-NC 4.0（見下方〈[授權](#授權)〉）。
+**部署到自己的裝置**：repo 裡的 service／polkit 檔只有佔位（`@USER@`、`@HOME@`）。
+- **Pi 端（必要前置）**：服務與自動更新皆依賴全域環境檔，執行安裝腳本前建議先建立 `/etc/desktop-pet/env`（將 `deploy.env.example` 複製過去，權限 `root:<使用者> 0640`，並填入 `PET_BACKEND_URL` 等實際值；若完全沒有環境檔，`install.sh` 與 `switch.sh` 會擋下，僅有舊版 `deploy.env` 則印警告相容；緊急回退 `rollback.sh` 僅警示不阻擋）；執行期設定由 systemd `EnvironmentFile=-/etc/desktop-pet/env` 或 Python 載入（優先順序：命令列參數 > 環境變數 > 環境檔 > 內建預設，見 [PROPOSAL.md 16.2](PROPOSAL.md#162-環境變數與設定的優先順序)）。
+- **後端（R7）**：環境檔放在 `%LOCALAPPDATA%\desktop-pet\env`，本機設定檔可放 `%LOCALAPPDATA%\desktop-pet\config\config.json` 或 `backend/config.json`（不進 repo，預設值見 `backend/config.example.json`）。授權：程式碼 MIT、assets/ 為 CC BY-NC 4.0（見下方〈[授權](#授權)〉）。
 
 ## 目前進度（第一版程式原型 v0.1）
 

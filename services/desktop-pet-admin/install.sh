@@ -42,6 +42,7 @@ UNIT=/etc/systemd/system/desktop-pet-admin.service
 PET_REPO_ROOT="$(cd ../.. && pwd)"
 . "$PET_REPO_ROOT/tools/deploy/common.sh"
 load_deploy_env
+require_sys_env
 tmp=$(mktemp)
 render_template desktop-pet-admin.service > "$tmp" || { rm -f "$tmp"; exit 1; }
 sudo install -m 644 "$tmp" "$UNIT"
