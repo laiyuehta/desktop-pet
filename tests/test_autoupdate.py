@@ -45,9 +45,11 @@ from pet.version import get_autoupdate_status, get_release_info
 class TestGitSmartHttp(unittest.TestCase):
     def test_parse_pkt_lines(self):
         # 建立模擬 pkt-line 資料
-        payload = "870020a123456789abcdef0123456789abcdef01 refs/heads/main\n"
-        pkt_len = f"{len(payload.encode('utf-8')) + 4:04x}".encode("ascii")
-        raw = b"000a# test\n0000" + pkt_len + payload.encode("utf-8")
+        def make_pkt(payload: str) -> bytes:
+            b = payload.encode("utf-8")
+            return f"{len(b) + 4:04x}".encode("ascii") + b
+
+        raw = make_pkt("# test\n") + b"0000" + make_pkt("870020a123456789abcdef0123456789abcdef01 refs/heads/main\n")
         lines = parse_pkt_lines(raw)
         self.assertIn("# test", lines[0])
         self.assertTrue(any("refs/heads/main" in line for line in lines))
