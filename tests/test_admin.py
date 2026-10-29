@@ -192,23 +192,141 @@ def test_admin_forwarding_and_reconnect(tmp_path):
         snap_res = json.loads(body.decode("utf-8"))
         assert snap_res.get("ok") is True
 
-        # 9. 測試畫面同步 /screen.jpg 與 /screen.info
-        for _ in range(50):
-            if admin.mirror.latest()[2] is not None:
-                break
-            core_frames.publish(b"admin-test-jpeg", {"mode": "live", "clip": "idle"})
-            time.sleep(0.05)
-
+        # 9. 測試畫面同步 /screen.jpg 與 /screen.info（無觀看者時第一次請求於 1 秒內透過 latest 取得畫面）
+        t0 = time.monotonic()
         code, body, headers = http_get(f"{base_url}/screen.jpg")
+        assert time.monotonic() - t0 < 1.0
         assert code == 200
         assert headers.get("content-type") == "image/jpeg" or headers.get("Content-Type") == "image/jpeg"
         assert body == b"admin-test-jpeg"
 
+        t0 = time.monotonic()
         code, body, _ = http_get(f"{base_url}/screen.info")
+        assert time.monotonic() - t0 < 1.0
         assert code == 200
         info = json.loads(body.decode("utf-8"))
         assert info["ok"] is True
         assert info["mode"] == "live"
+    finally:
+        admin.stop()
+        core_ctrl.stop()
+        core_frames.stop()
+
+
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="需要 socket.AF_UNIX")
+def test_admin_frames_viewer_0_1_0_subscription(tmp_path):
+    control_sock = str(tmp_path / "control.sock")
+    frames_sock = str(tmp_path / "frames.sock")
+
+    core_ctrl = ControlAPIServer(
+        path=control_sock,
+        status_fn=lambda: {"state": "idle", "stage": 1, "fps": 20.0},
+        post_fn=lambda ev: None,
+        fps_fn=lambda: 20.0,
+    )
+    core_ctrl.start()
+
+    core_frames = FramesServer(path=frames_sock)
+    core_frames.start()
+
+    admin = AdminServer(
+        listen="127.0.0.1:0",
+        control_socket=control_sock,
+        frames_socket=frames_sock,
+        wifi_manager=None,
+    )
+    admin.start()
+    base_url = f"http://127.0.0.1:{admin.port}"
+
+    try:
+        core_frames.publish(b"frame-init", {"mode": "pack", "clip": "idle", "frame": 2})
+        time.sleep(0.1)
+
+        # 1. 觀看者 = 0：不應訂閱 frames.sock
+        assert admin.mirror.viewers == 0
+        assert admin.frames.subscribed is False
+        assert admin.frames.current_fps == 0
+        assert core_frames.subscriber_count == 0
+
+        code, body, _ = http_get(f"{base_url}/admin/status")
+        assert code == 200
+        st = json.loads(body.decode("utf-8"))
+        assert st["frames"]["viewers"] == 0
+        assert st["frames"]["subscribed"] is False
+        assert st["frames"]["fps"] == 0
+
+        # 無觀看者時，第一次請求 /screen.info 與 /screen.jpg 應在 1 秒內透過 latest 取得最新畫面
+        t0 = time.monotonic()
+        code, body, _ = http_get(f"{base_url}/screen.info")
+        assert time.monotonic() - t0 < 1.0
+        assert code == 200
+        info = json.loads(body.decode("utf-8"))
+        assert info["ok"] is True
+        assert info["clip"] == "idle"
+        assert info["frame"] == 2
+        assert info["bytes"] == len(b"frame-init")
+
+        core_frames.publish(b"frame-poll-2", {"mode": "pack", "clip": "happy", "frame": 5})
+        t0 = time.monotonic()
+        code, body, headers = http_get(f"{base_url}/screen.jpg")
+        assert time.monotonic() - t0 < 1.0
+        assert code == 200
+        assert body == b"frame-poll-2"
+
+        # 單次 latest 取幀後仍維持無訂閱狀態
+        assert admin.frames.subscribed is False
+        assert core_frames.subscriber_count == 0
+
+        # 2. 觀看者 0 -> 1：連上 /screen.mjpg 後應以 20 fps 訂閱
+        mjpg_resp = urllib.request.urlopen(f"{base_url}/screen.mjpg?fps=20", timeout=5.0)
+        try:
+            for _ in range(50):
+                if admin.mirror.viewers == 1 and admin.frames.subscribed and core_frames.subscriber_count == 1:
+                    break
+                time.sleep(0.02)
+
+            assert admin.mirror.viewers == 1
+            assert admin.frames.subscribed is True
+            assert admin.frames.current_fps == 20
+            assert core_frames.subscriber_count == 1
+
+            code, body, _ = http_get(f"{base_url}/admin/status")
+            assert code == 200
+            st = json.loads(body.decode("utf-8"))
+            assert st["frames"]["viewers"] == 1
+            assert st["frames"]["subscribed"] is True
+            assert st["frames"]["fps"] == 20
+
+            core_frames.publish(b"frame-stream-live", {"mode": "live", "clip": "wave"})
+            buf = b""
+            for _ in range(20):
+                chunk = mjpg_resp.fp.read1(4096) if hasattr(mjpg_resp.fp, "read1") else mjpg_resp.read(64)
+                if not chunk:
+                    break
+                buf += chunk
+                if b"frame-stream-live" in buf:
+                    break
+            assert b"frame-stream-live" in buf
+        finally:
+            mjpg_resp.close()
+
+        # 3. 觀看者 1 -> 0：觀看者斷線後應取消訂閱
+        for _ in range(50):
+            if admin.mirror.viewers == 0 and not admin.frames.subscribed and core_frames.subscriber_count == 0:
+                break
+            time.sleep(0.02)
+
+        assert admin.mirror.viewers == 0
+        assert admin.frames.subscribed is False
+        assert admin.frames.current_fps == 0
+        assert core_frames.subscriber_count == 0
+
+        code, body, _ = http_get(f"{base_url}/admin/status")
+        assert code == 200
+        st = json.loads(body.decode("utf-8"))
+        assert st["frames"]["viewers"] == 0
+        assert st["frames"]["subscribed"] is False
+        assert st["frames"]["fps"] == 0
     finally:
         admin.stop()
         core_ctrl.stop()
