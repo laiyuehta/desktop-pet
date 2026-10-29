@@ -36,18 +36,53 @@ EMOTION_TO_EXPRESSION = {
 
 
 def load_emotion_levels(config_path: Optional[str] = None) -> Dict[str, int]:
-    """從 config/states.json 讀取情緒等級上限，作為單一來源。"""
-    path = config_path or os.path.join(ROOT, "config", "states.json")
+    """從狀態設定檔讀取情緒等級上限，作為單一來源。未指定時依序讀取 PET_CONFIG 或 repo 的 config/states.json。"""
+    path = config_path or os.environ.get("PET_CONFIG") or os.path.join(ROOT, "config", "states.json")
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return {str(k): int(v) for k, v in data.get("emotions", {}).get("levels", {}).items()}
-    except Exception:
+        levels = data.get("emotions", {}).get("levels")
+        if not levels:
+            log.warning("設定檔 (%s) 未設定 emotions.levels", path)
+            return {}
+        return {str(k): int(v) for k, v in levels.items()}
+    except Exception as exc:
+        log.warning("載入情緒等級設定失敗 (%s)：%s", path, exc)
         return {}
 
 
-# 後端情緒（含 level）→ 情緒強度狀態最高等級（以 config/states.json 為單一來源）
-EMOTION_MAX_LEVEL: Dict[str, int] = load_emotion_levels()
+_DEFAULT_LEVELS_CACHE: Optional[Tuple[Optional[str], float, Dict[str, int]]] = None
+
+
+def get_default_emotion_levels() -> Dict[str, int]:
+    """依 PET_CONFIG 或 repo 預設狀態檔解析情緒等級；快取結果避免指令重複讀檔與警告洗版。"""
+    global _DEFAULT_LEVELS_CACHE
+    env_cfg = os.environ.get("PET_CONFIG")
+    target_path = env_cfg if env_cfg else os.path.join(ROOT, "config", "states.json")
+    try:
+        mtime = os.path.getmtime(target_path)
+    except OSError:
+        mtime = -1.0
+
+    if _DEFAULT_LEVELS_CACHE is not None:
+        cached_path, cached_mtime, cached_levels = _DEFAULT_LEVELS_CACHE
+        if cached_path == target_path and cached_mtime == mtime:
+            return cached_levels
+
+    levels = load_emotion_levels(env_cfg) if env_cfg else {}
+    if not levels:
+        repo_default = os.path.join(ROOT, "config", "states.json")
+        levels = load_emotion_levels(repo_default)
+
+    _DEFAULT_LEVELS_CACHE = (target_path, mtime, levels)
+    return levels
+
+
+def __getattr__(name: str) -> Any:
+    if name == "EMOTION_MAX_LEVEL":
+        return get_default_emotion_levels()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 OFFLINE_LINES = "嗯…？（大腦在休息）"
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -55,7 +90,7 @@ _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 def emotion_state_name(emotion: str, level: Any, max_levels: Optional[Dict[str, int]] = None) -> Optional[str]:
     """把 (emotion, level) 轉成對應的情緒強度狀態名稱；不認得或等級不合法回傳 None。"""
-    levels = max_levels if max_levels is not None else EMOTION_MAX_LEVEL
+    levels = max_levels if max_levels is not None else get_default_emotion_levels()
     max_lv = levels.get(emotion)
     if max_lv is None or isinstance(level, bool):
         return None
@@ -69,7 +104,7 @@ def emotion_state_name(emotion: str, level: Any, max_levels: Optional[Dict[str, 
     return emotion if max_lv == 1 else f"{emotion}_{lv}"
 
 
-def directive_to_event(d: Dict[str, Any]) -> Optional[dict]:
+def directive_to_event(d: Dict[str, Any], max_levels: Optional[Dict[str, int]] = None) -> Optional[dict]:
     """把一個後端指令轉成裝置事件；不認得的回傳 None。"""
     t = d.get("type")
     src = "backend"
@@ -87,8 +122,9 @@ def directive_to_event(d: Dict[str, Any]) -> Optional[dict]:
         if t == "emotion":
             emo = str(d.get("emotion"))
             if d.get("level") is not None:
-                st = emotion_state_name(emo, d.get("level"))
+                st = emotion_state_name(emo, d.get("level"), max_levels=max_levels)
                 if not st:
+                    log.warning("忽略未知或無效的情緒等級指令：%s (level=%s)", emo, d.get("level"))
                     return None
                 return make_event("control", "set_state", source=src, state=st,
                                   emotion=emo, level=int(d["level"]))
@@ -118,7 +154,8 @@ class BackendClient:
     def __init__(self, base_url: str, pet_id: str, publish: Callable[[dict], None],
                  status_fn: Optional[Callable[[], dict]] = None, timeout: float = 2.0,
                  talk_timeout: float = 15.0, token: str = "", heartbeat_s: float = 60.0,
-                 queue_size: int = 32, backoff_max: float = 60.0):
+                 queue_size: int = 32, backoff_max: float = 60.0,
+                 max_levels: Optional[Dict[str, int]] = None):
         self.base_url = base_url.rstrip("/")
         self.pet_id = pet_id
         self.publish = publish
@@ -136,6 +173,7 @@ class BackendClient:
         self._backoff = 0.0
         self._backoff_until = 0.0
         self.backoff_max = backoff_max
+        self.max_levels = max_levels
         self._stop = threading.Event()
         self._last_contact = 0.0
         self.thread: Optional[threading.Thread] = None
@@ -206,7 +244,7 @@ class BackendClient:
     def apply(self, directives: List[dict]) -> int:
         n = 0
         for d in directives or []:
-            ev = directive_to_event(d) if isinstance(d, dict) else None
+            ev = directive_to_event(d, max_levels=self.max_levels) if isinstance(d, dict) else None
             if ev:
                 self.publish(ev)
                 n += 1
