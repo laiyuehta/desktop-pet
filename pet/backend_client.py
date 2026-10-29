@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
 import threading
 import time
@@ -25,24 +26,37 @@ from .events import make_event
 
 log = logging.getLogger("pet.backend")
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # 後端情緒 → 裝置表情（pet/eyes.py 的 EXPRESSIONS）
 EMOTION_TO_EXPRESSION = {
     "happy": "happy", "normal": "normal", "surprised": "surprised", "sleepy": "sleepy",
     "bored": "bored", "sad": "sad", "shy": "squint",
 }
 
-# 後端情緒（含 level）→ 情緒強度狀態最高等級（shy 為單一狀態）
-EMOTION_MAX_LEVEL = {
-    "happy": 3, "surprised": 3, "sad": 3, "shy": 1, "annoyed": 2,
-}
+
+def load_emotion_levels(config_path: Optional[str] = None) -> Dict[str, int]:
+    """從 config/states.json 讀取情緒等級上限，作為單一來源。"""
+    path = config_path or os.path.join(ROOT, "config", "states.json")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return {str(k): int(v) for k, v in data.get("emotions", {}).get("levels", {}).items()}
+    except Exception:
+        return {}
+
+
+# 後端情緒（含 level）→ 情緒強度狀態最高等級（以 config/states.json 為單一來源）
+EMOTION_MAX_LEVEL: Dict[str, int] = load_emotion_levels()
 
 OFFLINE_LINES = "嗯…？（大腦在休息）"
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def emotion_state_name(emotion: str, level: Any) -> Optional[str]:
+def emotion_state_name(emotion: str, level: Any, max_levels: Optional[Dict[str, int]] = None) -> Optional[str]:
     """把 (emotion, level) 轉成對應的情緒強度狀態名稱；不認得或等級不合法回傳 None。"""
-    max_lv = EMOTION_MAX_LEVEL.get(emotion)
+    levels = max_levels if max_levels is not None else EMOTION_MAX_LEVEL
+    max_lv = levels.get(emotion)
     if max_lv is None or isinstance(level, bool):
         return None
     try:

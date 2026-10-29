@@ -216,9 +216,7 @@ class PetApp:
         if emo is not None:
             self.fsm.last_event = ev
             if ev.get("type") in INTERACTION_TYPES:
-                for tm in self.fsm._timers:
-                    if tm["reset_on_input"]:
-                        tm["elapsed"], tm["fired"] = 0.0, False
+                self.fsm.reset_input_timers()
             self.trigger_emotion(emo, ev.get("level"), source=ev.get("source", name), escalate=True)
             return True
 
@@ -231,9 +229,7 @@ class PetApp:
             if not self._can_enter_emotion(base_emo):
                 return False
             self.fsm.last_event = ev
-            for tm in self.fsm._timers:
-                if tm["reset_on_input"]:
-                    tm["elapsed"], tm["fired"] = 0.0, False
+            self.fsm.reset_input_timers()
             window_s = float(icfg.get("window_s", 4.0))
             now_ts = float(ev.get("ts") or time.time())
             prev = self._input_streaks.get(name)

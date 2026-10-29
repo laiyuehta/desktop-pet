@@ -93,6 +93,15 @@ class DirectiveConversionTest(unittest.TestCase):
         self.assertIsNone(directive_to_event({"type": "emotion", "emotion": "angry", "level": 1}))
         self.assertIsNone(directive_to_event({"type": "emotion", "emotion": "sad", "level": 0}))
 
+    def test_emotion_levels_single_source_of_truth(self):
+        from pet.backend_client import EMOTION_MAX_LEVEL, load_emotion_levels
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "config", "states.json"), encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        expected = cfg["emotions"]["levels"]
+        self.assertEqual(EMOTION_MAX_LEVEL, expected)
+        self.assertEqual(load_emotion_levels(), expected)
+
 
 class DeviceBackendTest(unittest.TestCase):
     def test_directives_applied_through_app(self):

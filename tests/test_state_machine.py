@@ -58,6 +58,14 @@ class TransitionTest(unittest.TestCase):
         run(self.fsm, 2.1)
         self.assertEqual(self.fsm.state, "bored")
 
+    def test_reset_input_timers_public_method(self):
+        run(self.fsm, 8)
+        self.fsm.reset_input_timers()
+        run(self.fsm, 8)
+        self.assertEqual(self.fsm.state, "idle")
+        run(self.fsm, 2.1)
+        self.assertEqual(self.fsm.state, "bored")
+
     def test_unknown_event_no_change(self):
         self.assertIsNone(self.fsm.handle_event(ev("whatever")))
         self.assertEqual(self.fsm.state, "idle")
