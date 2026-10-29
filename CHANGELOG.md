@@ -7,6 +7,7 @@
 
 ### 新增
 - 拆出前端後台 desktop-pet-admin（#6）：獨立 Python 程式提供管理網頁（:8080）與 Wi‑Fi 管理；桌寵主程式新增 control.sock 與 frames.sock 接口，主程式重啟時網頁與救援熱點不中斷。
+- Antigravity 改用自己的 GitHub 帳號 `@laiyueda12-star`：CODEOWNERS 把它負責的路徑換成該帳號，CONTRIBUTING 註明認證只設在這個 repo。
 - git 為主的開發流程（項目書 v2.8）：分支命名、PR＋CI 才能進 main、規格 PR、commit 訊息格式、squash merge、Issue、CODEOWNERS、不再改寫歷史、semver tag 與這份更新紀錄、只部署 tag（v2.9 改成跟著 main）。
 - CI（`.github/workflows/ci.yml`）：Python 3.13 跑全部測試（含 node 檢查遙控頁 script）；gitleaks 掃 PR 差異與全部歷史；個人資訊檢查（`.gitleaks.toml` 的 personal 規則＋`tools/ci/check_personal.py` 雜湊比對）。
 - Antigravity 加入開發：`CONTRIBUTING.md` 新增它的負責範圍、禁止事項、流程、Windows（WSL2）測試方式與 Rust 編譯說明；項目書負責範圍表與 CODEOWNERS 同步。
