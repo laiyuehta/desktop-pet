@@ -192,7 +192,8 @@ class PackPlayer:
         # 一般播放中
         cur = self.pack.clips[self.clip]
         if state != self.state:
-            if self.i in cur["_cuts"] or not cur["_cuts"]:
+            at_end = not cur.get("loop", True) and self.i >= self._len() - 1
+            if self.i in cur["_cuts"] or not cur["_cuts"] or at_end:
                 key = f"{self.state}>{state}"
                 tr = self.pack.transitions.get(key, {}).get(str(self.i))
                 self.waited_frames = 0

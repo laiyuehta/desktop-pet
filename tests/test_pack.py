@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PIL import Image  # noqa: E402
 
 from pet.app import PetApp  # noqa: E402
-from pet.baker import bake  # noqa: E402
+from pet.baker import CORE_STATES, bake, transition_pairs  # noqa: E402
 from pet.events import make_event  # noqa: E402
 from pet.outputs import PiscreenSink  # noqa: E402
 from pet.outputs.base import OutputSink  # noqa: E402
@@ -294,6 +294,116 @@ class PlayerTest(unittest.TestCase):
 
     def test_try_load_missing(self):
         self.assertIsNone(AnimationPack.try_load(os.path.join(self.d, "nope")))
+
+    def test_unbaked_transition_from_non_looping_clip_never_gets_stuck(self):
+        pk = make_fake_pack(self.d, {"sad_1": {"n": 3, "cuts": [0]}, "shy": {"n": 4, "cuts": [0]}})
+        pk.clips["sad_1/base"]["loop"] = False
+        p = PackPlayer(pk)
+        self.assertEqual(p.next("sad_1"), ("sad_1/base", 0))
+        self.assertEqual(p.next("sad_1"), ("sad_1/base", 1))
+        self.assertEqual(p.next("shy"), ("sad_1/base", 2))
+        self.assertEqual(p.next("shy"), ("shy/base", 0))
+        pk.close()
+
+
+class SelectiveTransitionBakeTest(unittest.TestCase):
+    """驗證只替狀態機與情緒流程會走到的轉移烘過渡片段，未烘轉移退回第 0 格。"""
+
+    def test_transition_pairs_cover_fsm_core_and_emotions(self):
+        with open(os.path.join(ROOT, "config", "states.json"), encoding="utf-8") as fh:
+            sc = json.load(fh)
+        states = list(sc["states"])
+        pairs = transition_pairs(sc, states)
+
+        # 1. config/states.json 轉移表（含 * 規則展開）與計時器 *_done
+        for tr in sc["transitions"]:
+            src, dst = tr["from"], tr["to"]
+            if src == "*":
+                for a in states:
+                    if a != dst:
+                        self.assertIn((a, dst), pairs)
+            elif src != dst:
+                self.assertIn((src, dst), pairs)
+        for s, info in sc["states"].items():
+            for tm in info.get("timers", []):
+                if str(tm.get("event", "")).endswith("_done") and s != "idle":
+                    self.assertIn((s, "idle"), pairs)
+
+        # 2. 既有四個狀態之間所有配對不變
+        for a in CORE_STATES:
+            for b in CORE_STATES:
+                if a != b:
+                    self.assertIn((a, b), pairs)
+
+        # 3. 情緒狀態：idle 進入、同系列升級、連戳升級、回 idle
+        for s in states:
+            if s not in CORE_STATES:
+                self.assertIn(("idle", s), pairs)
+                self.assertIn((s, "idle"), pairs)
+        for fam, hi in (("happy", 3), ("surprised", 3), ("sad", 3), ("annoyed", 2)):
+            for i in range(1, hi):
+                for j in range(i + 1, hi + 1):
+                    self.assertIn((f"{fam}_{i}", f"{fam}_{j}"), pairs)
+        for i in (1, 2, 3):
+            self.assertIn((f"surprised_{i}", "annoyed_1"), pairs)
+
+        # 4. 不會走到的跨情緒／非核心轉移不烘
+        self.assertNotIn(("bored", "sad_2"), pairs)
+        self.assertNotIn(("sleep", "happy_1"), pairs)
+        self.assertNotIn(("sad_3", "shy"), pairs)
+        self.assertNotIn(("happy_2", "sad_1"), pairs)
+
+    def test_bake_omits_unused_transitions_and_player_falls_back_to_frame0(self):
+        d = tempfile.mkdtemp()
+        try:
+            out = os.path.join(d, "seed")
+            m = bake(out, only_states=["idle", "bored", "sad_1", "sad_2"], fps=5, expressions=[],
+                     preview=False, log=lambda *_: None)
+            tr = m["transitions"]
+            for used in ("idle>bored", "bored>idle", "idle>sad_1", "idle>sad_2",
+                         "sad_1>sad_2", "sad_1>idle", "sad_2>idle"):
+                self.assertIn(used, tr)
+            for unused in ("bored>sad_1", "bored>sad_2", "sad_1>bored", "sad_2>bored", "sad_2>sad_1"):
+                self.assertNotIn(unused, tr)
+
+            pk = AnimationPack(out)
+            try:
+                p = PackPlayer(pk, rng=random.Random(0))
+                # 有烘過渡片段：idle -> sad_1 -> sad_2 -> idle
+                self.assertEqual(p.next("idle")[1], 0)
+                clip, idx = p.next("sad_1")
+                self.assertTrue(clip.startswith("trans/idle>sad_1@"))
+                self.assertEqual(idx, 0)
+                while p.mode == "trans":
+                    clip, idx = p.next("sad_1")
+                self.assertEqual(p.state, "sad_1")
+                # 等 sad_1 播到切換點第 0 格後升級到 sad_2（有過渡片段）
+                while p.i != 0:
+                    p.next("sad_1")
+                clip, idx = p.next("sad_2")
+                self.assertEqual((clip, idx), ("trans/sad_1>sad_2@0", 0))
+                while p.mode == "trans":
+                    p.next("sad_2")
+                self.assertEqual(p.state, "sad_2")
+
+                # 沒烘過渡片段：sad_2 -> bored，在切換點直接從 bored 第 0 格開始播
+                while p.i != 0:
+                    p.next("sad_2")
+                clip, idx = p.next("bored")
+                self.assertTrue(clip.startswith("bored/"))
+                self.assertEqual(idx, 0)
+                self.assertEqual(p.state, "bored")
+
+                # 沒烘過渡片段：bored -> sad_1，等下一個切換點直接從 sad_1 第 0 格開始播
+                p.next("bored")
+                while p.state != "sad_1":
+                    clip, idx = p.next("sad_1")
+                self.assertTrue(clip.startswith("sad_1/"))
+                self.assertEqual(idx, 0)
+            finally:
+                pk.close()
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 class StateChangeTimestampTest(unittest.TestCase):

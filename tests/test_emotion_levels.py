@@ -146,8 +146,13 @@ class EmotionFullPackTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertIn(name, m["states"])
                 self.assertIn(f"{name}>idle", m["transitions"])
+                self.assertIn(f"{name}>sleep", m["transitions"])
                 self.assertIn(f"idle>{name}", m["transitions"])
                 self.assertEqual(list(m["transitions"][f"{name}>idle"]), ["0"])
+                self.assertNotIn(f"bored>{name}", m["transitions"])
+        for edge in ("happy_1>happy_2", "happy_2>happy_3", "surprised_1>surprised_2", "surprised_2>surprised_3",
+                     "sad_1>sad_2", "sad_2>sad_3", "annoyed_1>annoyed_2", "surprised_1>annoyed_1"):
+            self.assertIn(edge, m["transitions"])
 
 
 if __name__ == "__main__":
