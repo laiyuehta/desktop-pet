@@ -37,7 +37,7 @@ Antigravity 是使用者在自己的 Windows 電腦上跑的 AI 開發 agent，�
 **流程**
 1. 動手前先讀 PROPOSAL.md 相關章節：一定要讀「整體架構」（含「主程式 ↔ 前端後台的接口」「守護程式的共同規範」「Rust 怎麼編給 Pi 3B」「piwifi」「遷移步驟」）和「15. 開發流程」，再讀任務 Issue 指定的章節。
 2. 一個 Issue 一個分支：`feat/<名稱>` 或 `fix/<名稱>`，從最新的 `origin/main` 開。
-3. commit 作者名稱用 `Antigravity`，例如 `git -c user.name="Antigravity" commit …`。commit 要小，訊息照 `<type>(<scope>): <摘要>`。
+3. 用自己的 GitHub 帳號 `@laiyueda12-star` 推分支、開 PR（認證只設在這個 repo，不用使用者的 SSH 金鑰或 token）；commit 作者名稱用 `Antigravity`，例如 `git -c user.name="Antigravity" commit …`。commit 要小，訊息照 `<type>(<scope>): <摘要>`。
 4. 開 PR 要用範本，寫 `Closes #n` 和對應的規格章節。CI 要綠燈，紅了就修到綠。
 5. **不 push 到 main，不 force push**，也不合併。PR 開好、CI 綠燈就停，等使用者審查與合併。
 6. 規格不清楚或要改規格時，在 Issue 提出，由桌寵專案機器人1 開 `spec/` PR，不要自己改規格。
