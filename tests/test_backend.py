@@ -23,11 +23,15 @@ from backend.store import PetStore, atomic_write_json  # noqa: E402
 
 def make_cfg(tmp, base_url, **extra):
     over = {"data_dir": tmp,
+            "server": {"insecure_dev": True},
             "llm": {"local": {"base_url": base_url, "model": "fake", "timeout_s": 2, "retries": 1},
                     "health_cache_s": 0},
             "chatter": {"enabled": False}}
+    if "server" in extra:
+        over["server"].update(extra["server"])
     for k, v in extra.items():
-        over[k] = v
+        if k != "server":
+            over[k] = v
     return load_config(overrides=over)
 
 
@@ -146,7 +150,9 @@ class BackendApiTest(unittest.TestCase):
         self.assertIn(r["say"], ["哈囉～", "你好呀！"])
         # 連線被拒為毫秒級，以 2.5s 門檻保護連線失敗平滑退回 fallback 且避免綁定特定負載
         self.assertLess(time.time() - t0, 2.5)
-        h = api.get("/health")
+        pub = api.get("/health")
+        self.assertEqual(pub, {"ok": True})
+        h = api.get("/v1/health")
         self.assertTrue(h["ok"])
         self.assertFalse(h["llm"]["local"]["reachable"])
 
@@ -168,7 +174,7 @@ class BackendApiTest(unittest.TestCase):
     def test_health_reachable(self):
         llm = FakeLLM("valid")
         try:
-            h = self.start(llm.base_url).get("/health")
+            h = self.start(llm.base_url).get("/v1/health")
             self.assertTrue(h["llm"]["local"]["reachable"])
             self.assertEqual(h["llm"]["local"]["models"], ["fake-model"])
             self.assertFalse(h["llm"]["cloud"]["enabled"])
@@ -364,21 +370,21 @@ class PhotoApiTest(unittest.TestCase):
 
     def test_health_public_vs_token(self):
         pub = json.load(urllib.request.urlopen(self.base + "/health", timeout=5))
-        self.assertEqual(set(pub), {"ok", "service", "version"})
-        full = json.load(self.req("/health"))
+        self.assertEqual(pub, {"ok": True})
+        full = json.load(self.req("/v1/health"))
         self.assertIn("llm", full)
 
     def test_photo_api_off_without_token(self):
         self.brain.cfg["server"]["api_token"] = ""
         tmp2 = tempfile.mkdtemp()
         try:
-            cfg = make_cfg(tmp2, "http://127.0.0.1:1/v1")
+            cfg = make_cfg(tmp2, "http://127.0.0.1:1/v1", server={"insecure_dev": False})
             httpd, port = serve_in_thread(Brain(cfg))
             r = urllib.request.Request(f"http://127.0.0.1:{port}/v1/pet/photo?pet_id=p1", data=b"\xff\xd8" + b"x" * 100,
                                        method="POST", headers={"Content-Type": "image/jpeg"})
             with self.assertRaises(urllib.error.HTTPError) as cm:
                 urllib.request.urlopen(r, timeout=5)
-            self.assertEqual(cm.exception.code, 403)
+            self.assertEqual(cm.exception.code, 503)
             httpd.shutdown()
         finally:
             shutil.rmtree(tmp2, ignore_errors=True)

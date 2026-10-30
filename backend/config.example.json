@@ -3,7 +3,10 @@
     "host": "0.0.0.0",
     "port": 8090,
     "api_token": "",
-    "comment": "api_token 留空 = 不檢查；設定後裝置要帶 X-Pet-Token 標頭"
+    "keys": [],
+    "trusted_proxies": ["127.0.0.1", "::1"],
+    "insecure_dev": false,
+    "comment": "keys: 每台裝置一把，只存 SHA-256；用 python -m backend.keys new 產生。api_token 為舊版共用金鑰（過渡期相容）"
   },
   "data_dir": "data",
   "llm": {

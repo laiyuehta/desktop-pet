@@ -218,7 +218,8 @@ tools/render_demo.py       產生預覽 GIF / PNG
 tools/bake.py              產生／檢查動畫包（packs/<外觀>/，不進 git）
 tools/bench.py             量 fps（即時繪圖、分段毫秒 --stages、動畫包播放 --pack）
 tests/                     unittest（含假 LLM 伺服器 tests/fake_llm.py）
-backend/                   後端（大腦）：server.py（HTTP API）、store.py（存檔）、mood.py（心情/成長）、
+backend/                   後端（大腦）：server.py（HTTP API）、keys.py（API 金鑰管理與常數時間比對）、
+                           security.py（速率限制、鎖定與安全防護）、store.py（存檔）、mood.py（心情/成長）、
                            llm.py（OpenAI 相容客戶端、JSON 抽取驗證）、router.py（本機/雲端路由）、
                            talk.py（人設與對話、備用台詞）、config.example.json（本機 config.json 不進 repo）、run_backend.bat
 ```

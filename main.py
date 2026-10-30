@@ -84,6 +84,9 @@ def parse_args(argv=None, env=None, env_file=None):
     p.add_argument("--backend-token", default="", help="後端 api_token（不建議：會出現在 ps；請用 --backend-token-file）")
     p.add_argument("--backend-token-file", default=token_file_default,
                    help="從檔案讀後端 api_token（建議，例如 ~/.config/desktop-pet/backend-token，權限 600）；預設讀 PET_BACKEND_TOKEN_FILE")
+    p.add_argument("--allow-insecure-lan", action="store_true",
+                   default=merged_env.get("PET_ALLOW_INSECURE_LAN") in ("1", "true", "True"),
+                   help="允許透過非 HTTPS 的非私有/localhost 位址送出金鑰（預設讀 PET_ALLOW_INSECURE_LAN）")
     p.add_argument("--camera", choices=["auto", "on", "off"], default="auto",
                    help="拍照能力模組 camera.snapshot（picam 的 client；auto = 有 picam socket 或 rpicam-still 才開）")
     p.add_argument("--camera-socket", default=DEFAULT_PICAM_SOCKET, help="相機常駐服務 picam 的 socket")
@@ -145,13 +148,16 @@ def main(argv=None) -> int:
     camera = None
     if args.camera == "on" or (args.camera == "auto" and (os.path.exists(args.camera_socket)
                                                           or shutil.which("rpicam-still"))):
-        uploader = PhotoUploader(args.backend, args.pet_id, token) if args.backend else None
+        uploader = PhotoUploader(args.backend, args.pet_id, token,
+                                 token_file=args.backend_token_file,
+                                 allow_insecure_lan=args.allow_insecure_lan) if args.backend else None
         camera = CameraSnapshot(uploader, pending_dir=args.camera_pending_dir or DEFAULT_PENDING_DIR,
                                 capture=picam_snapshot(args.camera_socket))
         log.info("拍照能力模組：開（picam %s；%s）", args.camera_socket,
                  "上傳到後端" if uploader else "沒有後端，只存在本機")
+    b_opts = {"token_file": args.backend_token_file, "allow_insecure_lan": args.allow_insecure_lan}
     app = PetApp(args.config, timer_overrides=overrides, backend_url=args.backend, pet_id=args.pet_id,
-                 backend_token=token, font_path=args.font, extensions=[camera] if camera else None)
+                 backend_token=token, backend_opts=b_opts, font_path=args.font, extensions=[camera] if camera else None)
     mirror = ScreenMirror(max_viewers=args.mirror_viewers) if args.mirror == "on" else None
     frames_server = None
     if args.frames_socket and args.frames_socket.lower() not in ("off", "none"):

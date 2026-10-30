@@ -114,6 +114,8 @@ def _apply_env_overrides(cfg: Dict[str, Any], env: Mapping[str, str]) -> Dict[st
             log.warning("PET_BACKEND_PORT 不是整數：%s", env["PET_BACKEND_PORT"])
     if env.get("PET_BACKEND_DATA_DIR"):
         out["data_dir"] = os.path.expanduser(env["PET_BACKEND_DATA_DIR"])
+    if env.get("PET_BACKEND_API_TOKEN"):
+        srv["api_token"] = env["PET_BACKEND_API_TOKEN"]
     if env.get("PET_BACKEND_API_TOKEN_FILE"):
         tok_path = os.path.expanduser(env["PET_BACKEND_API_TOKEN_FILE"])
         try:
@@ -121,6 +123,21 @@ def _apply_env_overrides(cfg: Dict[str, Any], env: Mapping[str, str]) -> Dict[st
                 srv["api_token"] = fh.read().strip()
         except OSError as exc:
             log.warning("無法讀取 PET_BACKEND_API_TOKEN_FILE (%s)：%s", tok_path, exc)
+    if env.get("PET_BACKEND_KEYS_FILE"):
+        keys_path = os.path.expanduser(env["PET_BACKEND_KEYS_FILE"])
+        try:
+            with open(keys_path, "r", encoding="utf-8") as fh:
+                loaded_keys = json.load(fh)
+                if isinstance(loaded_keys, list):
+                    srv["keys"] = loaded_keys
+                elif isinstance(loaded_keys, dict) and isinstance(loaded_keys.get("keys"), list):
+                    srv["keys"] = loaded_keys["keys"]
+        except Exception as exc:
+            log.warning("無法讀取 PET_BACKEND_KEYS_FILE (%s)：%s", keys_path, exc)
+    if env.get("PET_BACKEND_TRUSTED_PROXIES"):
+        srv["trusted_proxies"] = [p.strip() for p in env["PET_BACKEND_TRUSTED_PROXIES"].split(",") if p.strip()]
+    if env.get("PET_BACKEND_INSECURE_DEV") is not None:
+        srv["insecure_dev"] = env["PET_BACKEND_INSECURE_DEV"].strip() in ("1", "true", "True")
     llm_local = out.setdefault("llm", {}).setdefault("local", {})
     if env.get("PET_LLM_LOCAL_URL"):
         llm_local["base_url"] = env["PET_LLM_LOCAL_URL"]
