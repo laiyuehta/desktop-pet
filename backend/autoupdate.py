@@ -150,24 +150,35 @@ def check_held_criteria_r7(
     return False, None
 
 
-def detect_affected_r7(old_dir: Path, new_dir: Path) -> List[str]:
-    """比對檔案差異決定是否需重啟後端。"""
-    if not old_dir.exists():
-        return ["desktop-pet-backend"]
-
-    # 僅針對 new_dir 中的 backend/ 與 shared/ 檔案進行雜湊比對（排除 __pycache__ 與非執行文件）
-    relevant_files: List[str] = []
-    for root, dirs, files in os.walk(new_dir):
-        rel_root = Path(root).relative_to(new_dir)
+def _scan_relevant_r7_files(base_dir: Path) -> Set[str]:
+    """掃描指定目錄下屬於 backend/ 與 shared/ 的受控檔案清單（排除 __pycache__、非執行文件等）。"""
+    files_found: Set[str] = set()
+    if not base_dir.exists():
+        return files_found
+    for root, dirs, files in os.walk(base_dir):
+        rel_root = Path(root).relative_to(base_dir)
         if any(part in ("__pycache__", ".git", ".venv", "tests") for part in rel_root.parts):
             dirs[:] = []
             continue
         for f in files:
-            if f.endswith(".pyc") or f.endswith(".md") or f.endswith(".txt"):
+            if f.endswith(".pyc") or f.endswith(".md"):
+                continue
+            # 排除非 requirements 的純文字檔（例如 notes.txt、license.txt）
+            if f.endswith(".txt") and "requirements" not in f.lower():
                 continue
             rel_f = (rel_root / f if str(rel_root) != "." else Path(f)).as_posix()
             if rel_f.startswith("backend/") or rel_f.startswith("shared/"):
-                relevant_files.append(rel_f)
+                files_found.add(rel_f)
+    return files_found
+
+
+def detect_affected_r7(old_dir: Path, new_dir: Path) -> List[str]:
+    """比對檔案差異決定是否需重啟後端（涵蓋修改、刪除與 requirements 異動）。"""
+    if not old_dir.exists():
+        return ["desktop-pet-backend"]
+
+    # 聯集舊版與新版之檔案清單，確保新版刪檔與修改皆能比對
+    relevant_files = sorted(_scan_relevant_r7_files(old_dir) | _scan_relevant_r7_files(new_dir))
 
     old_manifest = calculate_manifest(old_dir, files=relevant_files)
     new_manifest = calculate_manifest(new_dir, files=relevant_files)

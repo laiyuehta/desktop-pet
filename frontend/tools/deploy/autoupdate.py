@@ -189,27 +189,38 @@ def pre_switch_check(
     return True, None
 
 
-def detect_affected_units(old_dir: Path, new_dir: Path) -> List[str]:
-    """比對新舊版本檔案差異，決定需重啟之 systemd unit。"""
-    if not old_dir.exists():
-        return ["desktop-pet.service"]
-
-    # 僅針對 new_dir 中的 frontend/ 與 shared/ 檔案進行雜湊比對（排除 __pycache__ 與非執行文件/圖片）
-    relevant_files: List[str] = []
-    for root, dirs, files in os.walk(new_dir):
-        rel_root = Path(root).relative_to(new_dir)
+def _scan_relevant_pi_files(base_dir: Path) -> Set[str]:
+    """掃描指定目錄下屬於 frontend 與 shared 的受控檔案清單（排除 __pycache__、文件與圖片）。"""
+    files_found: Set[str] = set()
+    if not base_dir.exists():
+        return files_found
+    for root, dirs, files in os.walk(base_dir):
+        rel_root = Path(root).relative_to(base_dir)
         if any(part in ("__pycache__", ".git", ".venv", "tests") for part in rel_root.parts):
             dirs[:] = []
             continue
         for f in files:
-            if f.endswith(".pyc") or f.endswith(".md") or f.endswith(".txt") or f.endswith(".png") or f.endswith(".gif") or f.endswith(".webp"):
+            if f.endswith(".pyc") or f.endswith(".md") or f.endswith(".png") or f.endswith(".gif") or f.endswith(".webp"):
+                continue
+            # 排除非 requirements 的純文字檔（例如 notes.txt）
+            if f.endswith(".txt") and "requirements" not in f.lower():
                 continue
             rel_f = (rel_root / f if str(rel_root) != "." else Path(f)).as_posix()
             if (
                 any(rel_f.startswith(prefix) for prefix in ("frontend/", "shared/", "pet/", "services/", "config/"))
-                or rel_f in ("main.py", "deploy.env.example")
+                or rel_f in ("main.py", "deploy.env.example", "requirements.txt")
             ):
-                relevant_files.append(rel_f)
+                files_found.add(rel_f)
+    return files_found
+
+
+def detect_affected_units(old_dir: Path, new_dir: Path) -> List[str]:
+    """比對新舊版本檔案差異，決定需重啟之 systemd unit（涵蓋修改、刪除與 requirements 異動）。"""
+    if not old_dir.exists():
+        return ["desktop-pet.service"]
+
+    # 聯集舊版與新版之檔案清單，確保新版刪檔與修改皆能比對
+    relevant_files = sorted(_scan_relevant_pi_files(old_dir) | _scan_relevant_pi_files(new_dir))
 
     old_manifest = calculate_manifest(old_dir, files=relevant_files)
     new_manifest = calculate_manifest(new_dir, files=relevant_files)
@@ -228,6 +239,7 @@ def detect_affected_units(old_dir: Path, new_dir: Path) -> List[str]:
             continue
         if any(f.startswith(prefix) for prefix in (
             "frontend/main.py", "frontend/pet/", "frontend/config/",
+            "frontend/requirements.txt", "requirements.txt",
             "main.py", "pet/", "config/", "shared/"
         )):
             units.add("desktop-pet.service")
@@ -462,7 +474,7 @@ class AutoUpdaterPi(AutoUpdaterCore):
             env_copy["PET_REPO_ROOT"] = str(self.install_dir)
             log.info("呼叫 common.sh ensure_frontend_venv 更新前端虛擬環境與依賴...")
             res = subprocess.run(
-                [sh_bin, "-c", f'. "{common_sh.as_posix()}" && ensure_frontend_venv'],
+                [sh_bin, "-c", '. "$1" && ensure_frontend_venv', "sh", str(common_sh)],
                 cwd=str(self.install_dir / "frontend" if (self.install_dir / "frontend").exists() else self.install_dir),
                 capture_output=True,
                 text=True,

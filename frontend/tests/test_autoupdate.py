@@ -335,6 +335,26 @@ class TestSelectiveRestart(unittest.TestCase):
         self.assertIn("picam.service", units)
         self.assertNotIn("desktop-pet.service", units)
 
+    def test_requirements_change_restarts_desktop_pet(self):
+        (self.old_dir / "frontend").mkdir(parents=True)
+        (self.new_dir / "frontend").mkdir(parents=True)
+        (self.old_dir / "frontend" / "requirements.txt").write_text("v1", encoding="utf-8")
+        (self.new_dir / "frontend" / "requirements.txt").write_text("v2", encoding="utf-8")
+
+        units = detect_affected_units(self.old_dir, self.new_dir)
+        self.assertIn("desktop-pet.service", units)
+
+    def test_module_deletion_restarts_desktop_pet(self):
+        (self.old_dir / "frontend" / "pet").mkdir(parents=True)
+        (self.new_dir / "frontend" / "pet").mkdir(parents=True)
+        (self.old_dir / "frontend" / "pet" / "__init__.py").write_text("# init", encoding="utf-8")
+        (self.old_dir / "frontend" / "pet" / "old_mod.py").write_text("# old", encoding="utf-8")
+        (self.new_dir / "frontend" / "pet" / "__init__.py").write_text("# init", encoding="utf-8")
+        # old_mod.py deleted in new_dir
+
+        units = detect_affected_units(self.old_dir, self.new_dir)
+        self.assertIn("desktop-pet.service", units)
+
 
 class TestBackupAndOverwriteUpdate(unittest.TestCase):
     def setUp(self):
@@ -1059,7 +1079,7 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
                 self.assertEqual(cmd[0], "/bin/bash")
                 self.assertEqual(cmd[1], "-c")
                 self.assertIn("ensure_frontend_venv", cmd[2])
-                self.assertIn("common.sh", cmd[2])
+                self.assertIn("common.sh", str(cmd))
                 env = mock_run.call_args[1]["env"]
                 self.assertEqual(env.get("PET_REPO_ROOT"), str(self.updater.install_dir))
         finally:

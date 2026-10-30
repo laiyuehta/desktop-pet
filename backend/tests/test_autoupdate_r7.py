@@ -77,6 +77,19 @@ class TestR7AutoupdateBasics(unittest.TestCase):
         affected2 = detect_affected_r7(self.old_dir, self.new_dir)
         self.assertEqual(affected2, [])
 
+        # 3. backend/requirements.txt 變更需重啟後端
+        (self.old_dir / "backend" / "requirements.txt").write_text("pytest==8.0.0\n", encoding="utf-8")
+        (self.new_dir / "backend" / "requirements.txt").write_text("pytest==8.1.0\n", encoding="utf-8")
+        affected3 = detect_affected_r7(self.old_dir, self.new_dir)
+        self.assertEqual(affected3, ["desktop-pet-backend"])
+
+        # 4. 刪除 backend 模組需重啟後端
+        (self.new_dir / "backend" / "requirements.txt").write_text("pytest==8.0.0\n", encoding="utf-8")
+        (self.old_dir / "backend" / "old_mod.py").write_text("def old(): pass", encoding="utf-8")
+        # old_mod.py 不在 new_dir
+        affected4 = detect_affected_r7(self.old_dir, self.new_dir)
+        self.assertEqual(affected4, ["desktop-pet-backend"])
+
     def test_check_held_criteria_r7_held_file(self):
         (self.state_dir / "HELD").write_text("管理者手動暫停", encoding="utf-8")
         held, reason = check_held_criteria_r7(self.new_dir, self.state_dir)
@@ -396,6 +409,45 @@ class TestR7AutoUpdaterCycle(unittest.TestCase):
         # 4. failed.json 沒有記錄該 commit
         failed = load_failed_json(self.state)
         self.assertFalse(any(f.get("commit") == new_commit for f in failed))
+
+    def test_requirements_change_or_module_deletion_requires_commit_match(self):
+        """驗證當 backend/requirements.txt 變更或後端檔案刪除時，run_health_check 仍然要求 commit 一致。"""
+        (self.inst / "backend").mkdir()
+        (self.inst / "backend" / "server.py").write_text("server_v1", encoding="utf-8")
+        (self.inst / "backend" / "requirements.txt").write_text("pytest==8.0.0\n", encoding="utf-8")
+        (self.inst / "RELEASE.json").write_text(json.dumps({
+            "commit": "old_commit_00000000000000000000000000000",
+            "short": "old_commit_0",
+        }), encoding="utf-8")
+        write_manifest(self.inst, calculate_manifest(self.inst))
+
+        new_commit = "9999999999999999999999999999999999999999"
+        tar_bytes = self._make_tarball({
+            "backend/server.py": "server_v1",
+            "backend/requirements.txt": "pytest==8.0.0\nrequests>=2.0.0\n",
+        })
+
+        # 後端若未成功重啟回傳新 commit，則健康檢查因 commit 不符必須失敗並觸發回退
+        running_health_resp = (
+            {"ok": True, "commit": "old_commit_00000000000000000000000000000"},
+            {"x-commit": "old_commit_00000000000000000000000000000"},
+        )
+
+        with mock.patch("shared.autoupdate.get_remote_commit", return_value=new_commit), \
+             mock.patch.object(self.updater, "pre_switch_check", return_value=(True, None)), \
+             mock.patch.object(self.updater, "ensure_dependencies", return_value=(True, None)), \
+             mock.patch.object(self.updater, "restart_affected", return_value=True), \
+             mock.patch.object(self.updater, "restart_after_rollback", return_value=True), \
+             mock.patch("backend.autoupdate.check_http_health_r7", return_value=running_health_resp), \
+             mock.patch("urllib.request.urlopen", return_value=io.BytesIO(tar_bytes)):
+
+            self.updater.health_timeout = 0.5
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 1, "requirements 變更若 commit 不吻合應失敗回退")
+
+        # failed.json 應記錄失敗
+        failed = load_failed_json(self.state)
+        self.assertTrue(any(f.get("commit") == new_commit for f in failed))
 
     def test_scheduled_task_scripts_exist_and_valid(self):
         install_script = ROOT / "backend" / "autostart" / "install_update_task.ps1"
