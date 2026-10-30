@@ -237,6 +237,7 @@ class LimitedThreadingHTTPServer(ThreadingHTTPServer):
 def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] = None) -> LimitedThreadingHTTPServer:
     srv_cfg = brain.cfg.setdefault("server", {})
     guard = SecurityGuard(trusted_proxies=srv_cfg.get("trusted_proxies"))
+    log.info("後端伺服器啟動：綁定 %s:%d，信任反向代理：%s", host, port, guard.trusted_proxies)
 
     resolved_cfg_path = config_path or resolve_config_path()
     last_cfg_mtime = [os.path.getmtime(resolved_cfg_path) if os.path.isfile(resolved_cfg_path) else -1.0]
@@ -252,10 +253,13 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
                     raw = json.load(fh)
                     if isinstance(raw, dict) and "server" in raw:
                         new_srv = raw["server"]
-                        if "keys" in new_srv:
-                            srv_cfg["keys"] = new_srv["keys"]
-                        if "api_token" in new_srv:
-                            srv_cfg["api_token"] = new_srv["api_token"]
+                        old_last_used = {k["id"]: k.get("last_used") for k in srv_cfg.get("keys", []) if "id" in k and "last_used" in k}
+                        new_keys = new_srv.get("keys", [])
+                        for k in new_keys:
+                            if k.get("id") in old_last_used and "last_used" not in k:
+                                k["last_used"] = old_last_used[k["id"]]
+                        srv_cfg["keys"] = new_keys
+                        srv_cfg["api_token"] = new_srv.get("api_token", "")
                         if "trusted_proxies" in new_srv:
                             srv_cfg["trusted_proxies"] = new_srv["trusted_proxies"]
                             guard.trusted_proxies = new_srv["trusted_proxies"]
@@ -315,23 +319,18 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
             _maybe_reload_config()
             client_ip = guard.resolve_ip(self.client_address[0], self.headers)
 
-            # 1. 檢查是否被鎖定
-            if guard.is_locked(client_ip):
-                guard.record_error(client_ip, "locked", self.path, self.command)
-                raise ApiError(429, "請求過於頻繁，已被暫時鎖定")
-
             keys = srv_cfg.get("keys") or []
             legacy_token = str(srv_cfg.get("api_token") or "")
             insecure_dev = bool(srv_cfg.get("insecure_dev", False))
             is_local = host in ("127.0.0.1", "localhost", "::1")
 
-            # 2. 沒設定就不開放（insecure_dev 僅限綁定 127.0.0.1 且未設定金鑰時免金鑰）
+            # 1. 沒設定就不開放（insecure_dev 僅限綁定 127.0.0.1 且未設定金鑰時免金鑰）
             if not keys and not legacy_token:
                 if insecure_dev and is_local:
                     return None
                 raise ApiError(503, "後端未設定金鑰")
 
-            # 3. 取得傳入的金鑰
+            # 2. 取得傳入的金鑰
             token = self.headers.get("X-Pet-Token", "").strip()
             if not token:
                 auth_hdr = self.headers.get("Authorization", "").strip()
@@ -340,41 +339,54 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
                 elif auth_hdr.startswith("PetToken "):
                     token = auth_hdr[9:].strip()
 
+            # 3. 比對有效金鑰（持有有效金鑰之合法裝置不受 IP 鎖定影響）
+            matched_disabled: Optional[Dict[str, Any]] = None
+            if token:
+                matched, is_enabled = match_key(token, keys)
+                if matched is not None:
+                    if is_enabled:
+                        if pet_id_to_check is not None:
+                            allowed_pets = matched.get("pet_ids", [])
+                            if "*" not in allowed_pets and pet_id_to_check not in allowed_pets:
+                                guard.record_error(client_ip, "forbidden", self.path, self.command, key_id=matched.get("id"))
+                                raise ApiError(403, "沒有權限")
+
+                        is_photo = (self.path.split("?", 1)[0] == "/v1/pet/photo")
+                        if not guard.check_rate_limit(matched.get("id", "key"), is_photo=is_photo):
+                            guard.record_error(client_ip, "rate_limited", self.path, self.command, key_id=matched.get("id"))
+                            raise ApiError(429, "請求過於頻繁")
+
+                        matched["last_used"] = time.time()
+                        return matched
+                    else:
+                        matched_disabled = matched
+
+                # 比對舊版 api_token（過渡期相容）
+                if legacy_token and hmac.compare_digest(token.encode("utf-8"), legacy_token.encode("utf-8")):
+                    log.info("[LegacyToken] 收到舊版 api_token 請求 (來源: %s, 路徑: %s)", client_ip, self.path)
+                    is_photo = (self.path.split("?", 1)[0] == "/v1/pet/photo")
+                    if not guard.check_rate_limit("legacy", is_photo=is_photo):
+                        guard.record_error(client_ip, "rate_limited", self.path, self.command, key_id="legacy")
+                        raise ApiError(429, "請求過於頻繁")
+                    return {"id": "legacy", "pet_ids": ["*"], "enabled": True}
+
+            # 4. 未持有效金鑰：檢查是否已達全域錯誤上限或被 IP 鎖定
+            if guard.is_locked(client_ip):
+                raise ApiError(429, "請求過於頻繁，已被暫時鎖定")
+
+            if guard.is_global_strict():
+                guard.record_error(client_ip, "global_limit", self.path, self.command)
+                raise ApiError(429, "系統目前僅接受有效金鑰")
+
+            # 5. 拋出對應之 401 / 403 錯誤並記錄
+            if matched_disabled is not None:
+                guard.record_error(client_ip, "forbidden", self.path, self.command, key_id=matched_disabled.get("id"))
+                raise ApiError(403, "沒有權限")
+
             if not token:
                 guard.record_error(client_ip, "missing", self.path, self.command)
                 raise ApiError(401, "未提供認證金鑰", headers={"WWW-Authenticate": "PetToken"})
 
-            # 4. 常數時間比對 server.keys
-            matched, is_enabled = match_key(token, keys)
-            if matched is not None:
-                if not is_enabled:
-                    guard.record_error(client_ip, "forbidden", self.path, self.command, key_id=matched.get("id"))
-                    raise ApiError(403, "沒有權限")
-
-                if pet_id_to_check is not None:
-                    allowed_pets = matched.get("pet_ids", [])
-                    if "*" not in allowed_pets and pet_id_to_check not in allowed_pets:
-                        guard.record_error(client_ip, "forbidden", self.path, self.command, key_id=matched.get("id"))
-                        raise ApiError(403, "沒有權限")
-
-                is_photo = (self.path.split("?", 1)[0] == "/v1/pet/photo")
-                if not guard.check_rate_limit(matched.get("id", "key"), is_photo=is_photo):
-                    guard.record_error(client_ip, "rate_limited", self.path, self.command, key_id=matched.get("id"))
-                    raise ApiError(429, "請求過於頻繁")
-
-                matched["last_used"] = time.time()
-                return matched
-
-            # 5. 比對舊版 api_token（過渡期相容）
-            if legacy_token and hmac.compare_digest(token.encode("utf-8"), legacy_token.encode("utf-8")):
-                log.info("[LegacyToken] 收到舊版 api_token 請求 (來源: %s, 路徑: %s)", client_ip, self.path)
-                is_photo = (self.path.split("?", 1)[0] == "/v1/pet/photo")
-                if not guard.check_rate_limit("legacy", is_photo=is_photo):
-                    guard.record_error(client_ip, "rate_limited", self.path, self.command, key_id="legacy")
-                    raise ApiError(429, "請求過於頻繁")
-                return {"id": "legacy", "pet_ids": ["*"], "enabled": True}
-
-            # 6. 比對失敗
             tok_prefix = hash_key(token)[:8]
             guard.record_error(client_ip, "invalid", self.path, self.command, token_hash_prefix=tok_prefix)
             raise ApiError(401, "金鑰錯誤", headers={"WWW-Authenticate": "PetToken"})
@@ -416,14 +428,8 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path == "/health":
-                # 公開健康檢查：未帶金鑰只回 {"ok": true}；帶金鑰或 insecure_dev 則回完整細節
-                auth_ok = False
-                try:
-                    self._check_auth(pet_id_to_check=None)
-                    auth_ok = True
-                except ApiError:
-                    auth_ok = False
-                self._run(brain.health if auth_ok else brain.health_public)
+                # 公開健康檢查：不碰任何認證邏輯，固定只回 {"ok": true}，不記錯誤亦不觸發鎖定
+                self._json(200, {"ok": True})
                 return
 
             if path == "/v1/health":
@@ -506,6 +512,7 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
             self._run(lambda: fn(body))
 
     httpd = LimitedThreadingHTTPServer((host, port), Handler)
+    httpd.guard = guard
     return httpd
 
 

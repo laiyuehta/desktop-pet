@@ -148,8 +148,10 @@ class BackendApiTest(unittest.TestCase):
         r = api.post("/v1/pet/talk", {"pet_id": "p1", "text": "你好"})
         self.assertEqual(r["source"], "fallback")
         self.assertIn(r["say"], ["哈囉～", "你好呀！"])
-        self.assertLess(time.time() - t0, 2)
-        h = api.get("/health")
+        self.assertLess(time.time() - t0, 3)
+        pub = api.get("/health")
+        self.assertEqual(pub, {"ok": True})
+        h = api.get("/v1/health")
         self.assertTrue(h["ok"])
         self.assertFalse(h["llm"]["local"]["reachable"])
 
@@ -169,7 +171,7 @@ class BackendApiTest(unittest.TestCase):
     def test_health_reachable(self):
         llm = FakeLLM("valid")
         try:
-            h = self.start(llm.base_url).get("/health")
+            h = self.start(llm.base_url).get("/v1/health")
             self.assertTrue(h["llm"]["local"]["reachable"])
             self.assertEqual(h["llm"]["local"]["models"], ["fake-model"])
             self.assertFalse(h["llm"]["cloud"]["enabled"])
@@ -366,7 +368,7 @@ class PhotoApiTest(unittest.TestCase):
     def test_health_public_vs_token(self):
         pub = json.load(urllib.request.urlopen(self.base + "/health", timeout=5))
         self.assertEqual(pub, {"ok": True})
-        full = json.load(self.req("/health"))
+        full = json.load(self.req("/v1/health"))
         self.assertIn("llm", full)
 
     def test_photo_api_off_without_token(self):

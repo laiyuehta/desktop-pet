@@ -102,6 +102,7 @@ class SecurityGuard:
 
         # 錯誤聚合紀錄： (ip, reason) -> {"count": int, "first_seen": float, "last_log": float, "target": str}
         self._error_aggregates: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._last_prune: float = 0.0
 
     def resolve_ip(self, peer_ip: str, headers: Any) -> str:
         return get_client_ip(peer_ip, headers, self.trusted_proxies)
@@ -163,16 +164,18 @@ class SecurityGuard:
             # 1. 記錄全域錯誤
             self._global_errors.append(t)
 
-            # 2. 記錄特定 IP 錯誤與鎖定判斷
-            dq = self._ip_errors[ip]
-            while dq and t - dq[0] > self.lockout_window_s:
-                dq.popleft()
-            dq.append(t)
+            # 2. 記錄特定 IP 錯誤與鎖定判斷（鎖定中的 IP 或 locked 事件不計入次數以防延長鎖定時間）
+            is_currently_locked = (t < self._ip_lockout.get(ip, 0.0))
+            if reason != "locked" and not is_currently_locked:
+                dq = self._ip_errors[ip]
+                while dq and t - dq[0] > self.lockout_window_s:
+                    dq.popleft()
+                dq.append(t)
 
-            if len(dq) >= self.lockout_threshold:
-                self._ip_lockout[ip] = t + self.lockout_duration_s
-                triggered_lock = True
-                dq.clear()
+                if len(dq) >= self.lockout_threshold:
+                    self._ip_lockout[ip] = t + self.lockout_duration_s
+                    triggered_lock = True
+                    dq.clear()
 
             # 3. 聚合日誌輸出
             agg_key = (ip, reason)
@@ -196,9 +199,53 @@ class SecurityGuard:
                     entry["count"] = 0
                     entry["last_log"] = t
 
+            # 4. 定期修剪過期紀錄
+            if t - self._last_prune > 60.0:
+                self._last_prune = t
+                self._prune_locked(t)
+
         if triggered_lock:
             log.warning(
                 "[安全防護] 來源 IP %s 於 5 分鐘內錯誤達 %d 次，已鎖定 15 分鐘",
                 ip, self.lockout_threshold
             )
         return triggered_lock
+
+    def _prune_locked(self, t: float) -> None:
+        """內部清理過期字典項目。呼叫前需持有 self._lock。"""
+        # 1. 清理過期鎖定
+        expired_locks = [ip for ip, exp in self._ip_lockout.items() if t >= exp]
+        for ip in expired_locks:
+            del self._ip_lockout[ip]
+
+        # 2. 清理過期 IP 錯誤紀錄
+        empty_ips = []
+        for ip, dq in self._ip_errors.items():
+            while dq and t - dq[0] > self.lockout_window_s:
+                dq.popleft()
+            if not dq and ip not in self._ip_lockout:
+                empty_ips.append(ip)
+        for ip in empty_ips:
+            del self._ip_errors[ip]
+
+        # 3. 清理過期聚合紀錄（超過 5 分鐘無更新）
+        stale_aggs = [k for k, v in self._error_aggregates.items() if t - v["last_log"] > 300.0]
+        for k in stale_aggs:
+            del self._error_aggregates[k]
+
+        # 4. 清理過期速率限制紀錄
+        for container in (self._key_req_times, self._key_photo_times):
+            empty_keys = []
+            for k, dq in container.items():
+                while dq and t - dq[0] > 60.0:
+                    dq.popleft()
+                if not dq:
+                    empty_keys.append(k)
+            for k in empty_keys:
+                del container[k]
+
+    def prune(self, now: Optional[float] = None) -> None:
+        """清理已過期的計數與聚合紀錄，防止字典無限增長。"""
+        t = now if now is not None else time.time()
+        with self._lock:
+            self._prune_locked(t)

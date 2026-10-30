@@ -191,6 +191,7 @@ class BackendSecurityHttpTest(unittest.TestCase):
         brain = Brain(cfg)
         httpd, port = serve_in_thread(brain, host=server_cfg.get("host", "127.0.0.1"))
         self.servers.append(httpd)
+        self.last_httpd = httpd
         return port
 
     def _req(self, port, path, method="GET", body=None, headers=None):
@@ -323,13 +324,20 @@ class BackendSecurityHttpTest(unittest.TestCase):
                           headers={"X-Pet-Token": "wrong-token"})
             self.assertEqual(cm.exception.code, 401)
 
-        # 第 11 次起即便帶正確金鑰也回 429（因為同 IP 被鎖定）
+        # 第 11 次未帶或帶錯金鑰者回 429（因為同 IP 被鎖定）
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self._req(port, "/v1/pet/event", method="POST",
                       body={"pet_id": "seed-001", "event": {"name": "pat"}},
-                      headers={"X-Pet-Token": token})
+                      headers={"X-Pet-Token": "wrong-token"})
         self.assertEqual(cm.exception.code, 429)
         self.assertIn("鎖定", json.loads(cm.exception.read().decode())["error"])
+
+        # 持有有效金鑰之合法裝置不受 IP 鎖定阻擋
+        status, body, _ = self._req(port, "/v1/pet/event", method="POST",
+                                    body={"pet_id": "seed-001", "event": {"name": "pat"}},
+                                    headers={"X-Pet-Token": token})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
 
     def test_invalid_content_length_returns_400(self):
         port = self._start({"host": "127.0.0.1", "keys": [], "insecure_dev": True})
@@ -339,6 +347,87 @@ class BackendSecurityHttpTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             urllib.request.urlopen(req, timeout=5)
         self.assertEqual(cm.exception.code, 400)
+
+    def test_health_repeated_calls_never_lock_ip_and_subsequent_request_succeeds(self):
+        token = "secret-token-health-test"
+        port = self._start({
+            "host": "127.0.0.1",
+            "keys": [{"id": "k1", "pet_ids": ["seed-001"], "sha256": hash_key(token), "enabled": True}],
+            "insecure_dev": False,
+        })
+        # 連續打 15 次公開 /health，均未帶金鑰
+        for _ in range(15):
+            status, body, _ = self._req(port, "/health")
+            self.assertEqual(status, 200)
+            self.assertEqual(body, {"ok": True})
+
+        # 隨後帶正確金鑰請求 /v1/health 與 /v1/pet/event，必須正常回傳 200，絕不被 429 阻擋
+        status, body, _ = self._req(port, "/v1/health", headers={"X-Pet-Token": token})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+
+        status, body, _ = self._req(port, "/v1/pet/event", method="POST",
+                                    body={"pet_id": "seed-001", "event": {"name": "pat"}},
+                                    headers={"X-Pet-Token": token})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+
+    def test_valid_key_bypasses_ip_lockout(self):
+        token = "secret-token-bypass-lockout"
+        port = self._start({
+            "host": "127.0.0.1",
+            "keys": [{"id": "k1", "pet_ids": ["seed-001"], "sha256": hash_key(token), "enabled": True}],
+            "insecure_dev": False,
+        })
+        # 1. 發送 10 次錯誤金鑰 -> 觸發 IP 鎖定（第 10 次起回 429）
+        for i in range(10):
+            try:
+                self._req(port, "/v1/health", headers={"X-Pet-Token": f"bad-{i}"})
+            except urllib.error.HTTPError as exc:
+                if i < 9:
+                    self.assertEqual(exc.code, 401)
+                else:
+                    self.assertIn(exc.code, (401, 429))
+
+        # 2. 驗證未帶金鑰或帶錯金鑰者被 429 阻擋
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._req(port, "/v1/health", headers={"X-Pet-Token": "another-bad"})
+        self.assertEqual(cm.exception.code, 429)
+
+        # 3. 持有有效金鑰之裝置不受 IP 鎖定阻擋，仍能正常存取（回 200）
+        status, body, _ = self._req(port, "/v1/health", headers={"X-Pet-Token": token})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+
+    def test_global_strict_mode_blocks_unauthenticated_requests(self):
+        token = "secret-token-global-strict"
+        port = self._start({
+            "host": "127.0.0.1",
+            "keys": [{"id": "k1", "pet_ids": ["seed-001"], "sha256": hash_key(token), "enabled": True}],
+            "insecure_dev": False,
+        })
+        # 模擬過去 60 秒內全域累積超過 100 次錯誤
+        now = time.time()
+        guard = self.last_httpd.guard
+        with guard._lock:
+            for _ in range(105):
+                guard._global_errors.append(now)
+
+        self.assertTrue(guard.is_global_strict())
+
+        # 未提供金鑰或提供錯誤金鑰皆被 429 拒絕（系統目前僅接受有效金鑰）
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._req(port, "/v1/health")
+        self.assertEqual(cm.exception.code, 429)
+
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._req(port, "/v1/health", headers={"X-Pet-Token": "bad-tok"})
+        self.assertEqual(cm.exception.code, 429)
+
+        # 有效金鑰不受影響，仍可存取
+        status, body, _ = self._req(port, "/v1/health", headers={"X-Pet-Token": token})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
 
 
 class ClientTokenRotationTest(unittest.TestCase):
@@ -379,6 +468,31 @@ class ClientTokenRotationTest(unittest.TestCase):
             self.assertEqual(reply["say"], "輪換成功")
             self.assertEqual(calls, ["old-token", "new-token-rotated"])
             self.assertEqual(client.token, "new-token-rotated")
+
+
+class SecurityGuardTest(unittest.TestCase):
+
+    def test_security_guard_prune_and_no_lock_extension(self):
+        guard = SecurityGuard(lockout_threshold=3, lockout_window_s=10.0, lockout_duration_s=20.0)
+        t0 = 1000.0
+        # 3 次錯誤觸發鎖定
+        guard.record_error("198.51.100.1", "invalid", now=t0)
+        guard.record_error("198.51.100.1", "invalid", now=t0 + 1.0)
+        self.assertTrue(guard.record_error("198.51.100.1", "invalid", now=t0 + 2.0))
+        self.assertTrue(guard.is_locked("198.51.100.1", now=t0 + 5.0))
+        initial_locked_until = guard._ip_lockout["198.51.100.1"]
+        self.assertEqual(initial_locked_until, t0 + 2.0 + 20.0)
+
+        # 鎖定期間的請求（locked 或新錯誤）不應延長初始鎖定到期時間
+        guard.record_error("198.51.100.1", "locked", now=t0 + 10.0)
+        guard.record_error("198.51.100.1", "invalid", now=t0 + 10.0)
+        self.assertEqual(guard._ip_lockout["198.51.100.1"], initial_locked_until)
+
+        # 逾期後調用 prune() 清除紀錄
+        self.assertFalse(guard.is_locked("198.51.100.1", now=t0 + 25.0))
+        guard.prune(now=t0 + 350.0)
+        self.assertNotIn("198.51.100.1", guard._ip_lockout)
+        self.assertNotIn("198.51.100.1", guard._ip_errors)
 
 
 if __name__ == "__main__":

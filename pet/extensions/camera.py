@@ -71,19 +71,20 @@ class PhotoUploader:
 
     def __init__(self, base_url: str, pet_id: str, token: str = "", timeout: float = 15.0,
                  token_file: Optional[str] = None, allow_insecure_lan: bool = False):
+        from ..backend_client import is_safe_for_insecure_token
         self.base_url = base_url.rstrip("/")
         self.pet_id = pet_id
         self.token = token
         self.timeout = timeout
         self.token_file = token_file
         self.allow_insecure_lan = allow_insecure_lan
+        self._is_safe_url = is_safe_for_insecure_token(self.base_url, self.allow_insecure_lan)
 
     def _upload_once(self, data: bytes, meta: dict, token: str) -> str:
-        from ..backend_client import is_safe_for_insecure_token
         q = urllib.parse.urlencode({"pet_id": self.pet_id, "reason": meta.get("reason", "manual"),
                                     "taken": "%.3f" % (round(float(meta.get("taken", time.time())) * 1000) / 1000)})
         headers = {"Content-Type": "image/jpeg", "Content-Length": str(len(data))}
-        if token and is_safe_for_insecure_token(self.base_url, self.allow_insecure_lan):
+        if token and self._is_safe_url:
             headers["X-Pet-Token"] = token
         elif token:
             log.warning("非 HTTPS 且非私有 IP/localhost，拒絕送出金鑰（可設定 --allow-insecure-lan 放行）：%s", self.base_url)
