@@ -27,7 +27,6 @@ mod tests {
     use crate::server::ServerHandle;
 
     static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(1);
-    static LOG_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct TempDir {
         path: PathBuf,
@@ -779,7 +778,6 @@ mod tests {
     // --- 6. --observe 模式測試（證明絕不呼叫任何會改變網路的 nmcli 指令） ---
     #[test]
     fn test_observe_mode_never_modifies_network() {
-        let _guard = LOG_TEST_LOCK.lock().unwrap();
         set_capture_logs(true);
         clear_captured_logs();
         let env = setup_env(true);
@@ -836,7 +834,6 @@ mod tests {
     // --- 7. 密碼不外洩測試（socket 回應、status.json、日誌都不含密碼） ---
     #[test]
     fn test_passwords_never_in_responses_status_or_logs() {
-        let _guard = LOG_TEST_LOCK.lock().unwrap();
         set_capture_logs(true);
         clear_captured_logs();
         let env = setup_env(false);

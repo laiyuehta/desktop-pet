@@ -404,6 +404,7 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         packs_cat.mkdir(parents=True)
         (packs_cat / "sprite.png").write_text("cat_sprite_bytes", encoding="utf-8")
         (self.install_dir / "deploy.env").write_text("URL=https://pet.example.com", encoding="utf-8")
+        write_manifest(self.install_dir, calculate_manifest(self.install_dir))
 
         # 新版本：main.py 更新，新增 new_feature.py，移除 old_feature.py
         new_commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -483,6 +484,7 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         packs_cat.mkdir(parents=True)
         (packs_cat / "sprite.png").write_text("cat_sprite_bytes", encoding="utf-8")
         (self.install_dir / "deploy.env").write_text("URL=https://pet.example.com", encoding="utf-8")
+        write_manifest(self.install_dir, calculate_manifest(self.install_dir))
 
         bad_commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         tar_bytes = self._make_tarball({
@@ -598,17 +600,125 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
 
         write_update_state(self.state_dir, {"status": "success"})
 
-        ok, msg = self.updater.boot_check()
-        self.assertTrue(ok)
-        self.assertEqual(msg, "ok")
+        with mock.patch("tools.deploy.autoupdate.check_http_json", return_value={"fps": 20, "backend": {"online": True}}):
+            ok, msg = self.updater.boot_check()
+            self.assertTrue(ok)
+            self.assertEqual(msg, "ok")
+
+        # 若 /status 無回應，開機自檢回傳 False 但絕不動檔案
+        with mock.patch("tools.deploy.autoupdate.check_http_json", return_value=None):
+            ok, msg = self.updater.boot_check()
+            self.assertFalse(ok)
+            self.assertIn("/status 無回應", msg)
+            self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1')")
 
         # 若舊版本檔案有缺失（例如缺少 main.py），僅記錄錯誤、不動任何檔案
         (self.install_dir / "main.py").unlink()
-        ok, msg = self.updater.boot_check()
-        self.assertFalse(ok)
-        self.assertIn("main.py 不存在", msg)
-        # 確保不會去刪除或建立備份
-        self.assertFalse(self.backup_dir.exists())
+        with mock.patch("tools.deploy.autoupdate.check_http_json", return_value={"fps": 20, "backend": {"online": True}}):
+            ok, msg = self.updater.boot_check()
+            self.assertFalse(ok)
+            self.assertIn("main.py 不存在", msg)
+            # 確保不會去刪除或建立備份
+            self.assertFalse(self.backup_dir.exists())
+
+    def test_repo_external_files_not_deleted(self):
+        # 模擬安裝目錄中存在 repo 外部檔案（例如使用者本機筆記、target 編譯產物）
+        (self.install_dir / "main.py").write_text("print('v1')", encoding="utf-8")
+        (self.install_dir / "local_notes.txt").write_text("my local notes", encoding="utf-8")
+        wifi_bin = self.install_dir / "services" / "piwifi" / "target" / "release" / "piwifi"
+        wifi_bin.parent.mkdir(parents=True)
+        wifi_bin.write_text("binary_stub", encoding="utf-8")
+
+        # 情況 A：首次更新（無上一版 MANIFEST.sha256）
+        unpacked_dir = self.tmp_dir / "unpacked_v2"
+        unpacked_dir.mkdir(parents=True)
+        (unpacked_dir / "main.py").write_text("print('v2')", encoding="utf-8")
+        (unpacked_dir / "other.py").write_text("print('other')", encoding="utf-8")
+
+        overwritten, deleted = overwrite_release(self.install_dir, unpacked_dir, previous_manifest_files=None)
+        # 首次更新不得刪除任何檔案
+        self.assertEqual(deleted, [])
+        self.assertTrue((self.install_dir / "local_notes.txt").exists())
+        self.assertEqual((self.install_dir / "local_notes.txt").read_text(encoding="utf-8"), "my local notes")
+        self.assertTrue(wifi_bin.exists())
+
+        # 情況 B：非首次更新，前一版清單只包含 main.py 與 removed.py
+        (self.install_dir / "removed.py").write_text("removed", encoding="utf-8")
+        prev_manifest = {"main.py", "removed.py"}
+        overwritten2, deleted2 = overwrite_release(self.install_dir, unpacked_dir, previous_manifest_files=prev_manifest)
+        self.assertIn("removed.py", deleted2)
+        self.assertFalse((self.install_dir / "removed.py").exists())
+        # repo 外部檔案依然不受影響
+        self.assertTrue((self.install_dir / "local_notes.txt").exists())
+        self.assertTrue(wifi_bin.exists())
+
+    def test_pause_and_dry_run_with_unfinished_state_touches_no_files(self):
+        (self.install_dir / "main.py").write_text("print('unrestored_v1')", encoding="utf-8")
+        self.backup_dir.mkdir(parents=True)
+        (self.backup_dir / "main.py").write_text("print('backup_v0')", encoding="utf-8")
+        (self.backup_dir / "backup_manifest.json").write_text(json.dumps({"files": ["main.py"]}), encoding="utf-8")
+
+        # 設為 updating 狀態
+        write_update_state(self.state_dir, {"status": "updating", "target_commit": "aaaa"})
+
+        # A. PAUSE 檔存在：run_cycle 絕不動檔案，也不呼叫 boot_check 還原
+        (self.state_dir / "PAUSE").touch()
+        with mock.patch("tools.deploy.autoupdate.restart_units") as mock_restart:
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 0)
+            mock_restart.assert_not_called()
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('unrestored_v1')")
+        self.assertEqual(load_update_state(self.state_dir).get("status"), "updating")
+
+        # 移除 PAUSE 檔
+        (self.state_dir / "PAUSE").unlink()
+
+        # B. dry_run=True：即使有未完成狀態，也絕不動檔案與服務
+        dry_updater = AutoUpdater(env_path=self.env_file, dry_run=True)
+        with mock.patch("tools.deploy.autoupdate.restart_units") as mock_restart:
+            res = dry_updater.run_cycle(force=True)
+            self.assertEqual(res, 0)
+            mock_restart.assert_not_called()
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('unrestored_v1')")
+        self.assertEqual(load_update_state(self.state_dir).get("status"), "updating")
+
+    def test_backend_offline_fails_health_check_and_triggers_rollback(self):
+        # 1. 測試 run_health_check 本身：後端 offline 時判定失敗
+        conf = {
+            "PET_BACKEND_URL": "http://127.0.0.1:8090",
+            "PET_AUTOUPDATE_HEALTH_MIN_FPS": "18",
+        }
+        fake_status = {
+            "ok": True,
+            "fps": 20.0,
+            "backend": {"online": False},
+        }
+        with mock.patch("tools.deploy.autoupdate.check_http_json", return_value=fake_status), \
+             mock.patch("subprocess.run") as mock_sub:
+            mock_sub.return_value.stdout = "active\n"
+            ok, msg = run_health_check(conf, ["desktop-pet.service"], timeout_sec=0.1, poll_interval=0.02)
+            self.assertFalse(ok)
+            self.assertIn("後端", msg)
+
+        # 2. 測試 run_cycle 在後端不通時觸發回退
+        (self.install_dir / "main.py").write_text("print('v1_orig')", encoding="utf-8")
+        write_manifest(self.install_dir, calculate_manifest(self.install_dir))
+        new_commit = "cccccccccccccccccccccccccccccccccccccccc"
+        tar_bytes = self._make_tarball({"main.py": "print('v2_bad_backend')"})
+
+        with mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value=new_commit), \
+             mock.patch("tools.deploy.autoupdate.pre_switch_check", return_value=(True, None)), \
+             mock.patch("tools.deploy.autoupdate.run_health_check", return_value=(False, "桌寵尚未連上後端")), \
+             mock.patch("tools.deploy.autoupdate.restart_units"), \
+             mock.patch("urllib.request.urlopen") as mock_url:
+            mock_url.return_value = io.BytesIO(tar_bytes)
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 1)
+
+        # 驗證回退至 v1
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1_orig')")
+        failed = load_failed_json(self.state_dir)
+        self.assertTrue(any(f.get("commit") == new_commit for f in failed))
 
 
 class TestPolkitRuleAndSystemdTemplates(unittest.TestCase):

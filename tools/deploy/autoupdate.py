@@ -110,7 +110,7 @@ def load_env(env_path: Optional[Path] = None) -> Dict[str, str]:
         "PET_AUTOUPDATE": "1",
         "PET_AUTOUPDATE_REPO": "https://github.com/laiyuehta/desktop-pet",
         "PET_AUTOUPDATE_BRANCH": "main",
-        "PET_AUTOUPDATE_INTERVAL": "600",
+        "PET_AUTOUPDATE_INTERVAL": "300",
         "PET_AUTOUPDATE_REQUIRE_CI": "1",
         "PET_AUTOUPDATE_PIN": "",
         "PET_AUTOUPDATE_HEALTH_TIMEOUT": "120",
@@ -313,6 +313,7 @@ PROTECTED_ENTRIES = {
     "photos",
     ".staging",
     "__pycache__",
+    "target",
 }
 
 
@@ -342,7 +343,20 @@ def safe_extract_tarball(tar_path: Path, extract_to: Path) -> Path:
                 target_path.relative_to(dest_resolved)
             except ValueError:
                 raise ValueError(f"偵測到惡意路徑穿越嘗試：{member.name}")
-        tar.extractall(path=extract_to)
+            if member.issym() or member.islnk():
+                if os.path.isabs(member.linkname):
+                    link_target = Path(member.linkname).resolve()
+                else:
+                    link_target = (extract_to / member.name).parent.joinpath(member.linkname).resolve()
+                try:
+                    link_target.relative_to(dest_resolved)
+                except ValueError:
+                    raise ValueError(f"偵測到惡意符號連結穿越嘗試：{member.name} -> {member.linkname}")
+
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(path=extract_to, filter="data")
+        else:
+            tar.extractall(path=extract_to)
 
     top_items = [p for p in extract_to.iterdir() if p.is_dir() and not p.name.startswith(".")]
     if len(top_items) == 1:
@@ -475,8 +489,13 @@ def overwrite_release(
     install_dir: Path,
     unpacked_dir: Path,
     backup_dir: Optional[Path] = None,
+    previous_manifest_files: Optional[Set[str]] = None,
 ) -> Tuple[List[str], List[str]]:
-    """只覆蓋清單內的檔案；packs/、deploy.env 等保護檔不動；新版已刪除的檔案要一併移除。"""
+    """只覆蓋清單內的檔案；packs/、deploy.env 等保護檔不動；新版已刪除的檔案要一併移除。
+
+    注意：新版已刪除的檔案以 previous_manifest_files（如上一版的 MANIFEST.sha256）為準。
+    若無上一版清單（例如初次安裝/更新），絕不刪除任何既有檔案，嚴格保護 repo 外之本機資料。
+    """
     install_dir.mkdir(parents=True, exist_ok=True)
     new_files: Set[str] = set()
 
@@ -498,25 +517,32 @@ def overwrite_release(
             shutil.copy2(src_file, dst_file)
             overwritten.append(rel_file.as_posix())
 
-    # 2. 移除新版本已刪除的舊檔案（依 backup_manifest.json）
+    # 2. 移除新版本已刪除的舊檔案（以上一版清單 previous_manifest_files 或 install_dir/MANIFEST.sha256 為準）
     deleted: List[str] = []
-    old_files: Set[str] = set()
-    if backup_dir and (backup_dir / "backup_manifest.json").exists():
-        try:
-            b_meta = json.loads((backup_dir / "backup_manifest.json").read_text(encoding="utf-8"))
-            old_files = set(b_meta.get("files", []))
-        except Exception as exc:
-            log.warning("讀取備份清單失敗：%s", exc)
+    if previous_manifest_files is None:
+        m_file = install_dir / "MANIFEST.sha256"
+        if m_file.exists():
+            previous_manifest_files = set()
+            try:
+                for line in m_file.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        parts = line.split(None, 1)
+                        if len(parts) == 2:
+                            previous_manifest_files.add(parts[1].strip())
+            except Exception as exc:
+                log.warning("讀取現有 MANIFEST.sha256 失敗：%s", exc)
 
-    for old_rel in old_files:
-        if old_rel not in new_files:
-            target = install_dir / old_rel
-            if target.exists() and not is_protected_path(Path(old_rel)):
-                try:
-                    target.unlink()
-                    deleted.append(old_rel)
-                except OSError as exc:
-                    log.warning("刪除新版本已移除之檔案 %s 失敗：%s", old_rel, exc)
+    if previous_manifest_files:
+        for old_rel in sorted(previous_manifest_files):
+            if old_rel not in new_files:
+                target = install_dir / old_rel
+                if target.exists() and not is_protected_path(Path(old_rel)):
+                    try:
+                        target.unlink()
+                        deleted.append(old_rel)
+                    except OSError as exc:
+                        log.warning("刪除新版本已移除之檔案 %s 失敗：%s", old_rel, exc)
 
     # 清理空目錄
     for root, dirs, files in os.walk(install_dir, topdown=False):
@@ -547,8 +573,19 @@ def restore_from_backup(install_dir: Path, backup_dir: Path) -> bool:
         except Exception as exc:
             log.warning("讀取備份清單失敗：%s", exc)
 
+    # 若備份清單損毀或不存在，走訪備份目錄收集檔案
+    if not backup_files:
+        for root, dirs, files in os.walk(backup_dir):
+            rel_root = Path(root).relative_to(backup_dir)
+            for f in files:
+                rel_file = rel_root / f if str(rel_root) != "." else Path(f)
+                if rel_file.name in ("backup_manifest.json", "RELEASE.json") or is_protected_path(rel_file):
+                    continue
+                backup_files.add(rel_file.as_posix())
+
     # 1. 還原備份中的檔案
     restored_count = 0
+    has_copy_error = False
     for root, dirs, files in os.walk(backup_dir):
         rel_root = Path(root).relative_to(backup_dir)
         for f in files:
@@ -564,7 +601,8 @@ def restore_from_backup(install_dir: Path, backup_dir: Path) -> bool:
                 shutil.copy2(src_file, dst_file)
                 restored_count += 1
             except OSError as exc:
-                log.warning("還原檔案 %s 失敗：%s", rel_file, exc)
+                log.error("還原檔案 %s 失敗：%s", rel_file, exc)
+                has_copy_error = True
 
     # 2. 清理新版加入但備份中沒有的檔案
     if backup_files:
@@ -577,12 +615,38 @@ def restore_from_backup(install_dir: Path, backup_dir: Path) -> bool:
                 rel_file = rel_root / f if str(rel_root) != "." else Path(f)
                 if is_protected_path(rel_file):
                     continue
-                if rel_file.as_posix() not in backup_files and rel_file.name != "RELEASE.json":
+                if rel_file.as_posix() not in backup_files and rel_file.name not in ("RELEASE.json", "MANIFEST.sha256"):
                     target = Path(root) / f
                     try:
                         target.unlink()
                     except OSError:
                         pass
+
+    # 3. 還原或移除 RELEASE.json
+    if (backup_dir / "RELEASE.json").exists():
+        try:
+            shutil.copy2(backup_dir / "RELEASE.json", install_dir / "RELEASE.json")
+        except OSError:
+            pass
+    elif (install_dir / "RELEASE.json").exists():
+        try:
+            (install_dir / "RELEASE.json").unlink()
+        except OSError:
+            pass
+
+    # 4. 還原或移除 MANIFEST.sha256
+    if (backup_dir / "MANIFEST.sha256").exists():
+        try:
+            shutil.copy2(backup_dir / "MANIFEST.sha256", install_dir / "MANIFEST.sha256")
+        except OSError:
+            pass
+
+    if has_copy_error:
+        log.error("還原過程中部分檔案複製失敗，標記為還原失敗。")
+        return False
+
+    log.info("已從備份還原 %d 個檔案至 %s", restored_count, install_dir)
+    return True
 
     # 3. 還原或移除 RELEASE.json
     if (backup_dir / "RELEASE.json").exists():
@@ -631,73 +695,105 @@ def boot_check(
     - 若是「更新後第一次開機」且自檢失敗：自動從備份還原並重啟；若本來就是舊版則只記錄、不動檔案。
     - 更新中途斷電（例如覆蓋到一半）要能靠開機自檢偵測並還原。
     """
-    st_data = load_update_state(state_dir)
-    status = st_data.get("status", "idle")
-    target_commit = st_data.get("target_commit", "unknown")
-    prev_commit = st_data.get("previous_commit", "unknown")
+    lock = ProcessLock(state_dir / "autoupdate.lock")
+    if not lock.acquire():
+        log.info("另一個更新/自檢程序正在執行中，退出。")
+        return False, "lock_busy"
 
-    # 情況 1：覆蓋中途中斷（例如中途斷電）
-    if status == "updating":
-        log.critical("開機自檢：偵測到更新中途中斷（斷電或異常終止），立即從備份還原！")
-        recovered = restore_from_backup(install_dir, backup_dir)
-        record_failed_commit(state_dir, target_commit, "boot_check", "更新中途中斷（斷電），開機自檢自動還原")
-        write_update_state(state_dir, {
-            "status": "rolled_back",
-            "target_commit": target_commit,
-            "previous_commit": prev_commit,
-            "reason": "power_cut_recovered",
-            "recovered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        })
-        restart_units(["desktop-pet.service"], systemctl_cmd=systemctl_cmd)
-        return recovered, "power_cut_recovered" if recovered else "power_cut_recovery_failed"
+    try:
+        st_data = load_update_state(state_dir)
+        status = st_data.get("status", "idle")
+        target_commit = st_data.get("target_commit", "unknown")
+        prev_commit = st_data.get("previous_commit", "unknown")
 
-    # 情況 2：更新後第一次開機
-    if status == "restarting":
-        log.info("開機自檢：偵測到更新後第一次開機，執行新版本驗證...")
-        health_ok, health_msg = run_health_check(conf, ["desktop-pet.service"], timeout_sec=60, systemctl_cmd=systemctl_cmd)
-        if health_ok:
-            log.info("開機自檢：更新後第一次開機驗證成功！")
-            write_update_state(state_dir, {
-                "status": "success",
-                "current_commit": target_commit,
-                "previous_commit": prev_commit,
-                "verified_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            })
-            return True, "first_boot_success"
-        else:
-            log.error("開機自檢：更新後第一次開機驗證失敗（%s），立即從備份還原！", health_msg)
-            restore_from_backup(install_dir, backup_dir)
-            record_failed_commit(state_dir, target_commit, "boot_check", f"更新後第一次開機失敗：{health_msg}")
+        # 情況 1：覆蓋中途中斷（例如中途斷電）
+        if status == "updating":
+            log.critical("開機自檢：偵測到更新中途中斷（斷電或異常終止），立即從備份還原！")
+            recovered = restore_from_backup(install_dir, backup_dir)
+            record_failed_commit(state_dir, target_commit, "boot_check", "更新中途中斷（斷電），開機自檢自動還原")
             write_update_state(state_dir, {
                 "status": "rolled_back",
                 "target_commit": target_commit,
                 "previous_commit": prev_commit,
-                "reason": health_msg,
+                "reason": "power_cut_recovered",
                 "recovered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             })
             restart_units(["desktop-pet.service"], systemctl_cmd=systemctl_cmd)
-            return False, f"first_boot_failed_rolled_back: {health_msg}"
+            return recovered, "power_cut_recovered" if recovered else "power_cut_recovery_failed"
 
-    # 情況 3：正常運行中／本來就是舊版開機
-    # 僅檢查必要項目，有問題只記錄、絕不動任何檔案
-    errors: List[str] = []
-    main_py = install_dir / "main.py"
-    if not main_py.exists():
-        errors.append("main.py 不存在")
-    packs_dir = install_dir / "packs"
-    if not packs_dir.exists():
-        errors.append("packs/ 目錄不存在")
-    deploy_env = install_dir / "deploy.env"
-    sys_env = Path(conf.get("PET_SYS_ENV", "/etc/desktop-pet/env"))
-    if not deploy_env.exists() and not sys_env.exists():
-        errors.append("deploy.env 與 /etc/desktop-pet/env 均不存在")
+        # 情況 2：更新後第一次開機
+        if status == "restarting":
+            log.info("開機自檢：偵測到更新後第一次開機，執行新版本驗證...")
+            health_ok, health_msg = run_health_check(conf, ["desktop-pet.service"], timeout_sec=60, systemctl_cmd=systemctl_cmd)
+            if health_ok:
+                log.info("開機自檢：更新後第一次開機驗證成功！")
+                write_update_state(state_dir, {
+                    "status": "success",
+                    "current_commit": target_commit,
+                    "previous_commit": prev_commit,
+                    "verified_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                })
+                return True, "first_boot_success"
+            else:
+                log.error("開機自檢：更新後第一次開機驗證失敗（%s），立即從備份還原！", health_msg)
+                recovered = restore_from_backup(install_dir, backup_dir)
+                record_failed_commit(state_dir, target_commit, "boot_check", f"更新後第一次開機失敗：{health_msg}")
+                write_update_state(state_dir, {
+                    "status": "rolled_back",
+                    "target_commit": target_commit,
+                    "previous_commit": prev_commit,
+                    "reason": health_msg,
+                    "recovered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                })
+                restart_units(["desktop-pet.service"], systemctl_cmd=systemctl_cmd)
+                return False, f"first_boot_failed_rolled_back: {health_msg}"
 
-    if errors:
-        log.warning("開機自檢發現異常（舊版僅記錄、不動檔案）：%s", "; ".join(errors))
-        return False, "; ".join(errors)
+        # 情況 3：正常運行中／本來就是舊版開機
+        # 規格要求每次開機都檢查：程式能載入、/v1/status 回應、後端連線、packs/ 與 deploy.env 存在；舊版僅記錄、不動檔案。
+        errors: List[str] = []
+        main_py = install_dir / "main.py"
+        if not main_py.exists():
+            errors.append("main.py 不存在")
+        packs_dir = install_dir / "packs"
+        if not packs_dir.exists():
+            errors.append("packs/ 目錄不存在")
+        deploy_env = install_dir / "deploy.env"
+        sys_env = Path(conf.get("PET_SYS_ENV", "/etc/desktop-pet/env"))
+        if not deploy_env.exists() and not sys_env.exists():
+            errors.append("deploy.env 與 /etc/desktop-pet/env 均不存在")
 
-    log.info("開機自檢通過，系統正常運行。")
-    return True, "ok"
+        # 檢查 /v1/status 與後端連線
+        web_host = "127.0.0.1"
+        web_port = "8080"
+        web_listen = conf.get("PET_WEB_LISTEN", "0.0.0.0:8080")
+        if ":" in web_listen:
+            p = web_listen.rsplit(":", 1)[1]
+            if p.isdigit():
+                web_port = p
+
+        st = check_http_json(f"http://{web_host}:{web_port}/v1/status") or check_http_json(f"http://{web_host}:{web_port}/status")
+        if not st:
+            errors.append("/status 無回應")
+        else:
+            backend_url = conf.get("PET_BACKEND_URL")
+            if backend_url:
+                backend_st = st.get("backend")
+                if isinstance(backend_st, dict) and "online" in backend_st:
+                    if not backend_st.get("online"):
+                        errors.append("後端未連線 (online=False)")
+                else:
+                    bh = check_http_json(f"{backend_url.rstrip('/')}/health")
+                    if not bh or not bh.get("ok"):
+                        errors.append("後端 /health 無回應")
+
+        if errors:
+            log.warning("開機自檢發現異常（舊版僅記錄、不動檔案）：%s", "; ".join(errors))
+            return False, "; ".join(errors)
+
+        log.info("開機自檢通過，系統正常運行。")
+        return True, "ok"
+    finally:
+        lock.release()
 
 
 # --- 變更檢查與自我檢測 ---
@@ -918,6 +1014,7 @@ def run_health_check(
             pass
 
     unit_check_needed = any("desktop-pet" in u for u in affected_units)
+    last_fail_reason = "服務尚未就緒"
 
     while time.time() < deadline:
         units_ok = True
@@ -926,6 +1023,7 @@ def run_health_check(
                 res = subprocess.run([systemctl_cmd, "is-active", u], capture_output=True, text=True)
                 if res.stdout.strip() != "active":
                     units_ok = False
+                    last_fail_reason = f"服務 {u} 非 active"
                     break
             except Exception:
                 units_ok = True
@@ -940,11 +1038,13 @@ def run_health_check(
 
         st = check_http_json(v1_status_url) or check_http_json(status_url)
         if not st or not st.get("ok", True):
+            last_fail_reason = "/status 無回應或回應異常"
             time.sleep(poll_interval)
             continue
 
         fps = float(st.get("fps", 0))
         if fps < min_fps:
+            last_fail_reason = f"FPS 過低（{fps} < {min_fps}）"
             time.sleep(poll_interval)
             continue
 
@@ -964,6 +1064,7 @@ def run_health_check(
             seq_increased = True
 
         if not seq_increased and last_frame_seq is None:
+            last_fail_reason = "畫面幀數未遞增"
             time.sleep(poll_interval)
             continue
 
@@ -993,15 +1094,26 @@ def run_health_check(
         if wst is None:
             log.debug("救援熱點狀態暫無法存取（僅記錄）")
 
+        # 後端連線檢查：若設定 PET_BACKEND_URL，必須確保已連上後端（/status 內 backend.online=True 或後端 /health 回 200 ok）
         backend_url = conf.get("PET_BACKEND_URL")
         if backend_url:
-            bh = check_http_json(f"{backend_url.rstrip('/')}/health")
-            if not bh:
-                log.warning("後端 /health 檢查未回應（僅記錄警告）")
+            backend_connected = False
+            backend_st = st.get("backend")
+            if isinstance(backend_st, dict) and "online" in backend_st:
+                backend_connected = bool(backend_st.get("online"))
+            else:
+                bh = check_http_json(f"{backend_url.rstrip('/')}/health")
+                backend_connected = bool(bh and bh.get("ok"))
+
+            if not backend_connected:
+                last_fail_reason = "桌寵尚未連上後端或後端無回應"
+                log.warning("桌寵尚未連上後端或後端無回應，等待重試...")
+                time.sleep(poll_interval)
+                continue
 
         return True, "健康檢查全部通過"
 
-    return False, "健康檢查逾時未通過"
+    return False, f"健康檢查逾時未通過（{last_fail_reason}）"
 
 
 # --- 失敗紀錄與狀態儲存 ---
@@ -1092,15 +1204,22 @@ class AutoUpdater:
 
     def rollback(self) -> bool:
         """手動從備份還原。"""
-        log.info("手動觸發從備份還原...")
-        recovered = restore_from_backup(self.install_dir, self.backup_dir)
-        if recovered:
-            restart_units(["desktop-pet.service"])
-            write_update_state(self.state_dir, {
-                "status": "rolled_back",
-                "manual_rollback_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            })
-        return recovered
+        lock = ProcessLock(self.state_dir / "autoupdate.lock")
+        if not lock.acquire():
+            log.warning("已有其他更新/還原程序正在執行中。")
+            return False
+        try:
+            log.info("手動觸發從備份還原...")
+            recovered = restore_from_backup(self.install_dir, self.backup_dir)
+            if recovered:
+                restart_units(["desktop-pet.service"])
+                write_update_state(self.state_dir, {
+                    "status": "rolled_back",
+                    "manual_rollback_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                })
+            return recovered
+        finally:
+            lock.release()
 
     def run_cycle(self, force: bool = False, retry: bool = False) -> int:
         """執行一次檢查與更新流程（備份＋覆蓋設計）。回傳 0 表示成功或正常無更新，非 0 為異常。"""
@@ -1128,20 +1247,7 @@ class AutoUpdater:
                 except Exception:
                     current_commit = "legacy"
 
-            # 0. 先執行開機自檢，若先前更新被斷電中斷則自動修復
-            st_data = load_update_state(self.state_dir)
-            if st_data.get("status") in ("updating", "restarting"):
-                log.warning("偵測到前次更新處於未完成狀態（%s），執行開機自檢還原...", st_data.get("status"))
-                self.boot_check()
-                # 重新讀取還原後的 commit
-                if rel_json.exists():
-                    try:
-                        data = json.loads(rel_json.read_text(encoding="utf-8"))
-                        current_commit = data.get("commit", "legacy")
-                    except Exception:
-                        pass
-
-            # 1. 檢查暫停條件
+            # 1. 檢查暫停條件與 dry-run（未通過前絕不觸碰任何檔案與服務）
             pause_file = self.state_dir / "PAUSE"
             repo_pause = self.install_dir / "PAUSE"
             if pause_file.exists() or repo_pause.exists():
@@ -1154,15 +1260,35 @@ class AutoUpdater:
                 self._record_status(current_commit, "paused", "PET_AUTOUPDATE=0", "paused")
                 return 0
 
-            # 2. 檢查本地手動修改
+            if self.dry_run:
+                log.info("[Dry Run] 僅執行檢查，不動任何檔案與服務。")
+                st_data = load_update_state(self.state_dir)
+                if st_data.get("status") in ("updating", "restarting"):
+                    log.info("[Dry Run] 偵測到未完成狀態（%s），dry-run 模式下不修改檔案。", st_data.get("status"))
+                return 0
+
+            # 2. 先前更新若被斷電中斷，執行開機自檢還原（已通過鎖與暫停檢查，且非 dry_run）
+            st_data = load_update_state(self.state_dir)
+            if st_data.get("status") in ("updating", "restarting"):
+                log.warning("偵測到前次更新處於未完成狀態（%s），執行開機自檢還原...", st_data.get("status"))
+                self.boot_check()
+                # 重新讀取還原後的 commit
+                if rel_json.exists():
+                    try:
+                        data = json.loads(rel_json.read_text(encoding="utf-8"))
+                        current_commit = data.get("commit", "legacy")
+                    except Exception:
+                        pass
+
+            # 3. 檢查本地手動修改
             is_mod, mod_reason = verify_manifest(self.install_dir)
             if not is_mod:
                 log.warning("偵測到本地修改（%s），自動更新暫停。", mod_reason)
                 self._record_status(current_commit, "paused", f"本地版本遭修改：{mod_reason}", "paused")
                 return 0
 
-            # 3. 檢查更新間隔
-            interval = int(self.conf.get("PET_AUTOUPDATE_INTERVAL", "600"))
+            # 4. 檢查更新間隔（預設 300 秒 / 5 分鐘）
+            interval = int(self.conf.get("PET_AUTOUPDATE_INTERVAL", "300"))
             status_file = self.state_dir / "status.json"
             if not force and status_file.exists():
                 try:
@@ -1315,7 +1441,25 @@ class AutoUpdater:
 
             # 15. 執行原地覆蓋（覆蓋新檔案、刪除新版已移除檔案，packs/ 與 deploy.env 全程保護）
             log.info("原地覆蓋新版本檔案至 %s...", self.install_dir)
-            overwritten, deleted = overwrite_release(self.install_dir, root_extracted, self.backup_dir)
+            prev_manifest_files: Set[str] = set()
+            m_file = self.install_dir / "MANIFEST.sha256"
+            if m_file.exists():
+                try:
+                    for line in m_file.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            parts = line.split(None, 1)
+                            if len(parts) == 2:
+                                prev_manifest_files.add(parts[1].strip())
+                except Exception as exc:
+                    log.warning("讀取現有 MANIFEST.sha256 失敗：%s", exc)
+
+            overwritten, deleted = overwrite_release(
+                self.install_dir,
+                root_extracted,
+                self.backup_dir,
+                previous_manifest_files=prev_manifest_files,
+            )
 
             # 產生新版本的 MANIFEST.sha256 與 RELEASE.json
             new_manifest = calculate_manifest(self.install_dir)
@@ -1474,7 +1618,7 @@ def main() -> int:
             print(json.dumps({"status": "no_status_file", "state_dir": str(updater.state_dir)}, indent=2))
         return 0
 
-    return updater.run_cycle(force=args.force or args.once, retry=args.retry)
+    return updater.run_cycle(force=args.force, retry=args.retry)
 
 
 if __name__ == "__main__":
