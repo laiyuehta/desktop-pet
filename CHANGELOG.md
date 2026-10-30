@@ -17,6 +17,7 @@
 - `.github/CODEOWNERS`、PR 範本、Issue 範本（Bug、任務）、`CONTRIBUTING.md`。
 
 ### 變更
+- 測試穩定性改善與烘焙測試健全（#25）：修復 `tests/test_backend.py` 離線對話回退門檻（< 2.5s）並以請求次數（`len(llm.calls) == 1`）嚴格斷言逾時不再重試；`tests/test_pack.py` 切換延遲邊界門檻微調為 `>= 199` 消除浮點精度抖動；`tests/test_emotion_levels.py` 將動畫包情緒檢查抽為模組函式 `verify_manifest_emotions`，CI 新增輕量真實 `bake()` 覆蓋全 16 狀態 240 組轉移片段；`pet/baker.py` 保留 `transition_pairs()` 作為轉移擴充點。
 - 後端客戶端迴圈測試門檻相容慢速硬體（#30、#40）：放寬 `tests/test_backend_client.py` 中 `test_hanging_backend_does_not_block_loop` 總耗時門檻為 6.0s（相容 Pi 3B 實測 40 格約 4.41–4.44s，且仍小於 3.0s 卡住回歸）；單格延遲門檻（預設 8 幀 = 0.4s）上限 clamp 在後端逾時（0.5s）以下（`min(env, timeout*0.9)`），確保能抓到同步阻塞；簡化 `FakeBackend.do_POST` 異常捕捉為 `except OSError`；放寬 `test_offline_backend_does_not_block_loop` 平均單格門檻（預設 2 幀 = 0.1s）；支援透過環境變數 `PET_TEST_LOOP_MAX_FRAME_S`、`PET_TEST_LOOP_MAX_TOTAL_S` 與 `PET_TEST_LOOP_PER_FRAME_S` 自訂門檻；`tests/conftest.py` 保留 `PET_TEST_*` 環境變數。
 - 部署防呆與日誌警告整理（#26）：將建立 `/etc/desktop-pet/env` 列為各服務安裝與切換腳本（`install.sh`、`switch.sh`）之檢查步驟，相容舊版 `deploy.env` 並輸出警告，緊急回退（`rollback.sh`）改為只警示不阻擋；更正 `deploy.env.example` 範本描述（自動更新與示範用位址維持註解）；移除 `main.py` 於 `parse_args` 階段在 `logging.basicConfig` 前輸出的未設定後端重複警告，統整於 `main` 中格式化輸出一次。
 - 設定改用環境變數與環境檔（自動部署第 1 步，#12）：Pi 主程式、前端後台、安裝腳本與 systemd unit 支援從 `/etc/desktop-pet/env`（過渡期相容 `deploy.env`）讀取設定並移除 `@BACKEND_URL@` 佔位；R7 後端、`supervise.py`、`start_hidden.cmd` 支援 `%LOCALAPPDATA%\desktop-pet\env` 與四層設定優先順序，設定、token 檔、存檔、照片、動畫包與日誌皆可透過環境變數放至版本目錄外；取消 `deploy.env.example` 範本變數註解。
