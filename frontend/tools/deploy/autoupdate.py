@@ -17,6 +17,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -429,16 +430,17 @@ class AutoUpdaterPi(AutoUpdaterCore):
         if not new_req.exists():
             return True, None
 
-        cur_req = self.install_dir / "frontend" / "requirements.txt"
-        if not cur_req.exists():
-            cur_req = self.install_dir / "requirements.txt"
+        # 比對備份目錄中之 requirements.txt（因 install_dir 已於 overwrite_release 被覆蓋為新版）
+        backup_req = self.backup_dir / "frontend" / "requirements.txt"
+        if not backup_req.exists():
+            backup_req = self.backup_dir / "requirements.txt"
 
         need_pip = False
-        if not cur_req.exists():
+        if not backup_req.exists():
             need_pip = True
         else:
             try:
-                need_pip = (cur_req.read_bytes() != new_req.read_bytes())
+                need_pip = (backup_req.read_bytes() != new_req.read_bytes())
             except Exception:
                 need_pip = True
 
@@ -446,20 +448,80 @@ class AutoUpdaterPi(AutoUpdaterCore):
             return True, None
 
         log.info("偵測到前端 requirements.txt 變更，準備更新 frontend/.venv 依賴...")
+
+        # 優先呼叫 common.sh 中的 ensure_frontend_venv（過濾 -e ../shared 且兼顧離線 .pth 設定）
+        common_sh = self.install_dir / "frontend" / "tools" / "deploy" / "common.sh"
+        if not common_sh.exists():
+            common_sh = self.install_dir / "tools" / "deploy" / "common.sh"
+        if not common_sh.exists():
+            common_sh = staged_dir / "frontend" / "tools" / "deploy" / "common.sh"
+
+        sh_bin = shutil.which("bash") or shutil.which("sh")
+        if common_sh.exists() and sh_bin and (os.name != "nt" or getattr(self, "_force_common_sh", False)):
+            env_copy = os.environ.copy()
+            env_copy["PET_REPO_ROOT"] = str(self.install_dir)
+            log.info("呼叫 common.sh ensure_frontend_venv 更新前端虛擬環境與依賴...")
+            res = subprocess.run(
+                [sh_bin, "-c", f'. "{common_sh.as_posix()}" && ensure_frontend_venv'],
+                cwd=str(self.install_dir / "frontend" if (self.install_dir / "frontend").exists() else self.install_dir),
+                capture_output=True,
+                text=True,
+                env=env_copy,
+            )
+            if res.returncode != 0:
+                err_msg = res.stderr.strip() or res.stdout.strip()
+                log.error("ensure_frontend_venv 失敗：%s", err_msg)
+                return False, f"ensure_frontend_venv 失敗：{err_msg}"
+            return True, None
+
+        # Python 原生處理（適用非 POSIX 或缺少 common.sh 環境）：
+        # 去掉 -e ../shared 避免離線時嘗試下載 setuptools 或建置 shared
+        log.info("準備更新前端虛擬環境依賴（過濾 -e ../shared）...")
         py_venv = self.install_dir / "frontend" / ".venv" / "bin" / "python3"
         if not py_venv.exists():
             py_venv = self.install_dir / "frontend" / ".venv" / "bin" / "python"
         if not py_venv.exists():
+            py_venv = self.install_dir / "frontend" / ".venv" / "Scripts" / "python.exe"
+        if not py_venv.exists():
             py_venv = Path(sys.executable)
 
-        res = subprocess.run(
-            [str(py_venv), "-m", "pip", "install", "-r", str(new_req)],
-            cwd=str(self.install_dir / "frontend" if (self.install_dir / "frontend").exists() else self.install_dir),
-            capture_output=True,
-            text=True,
-        )
-        if res.returncode != 0:
-            return False, f"pip 安裝依賴失敗：{res.stderr.strip() or res.stdout.strip()}"
+        req_lines = new_req.read_text(encoding="utf-8").splitlines()
+        filtered_lines = [
+            line for line in req_lines
+            if not re.match(r"^\s*-e\s+\.\./shared", line)
+        ]
+
+        import tempfile
+        tmp_req: Optional[Path] = None
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix="_req.txt") as tf:
+                tf.write("\n".join(filtered_lines) + "\n")
+                tmp_req = Path(tf.name)
+
+            cmd = [
+                str(py_venv),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "-q",
+                "--no-build-isolation",
+                "-r",
+                str(tmp_req),
+            ]
+            cwd = self.install_dir / "frontend" if (self.install_dir / "frontend").exists() else self.install_dir
+            res = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
+            if res.returncode != 0:
+                err_msg = res.stderr.strip() or res.stdout.strip()
+                log.error("pip 安裝依賴失敗：%s", err_msg)
+                return False, f"pip 安裝依賴失敗：{err_msg}"
+        finally:
+            if tmp_req and tmp_req.exists():
+                try:
+                    tmp_req.unlink()
+                except OSError:
+                    pass
+
         return True, None
 
     def run_health_check(self, target_commit: str) -> Tuple[bool, Optional[str]]:

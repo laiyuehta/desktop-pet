@@ -985,6 +985,120 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         self.assertTrue((self.install_dir / "notes.txt").exists())
         self.assertTrue((self.install_dir / "piwifi" / "daemon.rs").exists())
 
+    def test_pi_requirements_unchanged_skips_pip(self):
+        """Must-fix 3 驗證：當新 release 之 requirements.txt 與備份相同時，不呼叫 pip。"""
+        (self.backup_dir / "frontend").mkdir(parents=True)
+        (self.backup_dir / "frontend" / "requirements.txt").write_text("-e ../shared\npytest==8.0.0\n", encoding="utf-8")
+
+        staged_dir = self.tmp_dir / "staged"
+        (staged_dir / "frontend").mkdir(parents=True)
+        (staged_dir / "frontend" / "requirements.txt").write_text("-e ../shared\npytest==8.0.0\n", encoding="utf-8")
+
+        with mock.patch("subprocess.run") as mock_run:
+            ok, err = self.updater.ensure_dependencies(staged_dir)
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+            mock_run.assert_not_called()
+
+    def test_pi_requirements_change_triggers_dependency_update_and_strips_editable_shared(self):
+        """Must-fix 3 驗證：當 requirements.txt 變更時觸發更新，且 pip 參數排除 -e ../shared。"""
+        (self.backup_dir / "frontend").mkdir(parents=True)
+        (self.backup_dir / "frontend" / "requirements.txt").write_text("-e ../shared\npytest==8.0.0\n", encoding="utf-8")
+
+        staged_dir = self.tmp_dir / "staged"
+        (staged_dir / "frontend").mkdir(parents=True)
+        (staged_dir / "frontend" / "requirements.txt").write_text("-e ../shared\npytest==8.0.0\nrequests>=2.0.0\n", encoding="utf-8")
+
+        passed_req_content = []
+
+        def spy_run(cmd, **kwargs):
+            # 擷取 -r 參數傳入的 requirements 檔案內容
+            if "-r" in cmd:
+                idx = cmd.index("-r")
+                req_path = Path(cmd[idx + 1])
+                if req_path.is_file():
+                    passed_req_content.append(req_path.read_text(encoding="utf-8"))
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch("subprocess.run", side_effect=spy_run) as mock_run:
+            ok, err = self.updater.ensure_dependencies(staged_dir)
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+            self.assertTrue(mock_run.called)
+            self.assertEqual(len(passed_req_content), 1)
+            # 斷言：-e ../shared 絕未出現在 pip 依賴清單中（防止離線建置 failure）
+            self.assertNotIn("-e ../shared", passed_req_content[0])
+            self.assertIn("requests>=2.0.0", passed_req_content[0])
+
+    def test_pi_ensure_dependencies_invokes_common_sh_on_posix(self):
+        """Must-fix 3 驗證：在 POSIX 環境且 common.sh 存在時，優先呼叫 common.sh ensure_frontend_venv。"""
+        (self.backup_dir / "frontend").mkdir(parents=True)
+        (self.backup_dir / "frontend" / "requirements.txt").write_text("pytest==8.0.0\n", encoding="utf-8")
+
+        staged_dir = self.tmp_dir / "staged"
+        (staged_dir / "frontend").mkdir(parents=True)
+        (staged_dir / "frontend" / "requirements.txt").write_text("pytest==8.0.0\nrequests>=2.0.0\n", encoding="utf-8")
+
+        # 建立 common.sh 於安裝目錄
+        common_sh = self.install_dir / "frontend" / "tools" / "deploy" / "common.sh"
+        common_sh.parent.mkdir(parents=True, exist_ok=True)
+        common_sh.write_text("#!/bin/sh\nensure_frontend_venv() { return 0; }\n", encoding="utf-8")
+
+        self.updater._force_common_sh = True
+        try:
+            with mock.patch("shutil.which", return_value="/bin/bash"), \
+                 mock.patch("subprocess.run") as mock_run:
+                mock_run.return_value = mock.Mock(returncode=0, stdout="ok", stderr="")
+
+                ok, err = self.updater.ensure_dependencies(staged_dir)
+                self.assertTrue(ok)
+                self.assertIsNone(err)
+                self.assertTrue(mock_run.called)
+
+                cmd = mock_run.call_args[0][0]
+                self.assertEqual(cmd[0], "/bin/bash")
+                self.assertEqual(cmd[1], "-c")
+                self.assertIn("ensure_frontend_venv", cmd[2])
+                self.assertIn("common.sh", cmd[2])
+                env = mock_run.call_args[1]["env"]
+                self.assertEqual(env.get("PET_REPO_ROOT"), str(self.updater.install_dir))
+        finally:
+            delattr(self.updater, "_force_common_sh")
+
+    def test_pi_full_cycle_with_requirements_change_executes_dependencies(self):
+        """Must-fix 3 整合驗證：全更新週期中 requirements 變更，即使 install_dir 被 overwrite 也正確偵測並執行 pip。"""
+        # 初始版本 v1
+        (self.install_dir / "frontend").mkdir(parents=True)
+        (self.install_dir / "frontend" / "main.py").write_text("print('v1')", encoding="utf-8")
+        (self.install_dir / "frontend" / "requirements.txt").write_text("-e ../shared\npytest==8.0.0\n", encoding="utf-8")
+        write_manifest(self.install_dir, calculate_manifest(self.install_dir))
+
+        new_commit = "9999999999999999999999999999999999999999"
+        tar_bytes = self._make_tarball({
+            "frontend/main.py": "print('v2')",
+            "frontend/requirements.txt": "-e ../shared\npytest==8.0.0\nrequests>=2.25.0\n",
+        })
+
+        pip_called = []
+
+        def spy_run(cmd, **kwargs):
+            if any("-m" in str(arg) and "pip" in str(cmd) for arg in cmd) or "pip" in str(cmd):
+                pip_called.append(True)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value=new_commit), \
+             mock.patch("tools.deploy.autoupdate.pre_switch_check", return_value=(True, None)), \
+             mock.patch("tools.deploy.autoupdate.run_health_check", return_value=(True, "all ok")), \
+             mock.patch("tools.deploy.autoupdate.restart_units"), \
+             mock.patch("subprocess.run", side_effect=spy_run), \
+             mock.patch("urllib.request.urlopen", return_value=io.BytesIO(tar_bytes)):
+
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 0)
+
+        # 斷言：覆蓋後依然成功偵測到 requirements.txt 變更並執行依賴更新！
+        self.assertTrue(len(pip_called) > 0, "requirements.txt 變更必須觸發依賴更新")
+
 
 class TestPolkitRuleAndSystemdTemplates(unittest.TestCase):
     def test_polkit_rule_content(self):
