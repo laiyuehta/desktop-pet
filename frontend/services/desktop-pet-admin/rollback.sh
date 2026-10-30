@@ -18,20 +18,20 @@ ADMIN_UNIT=/etc/systemd/system/desktop-pet-admin.service
 
 echo "== 正在回退至單體模式 =="
 
+# 先準備好、驗證完再動服務：venv 或 unit 有問題就中止，desktop-pet-admin 與目前的 desktop-pet 都維持原狀
+ensure_frontend_venv || { echo "錯誤：frontend/.venv 無法就緒，未做任何變更（desktop-pet-admin 仍在執行）" >&2; exit 1; }
+tmp_pet=$(mktemp --suffix=.service)
+render_template "$PET_REPO_ROOT/frontend/services/desktop-pet/desktop-pet.service" > "$tmp_pet" || { rm -f "$tmp_pet"; echo "錯誤：unit 範本產生失敗，未做任何變更" >&2; exit 1; }
+echo "== 驗證 systemd unit"
+sudo systemd-analyze verify "$tmp_pet" || { rm -f "$tmp_pet"; echo "錯誤：unit 驗證失敗，未做任何變更" >&2; exit 1; }
+
 if systemctl is-active --quiet desktop-pet-admin; then
     sudo systemctl stop desktop-pet-admin
 fi
 sudo systemctl disable desktop-pet-admin 2>/dev/null || true
 
-tmp_pet=$(mktemp)
-# unit 用 frontend/.venv 的 python；緊急回退時建 venv 失敗只警告不擋
-[ -x "$PET_REPO_ROOT/frontend/.venv/bin/python" ] || ensure_frontend_venv || echo "警告：frontend/.venv 不存在且建立失敗，desktop-pet 會起不來" >&2
-render_template "$PET_REPO_ROOT/frontend/services/desktop-pet/desktop-pet.service" > "$tmp_pet" || { rm -f "$tmp_pet"; exit 1; }
 sudo install -m 644 "$tmp_pet" "$PET_UNIT"
 rm -f "$tmp_pet"
-
-echo "== 驗證 systemd unit"
-sudo systemd-analyze verify "$PET_UNIT"
 
 if systemctl is-active --quiet desktop-pet; then
     sudo systemctl stop desktop-pet

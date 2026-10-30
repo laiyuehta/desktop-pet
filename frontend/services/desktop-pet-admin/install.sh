@@ -4,6 +4,14 @@
 set -eu
 cd "$(dirname "$0")"
 
+# 先準備 venv（失敗就中止，不動任何服務）
+UNIT=/etc/systemd/system/desktop-pet-admin.service
+PET_REPO_ROOT="$(cd ../../.. && pwd)"
+. "$PET_REPO_ROOT/frontend/tools/deploy/common.sh"
+load_deploy_env
+require_sys_env
+ensure_frontend_venv
+
 # 檢查桌寵主程式是否仍在執行內建網頁或 Wi-Fi（若有，提示改用 switch.sh）
 if systemctl is-active --quiet desktop-pet 2>/dev/null; then
     CMD=$(ps -o args= -C python3 2>/dev/null | grep "desktop-pet/frontend/main.py" | grep -v grep || true)
@@ -38,12 +46,6 @@ if command -v ss >/dev/null 2>&1; then
     fi
 fi
 
-UNIT=/etc/systemd/system/desktop-pet-admin.service
-PET_REPO_ROOT="$(cd ../../.. && pwd)"
-. "$PET_REPO_ROOT/frontend/tools/deploy/common.sh"
-load_deploy_env
-require_sys_env
-ensure_frontend_venv
 tmp=$(mktemp)
 render_template desktop-pet-admin.service > "$tmp" || { rm -f "$tmp"; exit 1; }
 sudo install -m 644 "$tmp" "$UNIT"

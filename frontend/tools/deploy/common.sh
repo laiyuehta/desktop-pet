@@ -118,22 +118,36 @@ pet_flag_on() {
     return 1
 }
 
-# ensure_frontend_venv：建立 frontend/.venv（--system-site-packages：Pi 用 apt 裝的 python3-pil 直接可用，不用在 Pi 上編 Pillow）
-# 並安裝 frontend/requirements.txt（第一行 -e ../shared，相對路徑以 frontend/ 為準，所以要在 frontend/ 底下跑 pip）。
-# systemd unit 的 ExecStart 用這個 venv 的 python。
+# ensure_frontend_venv：建立／檢查 frontend/.venv（systemd unit 的 ExecStart 用這個 venv 的 python）。
+# 設計成可離線（Pi 在熱點模式時沒網路）：
+#   - venv 用 --system-site-packages：直接用 apt 裝的 python3-pil，不用下載 Pillow
+#   - shared/ 用 .pth 檔指到 repo 裡的 shared/（等同 editable，不用 pip、不用下載 setuptools）
+#   - 只有 import 檢查失敗時才跑 pip（--no-build-isolation，不另外下載建置工具）；失敗會回傳非 0
 ensure_frontend_venv() {
     _fe="$PET_REPO_ROOT/frontend"
     _venv="$_fe/.venv"
+    if [ ! -f "$PET_REPO_ROOT/shared/shared/__init__.py" ]; then
+        echo "找不到 $PET_REPO_ROOT/shared/（前端需要它；部署時要連同 shared/ 一起放）" >&2
+        return 1
+    fi
     if [ ! -x "$_venv/bin/python" ]; then
         echo "== 建立 $_venv"
         python3 -m venv --system-site-packages "$_venv" || {
             echo "建立 venv 失敗（Pi 上先 sudo apt install python3-venv）" >&2
+            rm -rf "$_venv"
             return 1
         }
     fi
-    echo "== 安裝前端依賴（frontend/requirements.txt）"
-    (cd "$_fe" && "$_venv/bin/python" -m pip install --disable-pip-version-check -q -r requirements.txt) || {
-        echo "pip install 失敗：$_venv" >&2
+    _site="$("$_venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" || return 1
+    printf '%s\n' "$PET_REPO_ROOT/shared" > "$_site/desktop-pet-shared.pth" || return 1
+    if "$_venv/bin/python" -c 'import PIL, shared.apikey, shared.envfile, shared.protocol' 2>/dev/null; then
+        echo "== frontend/.venv 已就緒（shared 經 .pth 指到 repo；Pillow 可用）"
+        return 0
+    fi
+    echo "== 安裝前端依賴（frontend/requirements.txt；需要網路，除非 Pillow 已由 apt 安裝）"
+    (cd "$_fe" && "$_venv/bin/python" -m pip install --disable-pip-version-check -q --no-build-isolation -r requirements.txt) || true
+    "$_venv/bin/python" -c 'import PIL, shared.apikey, shared.envfile, shared.protocol' || {
+        echo "frontend/.venv 無法 import PIL 或 shared（Pi 上 sudo apt install python3-pil，或連上網路後重跑）" >&2
         return 1
     }
 }

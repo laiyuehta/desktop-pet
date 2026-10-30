@@ -19,8 +19,7 @@ import signal
 import sys
 import time
 
-from shared.apikey import read_key_file
-
+import pet  # noqa: F401  先載入 pet：沒裝 shared 時會把 repo 的 shared/ 加進 sys.path
 from pet.app import PetApp
 from pet.env import expand_pet_path, load_pi_env
 from pet.events import make_event
@@ -34,6 +33,7 @@ from pet.outputs import FileSink, NullSink, PiscreenSink
 from pet.outputs.mirror import ScreenMirror, ScreenWebAPI
 from pet.outputs.piscreen import DEFAULT_SOCKET
 from pet.wifi import DEFAULT_HOTSPOT_CONF, HOTSPOT_SSID, WifiManager, WifiWebAPI
+from shared.apikey import read_key_file  # noqa: E402
 
 
 DEFAULT_TOKEN_FILE = "~/.config/desktop-pet/backend-token"
