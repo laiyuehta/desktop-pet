@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# services/piwifi/install.sh
+# piwifi/install.sh
 #
 # piwifi 守護程式冪等安裝腳本（草案）
 # - 建立 piwifi 系統帳號

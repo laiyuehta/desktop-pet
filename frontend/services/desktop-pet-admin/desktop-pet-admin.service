@@ -8,13 +8,13 @@ StartLimitIntervalSec=0
 Type=simple
 User=@USER@
 Group=@USER@
-WorkingDirectory=@HOME@/desktop-pet
+WorkingDirectory=@HOME@/desktop-pet/frontend
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/desktop-pet/env
 RuntimeDirectory=desktop-pet
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes
-ExecStart=/usr/bin/python3 @HOME@/desktop-pet/services/desktop-pet-admin/admin.py --control-socket /run/desktop-pet/control.sock --frames-socket /run/desktop-pet/frames.sock --wifi auto
+ExecStart=/usr/bin/python3 @HOME@/desktop-pet/frontend/services/desktop-pet-admin/admin.py --control-socket /run/desktop-pet/control.sock --frames-socket /run/desktop-pet/frames.sock --wifi auto
 Restart=always
 RestartSec=3
 TimeoutStopSec=15

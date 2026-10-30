@@ -1,13 +1,13 @@
 #!/bin/sh
-# 一次完成前端後台切換（在 Pi 上執行）：sh services/desktop-pet-admin/switch.sh
+# 一次完成前端後台切換（在 Pi 上執行）：sh frontend/services/desktop-pet-admin/switch.sh
 # 1. 將 desktop-pet 改為 --web off --wifi off（sockets 模式）
 # 2. 將 desktop-pet-admin 開在 :8080 並啟動 Wi-Fi 管理
-# 回退方式：sh services/desktop-pet-admin/rollback.sh
+# 回退方式：sh frontend/services/desktop-pet-admin/rollback.sh
 set -eu
 cd "$(dirname "$0")"
 
-PET_REPO_ROOT="$(cd ../.. && pwd)"
-. "$PET_REPO_ROOT/tools/deploy/common.sh"
+PET_REPO_ROOT="$(cd ../../.. && pwd)"
+. "$PET_REPO_ROOT/frontend/tools/deploy/common.sh"
 load_deploy_env
 require_sys_env
 
@@ -21,8 +21,8 @@ echo "== 準備切換至前端後台架構 (v2.6 第 1 步) =="
 tmp_pet=$(mktemp)
 tmp_admin=$(mktemp)
 
-render_template "$PET_REPO_ROOT/services/desktop-pet/desktop-pet-split.service" > "$tmp_pet" || { rm -f "$tmp_pet" "$tmp_admin"; exit 1; }
-render_template "$PET_REPO_ROOT/services/desktop-pet-admin/desktop-pet-admin.service" > "$tmp_admin" || { rm -f "$tmp_pet" "$tmp_admin"; exit 1; }
+render_template "$PET_REPO_ROOT/frontend/services/desktop-pet/desktop-pet-split.service" > "$tmp_pet" || { rm -f "$tmp_pet" "$tmp_admin"; exit 1; }
+render_template "$PET_REPO_ROOT/frontend/services/desktop-pet-admin/desktop-pet-admin.service" > "$tmp_admin" || { rm -f "$tmp_pet" "$tmp_admin"; exit 1; }
 
 sudo install -m 644 "$tmp_pet" "$PET_UNIT"
 sudo install -m 644 "$tmp_admin" "$ADMIN_UNIT"

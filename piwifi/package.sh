@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# services/piwifi/package.sh
+# piwifi/package.sh
 #
 # 交叉編譯並打包 piwifi 發行套件：
 #   dist/piwifi-<version>-aarch64-linux-musl.tar.gz

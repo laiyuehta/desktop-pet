@@ -15,7 +15,8 @@ from typing import Dict, Mapping, Optional
 log = logging.getLogger("pet.env")
 
 DEFAULT_PI_ENV_FILE = "/etc/desktop-pet/env"
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# repo 根目錄（frontend/ 的上一層）：舊版 deploy.env 放在這裡
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LEGACY_DEPLOY_ENV = os.path.join(REPO_ROOT, "deploy.env")
 
 

@@ -1,4 +1,4 @@
-# desktop-pet 部署共用函式（給各 install.sh / start.sh 用 `. tools/deploy/common.sh` 載入）。
+# desktop-pet 部署共用函式（給各 install.sh / start.sh 用 `. frontend/tools/deploy/common.sh` 載入）。
 # 部署值優先順序（PROPOSAL.md 16.2）：
 #   1. 已設定的 shell 環境變數
 #   2. PET_DEPLOY_ENV 指定的檔案

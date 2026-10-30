@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-HTML = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pet", "web", "remote.html")
+HTML = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "pet", "web", "remote.html")
 SMOKE = os.path.join(os.path.dirname(__file__), "js", "remote_smoke.js")
 
 

@@ -11,9 +11,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-UNIT = ROOT / "services" / "desktop-pet" / "desktop-pet.service"
-SPLIT_UNIT = ROOT / "services" / "desktop-pet" / "desktop-pet-split.service"
-ADMIN_UNIT = ROOT / "services" / "desktop-pet-admin" / "desktop-pet-admin.service"
+UNIT = ROOT / "frontend" / "services" / "desktop-pet" / "desktop-pet.service"
+SPLIT_UNIT = ROOT / "frontend" / "services" / "desktop-pet" / "desktop-pet-split.service"
+ADMIN_UNIT = ROOT / "frontend" / "services" / "desktop-pet-admin" / "desktop-pet-admin.service"
 
 
 def _unit(path: Path = UNIT):
@@ -74,11 +74,11 @@ class AutostartTest(unittest.TestCase):
         self.assertEqual(s["User"], "@USER@")
         self.assertEqual(s["Group"], "@USER@")
         self.assertEqual(s["Restart"], "always")
-        self.assertEqual(s["WorkingDirectory"], "@HOME@/desktop-pet")
+        self.assertEqual(s["WorkingDirectory"], "@HOME@/desktop-pet/frontend")
         self.assertEqual(s["EnvironmentFile"], "-/etc/desktop-pet/env")
         self.assertEqual(_unit()["Install"]["WantedBy"], "multi-user.target")
         args = s["ExecStart"].split()
-        self.assertEqual(args[:2], ["/usr/bin/python3", "@HOME@/desktop-pet/main.py"])
+        self.assertEqual(args[:2], ["/usr/bin/python3", "@HOME@/desktop-pet/frontend/main.py"])
         flags = dict(zip(args[2::2], args[3::2]))
         self.assertEqual(flags, {
             "--sink": "piscreen", "--input": "web", "--fps": "20",
@@ -97,18 +97,18 @@ class AutostartTest(unittest.TestCase):
 
     def test_deploy_files_only_use_placeholders(self):
         files = [
-            "services/desktop-pet/desktop-pet.service",
-            "services/desktop-pet/desktop-pet-split.service",
-            "services/desktop-pet-admin/desktop-pet-admin.service",
-            "services/picam/picam.service",
-            "tools/wifi/50-desktop-pet-wifi.rules"
+            "frontend/services/desktop-pet/desktop-pet.service",
+            "frontend/services/desktop-pet/desktop-pet-split.service",
+            "frontend/services/desktop-pet-admin/desktop-pet-admin.service",
+            "frontend/services/picam/picam.service",
+            "frontend/tools/wifi/50-desktop-pet-wifi.rules"
         ]
         for rel in files:
             text = (ROOT / rel).read_text(encoding="utf-8")
             self.assertIn("@USER@", text, rel)
             self.assertNotIn("/home/", text, rel)
             self.assertNotIn("pi-user", text, rel)
-        pc = (ROOT / "services" / "picam" / "picam.service").read_text(encoding="utf-8")
+        pc = (ROOT / "frontend" / "services" / "picam" / "picam.service").read_text(encoding="utf-8")
         self.assertIn("User=@USER@", pc)
         self.assertIn("ExecStart=/usr/bin/python3 @HOME@/picam/picamd.py", pc)
         self.assertIn("EnvironmentFile=-/etc/desktop-pet/env", pc)
@@ -140,7 +140,7 @@ class AutostartTest(unittest.TestCase):
 
     def _render(self, template, env_text, extra_env=None):
         (self.tmp_path / "deploy.env").write_text(env_text, encoding="utf-8")
-        common_sh = (ROOT / "tools" / "deploy" / "common.sh").as_posix()
+        common_sh = (ROOT / "frontend" / "tools" / "deploy" / "common.sh").as_posix()
         template_path = (ROOT / template).as_posix()
         script = f'. "{common_sh}"; load_deploy_env && render_template "{template_path}"'
         env = {
@@ -156,12 +156,12 @@ class AutostartTest(unittest.TestCase):
     def test_render_substitutes_all_placeholders(self):
         if not shutil.which("sh"):
             raise unittest.SkipTest("sh not available")
-        r = self._render("services/desktop-pet/desktop-pet.service",
+        r = self._render("frontend/services/desktop-pet/desktop-pet.service",
                          "PET_USER=alice\nPET_HOME=/srv/alice\nPET_BACKEND_URL=https://b.example.org\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("@", r.stdout.replace("multi-user", ""))
         self.assertIn("User=alice", r.stdout)
-        self.assertIn("/srv/alice/desktop-pet/main.py", r.stdout)
+        self.assertIn("/srv/alice/desktop-pet/frontend/main.py", r.stdout)
         self.assertIn("EnvironmentFile=-/etc/desktop-pet/env", r.stdout)
         self.assertIn("警告", r.stderr)
 
@@ -176,7 +176,7 @@ class AutostartTest(unittest.TestCase):
         deploy_env.write_text("PET_USER=legacy_user\nPET_HOME=/srv/legacy\n", encoding="utf-8")
         custom_env.write_text("PET_USER=custom_user\nPET_HOME=/srv/custom\n", encoding="utf-8")
 
-        common_sh = (ROOT / "tools" / "deploy" / "common.sh").as_posix()
+        common_sh = (ROOT / "frontend" / "tools" / "deploy" / "common.sh").as_posix()
         script = f'. "{common_sh}"; load_deploy_env && printf "%s|%s" "$PET_USER" "$PET_HOME"'
         base_env = {"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": tmp_path.as_posix()}
 
@@ -213,7 +213,7 @@ class AutostartTest(unittest.TestCase):
         no_env = tmp_path / "no-env"
         legacy_env = tmp_path / "deploy.env"
 
-        common_sh = (ROOT / "tools" / "deploy" / "common.sh").as_posix()
+        common_sh = (ROOT / "frontend" / "tools" / "deploy" / "common.sh").as_posix()
         script = f'. "{common_sh}"; load_deploy_env && require_sys_env'
         base_env = {"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": tmp_path.as_posix(), "PET_SYS_ENV": no_env.as_posix()}
 
@@ -291,7 +291,7 @@ class AutostartTest(unittest.TestCase):
         custom_env = self.tmp_path / "custom.env"
         no_env = self.tmp_path / "no-env"
         missing_custom = self.tmp_path / "nonexistent.env"
-        rollback_script = (ROOT / "services" / "desktop-pet-admin" / "rollback.sh").as_posix()
+        rollback_script = (ROOT / "frontend" / "services" / "desktop-pet-admin" / "rollback.sh").as_posix()
 
         base_env = {
             "PATH": base_path,
@@ -332,8 +332,8 @@ class AutostartTest(unittest.TestCase):
         self.assertNotIn("錯誤", rc.stderr)
 
     def test_install_scripts_never_write_deploy_env(self):
-        for rel in ["services/desktop-pet/install.sh", "services/picam/install.sh", "tools/wifi/install.sh",
-                    "tools/deploy/common.sh", "services/camcast/start.sh"]:
+        for rel in ["frontend/services/desktop-pet/install.sh", "frontend/services/picam/install.sh", "frontend/tools/wifi/install.sh",
+                    "frontend/tools/deploy/common.sh", "frontend/services/camcast/start.sh"]:
             code = "\n".join(l for l in (ROOT / rel).read_text(encoding="utf-8").splitlines()
                              if not l.lstrip().startswith("#"))
             self.assertFalse(re.search(r">\s*\S*deploy\.env", code), rel)

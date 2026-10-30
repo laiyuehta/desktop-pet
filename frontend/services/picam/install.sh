@@ -5,8 +5,8 @@ cd "$(dirname "$0")"
 command -v python3 >/dev/null
 python3 -c "import picamera2" 2>/dev/null || { echo "需要先 sudo apt install --no-install-recommends python3-picamera2"; exit 1; }
 # 部署值從 repo 根目錄的 deploy.env 讀（不進 repo；只讀不寫）
-PET_REPO_ROOT="$(cd ../.. && pwd)"
-. "$PET_REPO_ROOT/tools/deploy/common.sh"
+PET_REPO_ROOT="$(cd ../../.. && pwd)"
+. "$PET_REPO_ROOT/frontend/tools/deploy/common.sh"
 load_deploy_env
 install -d -m 755 "$PET_HOME/picam"
 install -m 755 picamd.py "$PET_HOME/picam/picamd.py"

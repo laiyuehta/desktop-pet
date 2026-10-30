@@ -7,8 +7,8 @@ set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # 使用者：參數 > deploy.env 的 PET_USER > 呼叫 sudo 的使用者
 [ -n "${1:-}" ] && PET_USER="$1"
-PET_REPO_ROOT="$(cd "$HERE/../.." && pwd)"
-. "$PET_REPO_ROOT/tools/deploy/common.sh"
+PET_REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
+. "$PET_REPO_ROOT/frontend/tools/deploy/common.sh"
 load_deploy_env
 USER_NAME="$PET_USER"
 [ "$USER_NAME" != root ] || { echo "用法：sudo sh tools/wifi/install.sh <執行桌寵的使用者>（或在 deploy.env 設 PET_USER）"; exit 1; }

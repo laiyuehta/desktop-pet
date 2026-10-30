@@ -18,7 +18,7 @@
 ## 單一 Wi‑Fi 管理保證機制
 為了確保系統任何時候只有一個 Wi‑Fi 管理實例在運作：
 1. **檔案鎖互斥與自動重試**：`WifiManager` 啟動背景檢查時，會以非阻塞（`LOCK_EX | LOCK_NB`）鎖定 `/run/desktop-pet/wifi.lock`。若已有實例持有此鎖，另一個實例不會啟動執行緒，並在背景以 10 秒為週期自動重試，待前一個實例結束釋放鎖後無縫接手管理；若因權限或目錄尚未建立等系統例外，則記 WARNING 並直接管理 Wi‑Fi，避免救援熱點被意外停用。
-2. **安裝指令防呆**：`services/desktop-pet-admin/install.sh` 安裝前會先檢查 `desktop-pet` 服務是否仍帶有 `--web` 或未指定 `--wifi off`。若有衝突會立刻終止並提示使用一鍵切換腳本；若後台已在執行，則先停止舊實例後再確認埠號，避免更新時被自身佔用擋住。
+2. **安裝指令防呆**：`frontend/services/desktop-pet-admin/install.sh` 安裝前會先檢查 `desktop-pet` 服務是否仍帶有 `--web` 或未指定 `--wifi off`。若有衝突會立刻終止並提示使用一鍵切換腳本；若後台已在執行，則先停止舊實例後再確認埠號，避免更新時被自身佔用擋住。
 
 ---
 
@@ -56,17 +56,17 @@ python3 admin.py [參數]
 ### 方式一：一鍵切換（建議）
 切換時同一次操作完成主程式與後台設定：
 ```bash
-sh services/desktop-pet-admin/switch.sh
+sh frontend/services/desktop-pet-admin/switch.sh
 ```
 此腳本會：
-1. 將 `desktop-pet.service` 切換為 sockets 模式（使用 `services/desktop-pet/desktop-pet-split.service` 範本，帶有 `--web off --wifi off`）。
+1. 將 `desktop-pet.service` 切換為 sockets 模式（使用 `frontend/services/desktop-pet/desktop-pet-split.service` 範本，帶有 `--web off --wifi off`）。
 2. 安裝並啟用 `desktop-pet-admin.service`（監聽 `:8080` 並接管 Wi‑Fi）。
 3. 一併重啟並檢查兩服務狀態。
 
 ### 方式二：手動切換
 1. 更新主程式設定並重啟：
    - 確保包含 `RuntimeDirectory=desktop-pet`、`RuntimeDirectoryMode=0750`、`RuntimeDirectoryPreserve=yes`。
-   - 修改 ExecStart 參數加上 `--web off --wifi off`（或套用 `services/desktop-pet/desktop-pet-split.service` 範本）。
+   - 修改 ExecStart 參數加上 `--web off --wifi off`（或套用 `frontend/services/desktop-pet/desktop-pet-split.service` 範本）。
    - 重新載入並重啟主程式，釋放 `:8080` 並開啟 Unix sockets：
      ```bash
      sudo systemctl daemon-reload
@@ -74,7 +74,7 @@ sh services/desktop-pet-admin/switch.sh
      ```
 2. 安裝並啟動後台：
    ```bash
-   sh services/desktop-pet-admin/install.sh
+   sh frontend/services/desktop-pet-admin/install.sh
    ```
 
 ### 驗證切換結果
@@ -88,6 +88,6 @@ sh services/desktop-pet-admin/switch.sh
 ### 回退步驟（Rollback）
 若需回到單體模式，執行一鍵回退腳本：
 ```bash
-sh services/desktop-pet-admin/rollback.sh
+sh frontend/services/desktop-pet-admin/rollback.sh
 ```
 或手動停用後台並將 `desktop-pet.service` 參數復原為 `--web 0.0.0.0:8080 --wifi auto` 後重啟。
