@@ -482,7 +482,10 @@ class AutoUpdaterR7(AutoUpdaterCore):
         if not req_file.exists():
             return True, None
 
-        pip_timeout = int(os.environ.get("PET_PIP_TIMEOUT", "600"))
+        try:
+            pip_timeout = int(self.env.get("PET_PIP_TIMEOUT", os.environ.get("PET_PIP_TIMEOUT", "600")))
+        except (ValueError, TypeError):
+            pip_timeout = 600
         log.info("偵測到 requirements.txt 或 shared/ 變更，在 %s 執行 pip install ...", be_dir)
         try:
             res = subprocess.run(

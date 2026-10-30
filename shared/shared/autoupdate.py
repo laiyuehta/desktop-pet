@@ -469,15 +469,37 @@ def create_backup(
     backup_tmp.mkdir(parents=True, exist_ok=True)
 
     backed_up_files: List[str] = []
+    resolved_install = install_dir.resolve()
+    resolved_backup_tmp = backup_tmp.resolve()
     try:
         if files is not None:
             for rel_str in sorted(files):
                 rel_file = Path(rel_str)
+                if (
+                    rel_file.is_absolute()
+                    or bool(rel_file.root)
+                    or bool(rel_file.drive)
+                    or rel_str.startswith(("/", "\\"))
+                    or any(part == ".." for part in rel_file.parts)
+                ):
+                    continue
                 if is_protected_path(rel_file):
                     continue
-                src = install_dir / rel_file
+                src = (install_dir / rel_file).resolve()
+                try:
+                    rel = src.relative_to(resolved_install)
+                    if str(rel) in (".", ""):
+                        continue
+                except ValueError:
+                    continue
+                dst = (backup_tmp / rel_file).resolve()
+                try:
+                    rel_dst = dst.relative_to(resolved_backup_tmp)
+                    if str(rel_dst) in (".", ""):
+                        continue
+                except ValueError:
+                    continue
                 if src.is_file():
-                    dst = backup_tmp / rel_file
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, dst)
                     backed_up_files.append(rel_file.as_posix())
@@ -485,25 +507,36 @@ def create_backup(
             m_file = install_dir / "MANIFEST.sha256"
             tracked_files: Optional[Set[str]] = None
             if m_file.exists():
-                tracked_files = set()
-                try:
-                    for line in m_file.read_text(encoding="utf-8").splitlines():
-                        line = line.strip()
-                        if line and not line.startswith("#"):
-                            parts = line.split(None, 1)
-                            if len(parts) == 2:
-                                tracked_files.add(parts[1].strip())
-                except Exception:
-                    tracked_files = None
+                tracked_files = set(load_manifest(m_file).keys())
 
             if tracked_files is not None:
                 for rel_str in sorted(tracked_files):
                     rel_file = Path(rel_str)
+                    if (
+                        rel_file.is_absolute()
+                        or bool(rel_file.root)
+                        or bool(rel_file.drive)
+                        or rel_str.startswith(("/", "\\"))
+                        or any(part == ".." for part in rel_file.parts)
+                    ):
+                        continue
                     if is_protected_path(rel_file):
                         continue
-                    src = install_dir / rel_file
+                    src = (install_dir / rel_file).resolve()
+                    try:
+                        rel = src.relative_to(resolved_install)
+                        if str(rel) in (".", ""):
+                            continue
+                    except ValueError:
+                        continue
+                    dst = (backup_tmp / rel_file).resolve()
+                    try:
+                        rel_dst = dst.relative_to(resolved_backup_tmp)
+                        if str(rel_dst) in (".", ""):
+                            continue
+                    except ValueError:
+                        continue
                     if src.is_file():
-                        dst = backup_tmp / rel_file
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(src, dst)
                         backed_up_files.append(rel_file.as_posix())
@@ -517,11 +550,24 @@ def create_backup(
                         rel_file = rel_root / f if str(rel_root) != "." else Path(f)
                         if is_protected_path(rel_file):
                             continue
-                        src = Path(root) / f
-                        dst = backup_tmp / rel_file
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(src, dst)
-                        backed_up_files.append(rel_file.as_posix())
+                        src = (Path(root) / f).resolve()
+                        try:
+                            rel = src.relative_to(resolved_install)
+                            if str(rel) in (".", ""):
+                                continue
+                        except ValueError:
+                            continue
+                        dst = (backup_tmp / rel_file).resolve()
+                        try:
+                            rel_dst = dst.relative_to(resolved_backup_tmp)
+                            if str(rel_dst) in (".", ""):
+                                continue
+                        except ValueError:
+                            continue
+                        if src.is_file():
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(src, dst)
+                            backed_up_files.append(rel_file.as_posix())
 
         # 備份 RELEASE.json 與 MANIFEST.sha256
         for meta_name in ("RELEASE.json", "MANIFEST.sha256"):
@@ -719,22 +765,30 @@ def restore_from_backup(
 
     current_manifest = install_dir / "MANIFEST.sha256"
     if current_manifest.exists():
-        try:
-            for line in current_manifest.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    parts = line.split(None, 1)
-                    if len(parts) == 2:
-                        candidates.add(parts[1].strip())
-        except Exception as exc:
-            log.warning("讀取現有 MANIFEST.sha256 失敗：%s", exc)
+        candidates.update(load_manifest(current_manifest).keys())
 
+    resolved_install = install_dir.resolve()
     files_to_remove = candidates - backup_files
     for rel_str in sorted(files_to_remove):
         rel_p = Path(rel_str)
+        if (
+            rel_p.is_absolute()
+            or bool(rel_p.root)
+            or bool(rel_p.drive)
+            or rel_str.startswith(("/", "\\"))
+            or any(part == ".." for part in rel_p.parts)
+        ):
+            continue
         if is_protected_path(rel_p) or rel_p.name in ("RELEASE.json", "MANIFEST.sha256"):
             continue
-        target = install_dir / rel_p
+        target = (install_dir / rel_p).resolve()
+        try:
+            rel = target.relative_to(resolved_install)
+            if str(rel) in (".", ""):
+                continue
+        except ValueError:
+            log.warning("拒絕刪除 install_dir 外部路徑：%s", rel_str)
+            continue
         if target.is_file():
             try:
                 target.unlink()
@@ -743,11 +797,19 @@ def restore_from_backup(
 
     # 清理空目錄（僅清理曾被新版本影響且已無檔案的目錄，不碰保護目錄）
     for rel_str in sorted(files_to_remove, reverse=True):
-        parent_p = (install_dir / rel_str).parent
-        while parent_p != install_dir and parent_p.is_dir():
-            if is_protected_path(parent_p.relative_to(install_dir)):
-                break
+        rel_p = Path(rel_str)
+        if any(part == ".." for part in rel_p.parts) or rel_p.is_absolute():
+            continue
+        target = (install_dir / rel_p).resolve()
+        try:
+            target.relative_to(resolved_install)
+        except ValueError:
+            continue
+        parent_p = target.parent
+        while parent_p != resolved_install and parent_p.is_dir():
             try:
+                if is_protected_path(parent_p.relative_to(resolved_install)):
+                    break
                 if not any(parent_p.iterdir()):
                     parent_p.rmdir()
                 else:
@@ -1207,13 +1269,40 @@ class AutoUpdaterCore:
                 health_ok, fail_reason = self.run_health_check(target_commit)
                 if not health_ok:
                     log.error("前次更新之版本健康檢查失敗：%s，優先執行回退還原...", fail_reason)
-                    if self.backup_dir.exists():
-                        self.rollback()
                     record_failed_commit(self.state_dir, target_commit, "interrupted", f"更新重啟後中斷且健康檢查失敗: {fail_reason}")
+                    if not self.backup_dir.exists():
+                        log.error("備份目錄不存在，無法執行中斷回退！")
+                        st_pre["pending_boot_check"] = False
+                        st_pre["status"] = "rollback_failed"
+                        write_update_state(self.state_dir, st_pre)
+                        self._record_status("broken", current_commit=target_commit, check_result=f"前次中斷驗證失敗且備份不存在無法還原: {fail_reason}")
+                        append_updates_jsonl(self.state_dir, {
+                            "timestamp": now_iso, "target": self.target, "from_commit": target_commit,
+                            "to_commit": target_commit, "status": "rollback_failed", "reason": f"備份不存在: {fail_reason}"
+                        })
+                        return 1
+
+                    rollback_ok = self.rollback()
+                    if not rollback_ok:
+                        log.error("中斷回退執行失敗！")
+                        st_pre["pending_boot_check"] = False
+                        st_pre["status"] = "rollback_failed"
+                        write_update_state(self.state_dir, st_pre)
+                        self._record_status("broken", current_commit=target_commit, check_result=f"前次中斷驗證失敗且回退失敗: {fail_reason}")
+                        append_updates_jsonl(self.state_dir, {
+                            "timestamp": now_iso, "target": self.target, "from_commit": target_commit,
+                            "to_commit": target_commit, "status": "rollback_failed", "reason": f"回退失敗: {fail_reason}"
+                        })
+                        return 1
+
                     st_pre["pending_boot_check"] = False
                     st_pre["status"] = "rolled_back"
                     write_update_state(self.state_dir, st_pre)
-                    self._record_status("broken", check_result=f"前次中斷之版本驗證失敗已回退: {fail_reason}")
+                    self._record_status("broken", current_commit=target_commit, check_result=f"前次中斷之版本驗證失敗已回退: {fail_reason}")
+                    append_updates_jsonl(self.state_dir, {
+                        "timestamp": now_iso, "target": self.target, "from_commit": target_commit,
+                        "to_commit": target_commit, "status": "rolled_back", "reason": f"前次中斷驗證失敗已回退: {fail_reason}"
+                    })
                 else:
                     log.info("前次中斷之版本健康檢查通過，完成更新並標記為 success")
                     clear_failed_records(self.state_dir)
@@ -1222,6 +1311,16 @@ class AutoUpdaterCore:
                     st_pre["current_commit"] = target_commit
                     write_update_state(self.state_dir, st_pre)
                     self._record_status("on", current_commit=target_commit, check_result=f"更新成功至 {target_commit[:12]}")
+                    held_file = self.state_dir / "held_commit.txt"
+                    if held_file.exists():
+                        try:
+                            held_file.unlink()
+                        except Exception:
+                            pass
+                    append_updates_jsonl(self.state_dir, {
+                        "timestamp": now_iso, "target": self.target, "from_commit": st_pre.get("previous_commit"),
+                        "to_commit": target_commit, "status": "success", "reason": "前次中斷版本健康檢查通過"
+                    })
                 pause_f = self.state_dir / "PAUSE"
                 if pause_f.exists():
                     try:
@@ -1233,10 +1332,39 @@ class AutoUpdaterCore:
                 return 0
 
             if st_pre.get("status") in ("in_progress", "updating"):
+                target_commit = st_pre.get("target_commit", "unknown")
                 log.warning("偵測到前次更新程序覆蓋中途中斷（status=%s），優先執行回退還原...", st_pre.get("status"))
-                if self.backup_dir.exists():
-                    self.rollback()
-                record_failed_commit(self.state_dir, st_pre.get("target_commit", "unknown"), "interrupted", "更新中途中斷，run_cycle 自動復原")
+                record_failed_commit(self.state_dir, target_commit, "interrupted", "更新中途中斷，run_cycle 自動復原")
+                if not self.backup_dir.exists():
+                    log.error("備份目錄不存在，無法執行中斷回退！")
+                    st_pre["status"] = "rollback_failed"
+                    write_update_state(self.state_dir, st_pre)
+                    self._record_status("broken", current_commit=target_commit, check_result="更新中途中斷且備份不存在，無法還原")
+                    append_updates_jsonl(self.state_dir, {
+                        "timestamp": now_iso, "target": self.target, "from_commit": target_commit,
+                        "to_commit": target_commit, "status": "rollback_failed", "reason": "更新中途中斷且備份不存在"
+                    })
+                    return 1
+
+                rollback_ok = self.rollback()
+                if not rollback_ok:
+                    log.error("中斷回退執行失敗！")
+                    st_pre["status"] = "rollback_failed"
+                    write_update_state(self.state_dir, st_pre)
+                    self._record_status("broken", current_commit=target_commit, check_result="更新中途中斷且回退還原失敗")
+                    append_updates_jsonl(self.state_dir, {
+                        "timestamp": now_iso, "target": self.target, "from_commit": target_commit,
+                        "to_commit": target_commit, "status": "rollback_failed", "reason": "中途中斷回退失敗"
+                    })
+                    return 1
+
+                st_pre["status"] = "rolled_back"
+                write_update_state(self.state_dir, st_pre)
+                self._record_status("broken", current_commit=target_commit, check_result="更新中途中斷，已自動回退還原")
+                append_updates_jsonl(self.state_dir, {
+                    "timestamp": now_iso, "target": self.target, "from_commit": target_commit,
+                    "to_commit": target_commit, "status": "rolled_back", "reason": "更新中途中斷，已自動回退還原"
+                })
                 pause_f = self.state_dir / "PAUSE"
                 if pause_f.exists():
                     try:
@@ -1432,15 +1560,7 @@ class AutoUpdaterCore:
             incoming_release_files: Set[str] = set()
             m_file = self.install_dir / "MANIFEST.sha256"
             if m_file.exists():
-                try:
-                    for line in m_file.read_text(encoding="utf-8").splitlines():
-                        line = line.strip()
-                        if line and not line.startswith("#"):
-                            parts = line.split(None, 1)
-                            if len(parts) == 2:
-                                candidate_backup_files.add(parts[1].strip())
-                except Exception:
-                    pass
+                candidate_backup_files.update(load_manifest(m_file).keys())
 
             for root, dirs, f_list in os.walk(root_extracted):
                 rel_root = Path(root).relative_to(root_extracted)
@@ -1487,15 +1607,7 @@ class AutoUpdaterCore:
                 prev_manifest_files: Set[str] = set()
                 m_file = self.install_dir / "MANIFEST.sha256"
                 if m_file.exists():
-                    try:
-                        for line in m_file.read_text(encoding="utf-8").splitlines():
-                            line = line.strip()
-                            if line and not line.startswith("#"):
-                                parts = line.split(None, 1)
-                                if len(parts) == 2:
-                                    prev_manifest_files.add(parts[1].strip())
-                    except Exception as exc:
-                        log.warning("讀取現有 MANIFEST.sha256 失敗：%s", exc)
+                    prev_manifest_files = set(load_manifest(m_file).keys())
 
                 # 清理 staging 中可能殘留的 __pycache__，避免被複製進安裝目錄
                 for pycache in root_extracted.rglob("__pycache__"):

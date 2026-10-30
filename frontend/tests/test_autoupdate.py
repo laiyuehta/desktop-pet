@@ -1229,6 +1229,23 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
             env = mock_run.call_args[1]["env"]
             self.assertEqual(env.get("PET_REPO_ROOT"), str(self.updater.install_dir))
 
+    def test_pi_ensure_dependencies_fails_when_venv_missing(self):
+        """Nit 5 驗證：當 frontend/.venv 不存在時，ensure_dependencies 明確回傳失敗而非 fallback 到系統 python。"""
+        (self.backup_dir / "frontend").mkdir(parents=True)
+        (self.backup_dir / "frontend" / "requirements.txt").write_text("pytest==8.0.0\n", encoding="utf-8")
+
+        staged_dir = self.tmp_dir / "staged"
+        (staged_dir / "frontend").mkdir(parents=True)
+        (staged_dir / "frontend" / "requirements.txt").write_text("pytest==8.0.0\nrequests>=2.0.0\n", encoding="utf-8")
+
+        # 移除 frontend/.venv
+        shutil.rmtree(self.install_dir / "frontend" / ".venv", ignore_errors=True)
+
+        ok, err = self.updater.ensure_dependencies(staged_dir)
+        self.assertFalse(ok)
+        self.assertIsNotNone(err)
+        self.assertIn("未找到 frontend/.venv", err)
+
     def test_pi_full_cycle_with_requirements_change_executes_dependencies(self):
         """Must-fix 3 整合驗證：全更新週期中 requirements 變更，即使 install_dir 被 overwrite 也正確偵測並執行 pip。"""
         # 初始版本 v1

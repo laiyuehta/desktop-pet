@@ -592,7 +592,10 @@ class AutoUpdaterPi(AutoUpdaterCore):
         log.info("偵測到前端 requirements.txt 變更，準備更新 frontend/.venv 依賴...")
 
         # 優先呼叫 common.sh 中的 ensure_frontend_venv（過濾 -e ../shared 且兼顧離線 .pth 設定）
-        pip_timeout = int(os.environ.get("PET_PIP_TIMEOUT", "600"))
+        try:
+            pip_timeout = int(self.env.get("PET_PIP_TIMEOUT", os.environ.get("PET_PIP_TIMEOUT", "600")))
+        except (ValueError, TypeError):
+            pip_timeout = 600
         common_sh = self.install_dir / "frontend" / "tools" / "deploy" / "common.sh"
         if not common_sh.exists():
             common_sh = self.install_dir / "tools" / "deploy" / "common.sh"
@@ -629,7 +632,9 @@ class AutoUpdaterPi(AutoUpdaterCore):
         if not py_venv.exists():
             py_venv = self.install_dir / "frontend" / ".venv" / "Scripts" / "python.exe"
         if not py_venv.exists():
-            py_venv = Path(sys.executable)
+            expected = self.install_dir / "frontend" / ".venv"
+            log.error("未找到 frontend/.venv 虛擬環境直譯器（預期路徑：%s），無法更新依賴", expected)
+            return False, f"未找到 frontend/.venv 虛擬環境直譯器（預期路徑：{expected}），無法更新依賴"
 
         req_lines = new_req.read_text(encoding="utf-8").splitlines()
         filtered_lines = [

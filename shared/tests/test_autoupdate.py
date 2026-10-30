@@ -247,6 +247,37 @@ class TestManifestAndPreservation(unittest.TestCase):
         self.assertEqual(victim_outside.read_text(encoding="utf-8"), "critical outside data")
         self.assertNotIn("frontend/../../victim.txt", deleted)
 
+    def test_restore_from_backup_and_create_backup_reject_path_traversal(self):
+        """Minor 1 驗證：restore_from_backup 與 create_backup 阻絕路徑穿越，絕不複製或刪除安裝目錄外的檔案。"""
+        victim_outside = self.base / "victim.txt"
+        victim_outside.write_text("critical outside data", encoding="utf-8")
+
+        # 1. 測試 create_backup 傳入包含穿越之路徑
+        create_backup(self.inst, self.backup, files=["../victim.txt", "valid.py"])
+        # 外部檔案不應被備份至 backup，且 victim_outside 內容不變
+        self.assertFalse((self.backup / "victim.txt").exists())
+        self.assertEqual(victim_outside.read_text(encoding="utf-8"), "critical outside data")
+
+        # 2. 測試 restore_from_backup 含有惡意 MANIFEST.sha256 或 backup_manifest.json
+        (self.inst / "app.py").write_text("new_app", encoding="utf-8")
+        evil_manifest = self.inst / "MANIFEST.sha256"
+        evil_manifest.write_text(
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ../victim.txt\n"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  app.py\n",
+            encoding="utf-8",
+        )
+        (self.backup / "app.py").write_text("old_app", encoding="utf-8")
+        (self.backup / "backup_manifest.json").write_text(
+            json.dumps({"files": ["app.py"], "incoming_files": ["../victim.txt"]}),
+            encoding="utf-8",
+        )
+
+        ok = restore_from_backup(self.inst, self.backup)
+        self.assertTrue(ok)
+        self.assertTrue(victim_outside.exists(), "外部檔案 victim.txt 絕不可被 restore_from_backup 刪除！")
+        self.assertEqual(victim_outside.read_text(encoding="utf-8"), "critical outside data")
+        self.assertEqual((self.inst / "app.py").read_text(encoding="utf-8"), "old_app")
+
 
 class TestProcessLock(unittest.TestCase):
     def setUp(self):
@@ -308,6 +339,96 @@ class TestAutoUpdaterCoreAffectedPersistence(unittest.TestCase):
             res = updater.rollback()
             self.assertTrue(res)
             mock_restart.assert_called_once_with(["custom_unit"])
+
+
+class TestAutoUpdaterCoreInterruptedRecovery(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.base = Path(self.temp_dir)
+        self.inst = self.base / "inst"
+        self.backup = self.base / "backup"
+        self.state = self.base / "state"
+        self.inst.mkdir()
+        self.backup.mkdir()
+        self.state.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_run_cycle_recovers_interrupted_restarting_without_backup_returns_error_and_records_status(self):
+        """Minor 2 驗證：restarting 狀態下健康檢查失敗且無備份時，run_cycle 回傳 1 並記錄 rollback_failed。"""
+        write_update_state(self.state, {
+            "status": "restarting",
+            "pending_boot_check": True,
+            "target_commit": "deadbeef1234",
+        })
+        shutil.rmtree(self.backup, ignore_errors=True)
+
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "run_health_check", return_value=(False, "crash on boot")):
+            rc = updater.run_cycle()
+            self.assertEqual(rc, 1)
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rollback_failed")
+        self.assertFalse(st.get("pending_boot_check"))
+
+        jsonl = (self.state / "updates.jsonl").read_text(encoding="utf-8")
+        self.assertIn("rollback_failed", jsonl)
+
+    def test_run_cycle_recovers_interrupted_updating_without_backup_returns_error_and_records_status(self):
+        """Minor 2 驗證：in_progress 狀態下中斷且無備份時，run_cycle 回傳 1 並記錄 rollback_failed。"""
+        write_update_state(self.state, {
+            "status": "in_progress",
+            "target_commit": "deadbeef1234",
+        })
+        shutil.rmtree(self.backup, ignore_errors=True)
+
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        rc = updater.run_cycle()
+        self.assertEqual(rc, 1)
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rollback_failed")
+
+        jsonl = (self.state / "updates.jsonl").read_text(encoding="utf-8")
+        self.assertIn("rollback_failed", jsonl)
+
+    def test_run_cycle_recovers_interrupted_restarting_health_success_clears_held_commit(self):
+        """Nit 3 驗證：restarting 狀態下若健康檢查成功，清除 held_commit.txt 並寫入 success。"""
+        write_update_state(self.state, {
+            "status": "restarting",
+            "pending_boot_check": True,
+            "target_commit": "deadbeef1234",
+        })
+        held = self.state / "held_commit.txt"
+        held.write_text("deadbeef1234", encoding="utf-8")
+
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "run_health_check", return_value=(True, "all healthy")):
+            rc = updater.run_cycle()
+            self.assertEqual(rc, 0)
+
+        self.assertFalse(held.exists(), "健康檢查成功後 held_commit.txt 應被移除")
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "success")
+        jsonl = (self.state / "updates.jsonl").read_text(encoding="utf-8")
+        self.assertIn("success", jsonl)
 
 
 if __name__ == "__main__":

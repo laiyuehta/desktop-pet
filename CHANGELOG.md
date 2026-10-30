@@ -27,9 +27,9 @@
     - `affected` 受影響服務清單持久化記錄於 `update_state.json`，於手動或自動回退時依此紀錄決定是否重啟服務（未影響者維持運行不盲目重啟）。
     - 外部行程呼叫全面設定 timeout 逾時防護，防止更新程式異常掛起佔用行程鎖；POSIX 下執行子行程（如 `ensure_frontend_venv` 與 pip）採用 `start_new_session=True` 獨立行程群組，逾時以 `os.killpg(SIGKILL)` 徹底清理孫行程，防止背景行程殘留持續修改虛擬環境；pip 逾時預設調升至 600 秒（支援 `PET_PIP_TIMEOUT` 自訂）。
     - 切換後健康檢查：Pi 驗證 unit active、fps ≥ 18、畫面幀數遞增、piscreen 唯讀檢查，後端離線視為警告不阻擋；R7 公開 `/health` 回應 Header `X-Commit`、`/v1/health` 帶 `commit`，直接向伺服器連線比對真實執行 commit；失敗或覆蓋異常（如磁碟空間耗盡）自動自備份還原並記錄至 `failed.json`，後續週期不再自動嘗試同一 commit。
-    - 開機自檢（boot_check）與週期中斷自動復原：`run_cycle` 於起首主動偵測前次更新是否中斷或留在 `restarting` / `pending_boot_check`，先對目標版本驗證健康檢查，失敗立即自備份還原並寫入 `failed.json`，成功則標記為 `success` 並清理暫停標記；`boot_check` 遇 `in_progress` 且 `pending_boot_check` 時正確執行健康檢查自檢而非誤觸斷電還原。
-    - `load_manifest` 與 `overwrite_release` 嚴格過濾包含 `..` 或絕對路徑之不合規條目，防範目錄穿越刪檔。
-    - R7 虛擬環境與 pip 缺失時一致硬性報錯，移除 `sys.executable` 隱性退回。
+    - 開機自檢（boot_check）與週期中斷自動復原：`run_cycle` 於起首主動偵測前次更新是否中斷或留在 `restarting` / `pending_boot_check`，先對目標版本驗證健康檢查，失敗立即自備份還原並寫入 `failed.json`，成功則標記為 `success`、清除 `held_commit.txt` 並清理暫停標記；若備份目錄不存在或回退失敗，明確標記為 `rollback_failed`、記錄於 `updates.jsonl` 並回傳失敗碼 1；`boot_check` 遇 `in_progress` 且 `pending_boot_check` 時正確執行健康檢查自檢而非誤觸斷電還原。
+    - 全面統一以 `load_manifest` 解析 `MANIFEST.sha256`（涵蓋 `create_backup`、`restore_from_backup`、候選備份與前次發布檔案清單），嚴格防範路徑穿越；`create_backup` 與 `restore_from_backup` 均校驗相對安裝目錄與暫存目錄邊界，絕不刪除或複製目錄外檔案。
+    - Pi 與 R7 依賴更新之 `PET_PIP_TIMEOUT` 解析防禦性處理非整數例外（預設 600 秒），並於 `deploy.env.example` 補上範本說明；Pi 更新器在 `frontend/.venv` 缺失時硬性報錯終止，移除 `sys.executable` 隱性退回（與 R7 一致）。
     - 每輪週期嘗試皆記錄於 `updates.jsonl`；更新器支援 `--status` 狀態查詢與 `--retry` 重新嘗試失敗版本。
   - Pi 服務與排程（`frontend/services/desktop-pet-update/`）：
     - `desktop-pet-update.service`（oneshot）與 `desktop-pet-update.timer`（5 分鐘週期；預設檢查間隔 `PET_AUTOUPDATE_INTERVAL=300`，`--once` 受檢查間隔保護，`--force` 強制執行）。
