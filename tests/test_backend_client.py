@@ -42,7 +42,7 @@ class FakeBackend:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
-                except (BrokenPipeError, ConnectionResetError, OSError):
+                except OSError:
                     pass
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
@@ -281,22 +281,28 @@ class DeviceBackendTest(unittest.TestCase):
         fb = FakeBackend([], hang=3.0)
         app = make_app(fb.url)
         dt = 0.05
+        frames = 40
         try:
             t0 = time.perf_counter()
             worst = 0.0
-            for i in range(40):
+            for i in range(frames):
                 f0 = time.perf_counter()
                 app.post(make_event("touch", "pat", source="test"))
                 app.step(dt)
                 app.render()
                 worst = max(worst, time.perf_counter() - f0)
             # 保護主迴圈「不被後端卡住（秒級阻塞）」，而非嚴苛的效能微基準測試。
-            # 實測 Pi 3B 單格約 0.15–0.16s；門檻預設相對於主迴圈幀間距（8 幀 = 0.4s），
-            # 總耗時預設 4.0s（亦可由環境變數放寬）。
-            worst_threshold = float(os.environ.get("PET_TEST_LOOP_MAX_FRAME_S", dt * 8))
-            total_threshold = float(os.environ.get("PET_TEST_LOOP_MAX_TOTAL_S", 4.0))
-            self.assertLess(worst, worst_threshold)
-            self.assertLess(time.perf_counter() - t0, total_threshold)
+            # 實測 Pi 3B 單格約 0.15–0.16s，平均每格約 0.11s（40 格軟體繪圖總耗時約 4.41–4.44s）。
+            # 單格門檻預設相對於幀間距（8 幀 = 0.4s），且上限 clamp 在後端 timeout（0.5s）以下（避免失真無法抓到同步阻塞）。
+            # 總耗時預設放寬至 6.0s（3 倍標稱時間，相容慢速硬體並仍能抓到 3.0s 假後端卡住回歸），亦可由環境變數放寬。
+            backend_timeout = getattr(app.backend, "timeout", 0.5) if app.backend else 0.5
+            configured_worst = float(os.environ.get("PET_TEST_LOOP_MAX_FRAME_S", dt * 8))
+            worst_threshold = min(configured_worst, backend_timeout * 0.9)
+            total_threshold = float(os.environ.get("PET_TEST_LOOP_MAX_TOTAL_S", 6.0))
+            self.assertLess(worst, worst_threshold,
+                            f"單格耗時 {worst:.3f}s 超過門檻 {worst_threshold:.3f}s（後端 timeout={backend_timeout}s）")
+            self.assertLess(time.perf_counter() - t0, total_threshold,
+                            f"{frames} 格總耗時 {time.perf_counter() - t0:.3f}s 超過門檻 {total_threshold:.3f}s")
             self.assertLessEqual(app.backend.q.qsize(), app.backend.q.maxsize)
         finally:
             app.stop()
