@@ -19,6 +19,16 @@ mod tests {
     use crate::client::{request, subscribe_events};
     use crate::fake_nmcli::{FakeNm, FakeState};
     use crate::log::{captured_logs, clear_captured_logs, set_capture_logs};
+
+    /// 日誌擷取是全域的（log.rs 的 capture buffer）；會清除／檢查擷取內容的測試要拿這把鎖，
+    /// 避免 cargo test 平行執行時互相清掉對方的日誌（#38 審查：CI 偶發失敗）。
+    static LOG_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_log_capture() -> std::sync::MutexGuard<'static, ()> {
+        LOG_CAPTURE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
     use crate::manager::{ClockFn, NotifyFn, SleepFn, WifiConfig, WifiManager};
     use crate::nm::{
         classify_error, key_mgmt_for, split_terse, NmBackend, NmCli, SubprocessRunner, WIFI_TYPE,
@@ -778,6 +788,7 @@ mod tests {
     // --- 6. --observe 模式測試（證明絕不呼叫任何會改變網路的 nmcli 指令） ---
     #[test]
     fn test_observe_mode_never_modifies_network() {
+        let _log_guard = lock_log_capture();
         set_capture_logs(true);
         clear_captured_logs();
         let env = setup_env(true);
@@ -834,6 +845,7 @@ mod tests {
     // --- 7. 密碼不外洩測試（socket 回應、status.json、日誌都不含密碼） ---
     #[test]
     fn test_passwords_never_in_responses_status_or_logs() {
+        let _log_guard = lock_log_capture();
         set_capture_logs(true);
         clear_captured_logs();
         let env = setup_env(false);
