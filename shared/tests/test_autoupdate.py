@@ -202,7 +202,7 @@ class TestManifestAndPreservation(unittest.TestCase):
 
     def test_backup_and_restore(self):
         (self.inst / "app.py").write_text("old", encoding="utf-8")
-        create_backup(self.inst, self.backup)
+        create_backup(self.inst, self.backup, incoming_files=["app.py", "bad.py"])
         self.assertTrue((self.backup / "app.py").is_file())
         self.assertTrue((self.backup / "backup_manifest.json").is_file())
 

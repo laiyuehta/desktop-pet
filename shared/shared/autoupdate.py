@@ -434,7 +434,12 @@ def verify_manifest(root_dir: Path) -> Tuple[bool, Optional[str]]:
     return True, None
 
 
-def create_backup(install_dir: Path, backup_dir: Path, files: Optional[Iterable[str]] = None) -> Path:
+def create_backup(
+    install_dir: Path,
+    backup_dir: Path,
+    files: Optional[Iterable[str]] = None,
+    incoming_files: Optional[Iterable[str]] = None,
+) -> Path:
     """原子備份現有發布檔案：複製到暫存目錄後替換 backup_dir，確保備份全程完整。"""
     if not install_dir.exists():
         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -504,9 +509,16 @@ def create_backup(install_dir: Path, backup_dir: Path, files: Optional[Iterable[
             if meta_src.is_file():
                 shutil.copy2(meta_src, backup_tmp / meta_name)
 
-        # 寫入備份清單
+        # 寫入備份清單（包含 incoming_files，以供異常中斷回退時精準清理新檔案）
+        meta: Dict[str, Any] = {
+            "files": backed_up_files,
+            "backed_up_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        if incoming_files is not None:
+            meta["incoming_files"] = sorted(incoming_files)
+
         (backup_tmp / "backup_manifest.json").write_text(
-            json.dumps({"files": backed_up_files, "backed_up_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}, indent=2),
+            json.dumps(meta, indent=2),
             encoding="utf-8",
         )
     except Exception:
@@ -629,10 +641,13 @@ def restore_from_backup(
 
     manifest_file = backup_dir / "backup_manifest.json"
     backup_files: Set[str] = set()
+    incoming_files: Set[str] = set()
     if manifest_file.exists():
         try:
             m_data = json.loads(manifest_file.read_text(encoding="utf-8"))
             backup_files = set(m_data.get("files", []))
+            if "incoming_files" in m_data:
+                incoming_files = set(m_data.get("incoming_files", []))
         except Exception as exc:
             log.warning("讀取備份清單失敗：%s", exc)
 
@@ -665,16 +680,16 @@ def restore_from_backup(
                 has_copy_error = True
 
     # 2. 清理新版加入但備份中沒有的檔案
-    # 嚴格限制候選範圍：僅處理 (新版覆蓋檔案 ∪ 目前失敗版本 MANIFEST) 中不在備份清單的檔案，
-    # 絕不遍歷掃描整個 install_dir，徹底防止誤刪未列管之本機資料（如 notes.txt、packs.moved-* 等）。
-    candidates: Optional[Set[str]] = None
+    # 候選清單僅包含：新版預計傳入清單 (incoming_files) ∪ 當前覆蓋檔案 (newly_overwritten) ∪ 新版 MANIFEST.sha256
+    # 嚴格禁止遍歷掃描整個 install_dir，徹底保護非 repo 本機檔案（如 notes.txt、piwifi/、packs.moved-* 等）。
+    candidates: Set[str] = set()
     if newly_overwritten:
-        candidates = set(newly_overwritten)
+        candidates.update(newly_overwritten)
+    if incoming_files:
+        candidates.update(incoming_files)
 
     current_manifest = install_dir / "MANIFEST.sha256"
     if current_manifest.exists():
-        if candidates is None:
-            candidates = set()
         try:
             for line in current_manifest.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
@@ -684,20 +699,6 @@ def restore_from_backup(
                         candidates.add(parts[1].strip())
         except Exception as exc:
             log.warning("讀取現有 MANIFEST.sha256 失敗：%s", exc)
-
-    if candidates is None:
-        # 僅當完全沒有 MANIFEST 且未傳入 newly_overwritten 時（如初次無清單環境或單元測試），
-        # 候選清單才退回掃描 install_dir，避免刪除不受管檔案
-        candidates = set()
-        for root, dirs, files in os.walk(install_dir):
-            rel_root = Path(root).relative_to(install_dir)
-            if is_protected_path(rel_root):
-                dirs[:] = []
-                continue
-            for f in files:
-                rel_f = rel_root / f if str(rel_root) != "." else Path(f)
-                if not is_protected_path(rel_f):
-                    candidates.add(rel_f.as_posix())
 
     files_to_remove = candidates - backup_files
     for rel_str in sorted(files_to_remove):
@@ -1032,6 +1033,13 @@ class AutoUpdaterCore:
     def rollback(self, newly_overwritten: Optional[Iterable[str]] = None) -> bool:
         """手動或自動執行回退至備份版本。"""
         log.warning("正在執行回退至上一版本...")
+        if newly_overwritten is None:
+            try:
+                st = load_update_state(self.state_dir)
+                if "incoming_files" in st:
+                    newly_overwritten = st["incoming_files"]
+            except Exception:
+                pass
         ok = restore_from_backup(self.install_dir, self.backup_dir, newly_overwritten=newly_overwritten)
         if ok:
             write_update_state(self.state_dir, {
@@ -1351,6 +1359,7 @@ class AutoUpdaterCore:
                 sparse_subdirs = {"backend", "shared"}
 
             candidate_backup_files: Set[str] = set()
+            incoming_release_files: Set[str] = set()
             m_file = self.install_dir / "MANIFEST.sha256"
             if m_file.exists():
                 try:
@@ -1374,9 +1383,15 @@ class AutoUpdaterCore:
                         continue
                     if should_include_in_sparse(rel_f, sparse_subdirs):
                         candidate_backup_files.add(rel_f.as_posix())
+                        incoming_release_files.add(rel_f.as_posix())
 
             try:
-                create_backup(self.install_dir, self.backup_dir, files=candidate_backup_files)
+                create_backup(
+                    self.install_dir,
+                    self.backup_dir,
+                    files=candidate_backup_files,
+                    incoming_files=incoming_release_files,
+                )
             except Exception as exc:
                 log.error("建立備份失敗：%s", exc)
                 self._record_status("broken", current_commit=current_commit, check_result=f"建立備份失敗: {exc}")
@@ -1387,11 +1402,12 @@ class AutoUpdaterCore:
                 shutil.rmtree(staging_dir, ignore_errors=True)
                 return 1
 
-            # 標記狀態為 in_progress
+            # 標記狀態為 in_progress，並記錄 incoming_files 供中途中斷回退時精準清理
             write_update_state(self.state_dir, {
                 "status": "in_progress",
                 "target_commit": target_commit,
                 "started_at": now_iso,
+                "incoming_files": sorted(incoming_release_files),
             })
 
             overwritten_files: List[str] = []

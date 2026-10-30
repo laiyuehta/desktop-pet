@@ -577,7 +577,10 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         # 模擬更新後第一次開機（狀態為 restarting）但驗證失敗
         self.backup_dir.mkdir(parents=True)
         (self.backup_dir / "main.py").write_text("print('v1_good')", encoding="utf-8")
-        (self.backup_dir / "backup_manifest.json").write_text(json.dumps({"files": ["main.py"]}), encoding="utf-8")
+        (self.backup_dir / "backup_manifest.json").write_text(json.dumps({
+            "files": ["main.py"],
+            "incoming_files": ["main.py", "new_bad.py"],
+        }), encoding="utf-8")
 
         (self.install_dir / "main.py").write_text("print('v2_crashes')", encoding="utf-8")
         (self.install_dir / "new_bad.py").write_text("bad", encoding="utf-8")
@@ -878,6 +881,109 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1_orig')")
         failed = load_failed_json(self.state_dir)
         self.assertTrue(any(f.get("commit") == new_commit for f in failed))
+
+    def test_real_repo_first_update_interrupted_rollback_preserves_external_and_unaffected_files(self):
+        # 1. 建立真實 repo 與本機檔案混合結構（無 MANIFEST.sha256，模擬首次更新環境）：
+        # 本機非 repo 檔案與其他子系統：
+        (self.install_dir / "notes.txt").write_text("my notes", encoding="utf-8")
+        (self.install_dir / "deploy.env").write_text("URL=https://pet.example.com", encoding="utf-8")
+        piwifi_bin = self.install_dir / "piwifi" / "target" / "release" / "piwifi"
+        piwifi_bin.parent.mkdir(parents=True)
+        piwifi_bin.write_text("fake_piwifi_binary", encoding="utf-8")
+        (self.install_dir / "piwifi" / "src").mkdir(parents=True)
+        (self.install_dir / "piwifi" / "src" / "main.rs").write_text("fn main() {}", encoding="utf-8")
+        backend_file = self.install_dir / "backend" / "server.py"
+        backend_file.parent.mkdir(parents=True)
+        backend_file.write_text("# backend server", encoding="utf-8")
+        docs_file = self.install_dir / "docs" / "setup.md"
+        docs_file.parent.mkdir(parents=True)
+        docs_file.write_text("# documentation", encoding="utf-8")
+        gh_file = self.install_dir / ".github" / "workflows" / "ci.yml"
+        gh_file.parent.mkdir(parents=True)
+        gh_file.write_text("# ci workflow", encoding="utf-8")
+        pack_img = self.install_dir / "packs.moved-20261030-152959" / "idle.webp"
+        pack_img.parent.mkdir(parents=True)
+        pack_img.write_text("idle image bytes", encoding="utf-8")
+
+        # 既有受控前端程式碼（v1）：
+        (self.install_dir / "frontend").mkdir(parents=True, exist_ok=True)
+        (self.install_dir / "frontend" / "main.py").write_text("print('v1_intact')", encoding="utf-8")
+
+        self.assertFalse((self.install_dir / "MANIFEST.sha256").exists())
+
+        # 2. 模擬備份已建立，且備份清單紀錄 incoming_files
+        self.backup_dir.mkdir(parents=True)
+        (self.backup_dir / "frontend").mkdir(parents=True)
+        (self.backup_dir / "frontend" / "main.py").write_text("print('v1_intact')", encoding="utf-8")
+        (self.backup_dir / "backup_manifest.json").write_text(json.dumps({
+            "files": ["frontend/main.py"],
+            "incoming_files": ["frontend/main.py", "frontend/aaa_new.py", "frontend/sub/bbb_new.py"],
+        }), encoding="utf-8")
+
+        # 3. 模擬覆蓋第 40 個檔途中被 kill / 中斷：
+        #    frontend/main.py 被改寫成半殘資料
+        #    新檔案 frontend/aaa_new.py 已被寫入
+        #    但 MANIFEST.sha256 尚未寫入！
+        (self.install_dir / "frontend" / "main.py").write_text("half_written_garbage", encoding="utf-8")
+        (self.install_dir / "frontend" / "aaa_new.py").write_text("def new(): pass", encoding="utf-8")
+        (self.install_dir / "frontend" / "sub").mkdir(parents=True, exist_ok=True)
+        (self.install_dir / "frontend" / "sub" / "bbb_new.py").write_text("def sub(): pass", encoding="utf-8")
+
+        target_commit = "5555555555555555555555555555555555555555"
+        write_update_state(self.state_dir, {
+            "status": "in_progress",
+            "target_commit": target_commit,
+            "incoming_files": ["frontend/main.py", "frontend/aaa_new.py", "frontend/sub/bbb_new.py"],
+        })
+
+        # 4. 執行中斷復原（模擬次輪 run_cycle 啟動時自動復原）
+        with mock.patch("tools.deploy.autoupdate.restart_units"):
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 0)
+
+        # 5. 斷言檢查：
+        # (a) 受更新影響檔案正確還原
+        self.assertEqual((self.install_dir / "frontend" / "main.py").read_text(encoding="utf-8"), "print('v1_intact')")
+        # (b) 新版多餘檔案已被徹底清理，包含空目錄
+        self.assertFalse((self.install_dir / "frontend" / "aaa_new.py").exists())
+        self.assertFalse((self.install_dir / "frontend" / "sub" / "bbb_new.py").exists())
+        self.assertFalse((self.install_dir / "frontend" / "sub").exists())
+        # (c) 關鍵：所有本機非 repo 檔案、其他子系統檔案 100% 完好無缺，絕未被誤刪！
+        self.assertTrue((self.install_dir / "notes.txt").exists())
+        self.assertEqual((self.install_dir / "notes.txt").read_text(encoding="utf-8"), "my notes")
+        self.assertTrue((self.install_dir / "deploy.env").exists())
+        self.assertTrue(piwifi_bin.exists())
+        self.assertTrue((self.install_dir / "piwifi" / "src" / "main.rs").exists())
+        self.assertTrue(backend_file.exists())
+        self.assertTrue(docs_file.exists())
+        self.assertTrue(gh_file.exists())
+        self.assertTrue(pack_img.exists())
+        # (d) MANIFEST.sha256 依然不存在
+        self.assertFalse((self.install_dir / "MANIFEST.sha256").exists())
+
+    def test_real_repo_manual_rollback_without_manifest_preserves_external_files(self):
+        # 測試手動 --rollback 時即使無 MANIFEST.sha256 也絕不刪除本機非 repo 檔案
+        (self.install_dir / "notes.txt").write_text("user notes", encoding="utf-8")
+        (self.install_dir / "piwifi").mkdir(parents=True, exist_ok=True)
+        (self.install_dir / "piwifi" / "daemon.rs").write_text("code", encoding="utf-8")
+        (self.install_dir / "main.py").write_text("v2_new", encoding="utf-8")
+        (self.install_dir / "extra_new.py").write_text("extra", encoding="utf-8")
+
+        self.backup_dir.mkdir(parents=True)
+        (self.backup_dir / "main.py").write_text("v1_original", encoding="utf-8")
+        (self.backup_dir / "backup_manifest.json").write_text(json.dumps({
+            "files": ["main.py"],
+            "incoming_files": ["main.py", "extra_new.py"],
+        }), encoding="utf-8")
+
+        with mock.patch("tools.deploy.autoupdate.restart_units"):
+            ok = self.updater.rollback()
+            self.assertTrue(ok)
+
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "v1_original")
+        self.assertFalse((self.install_dir / "extra_new.py").exists())
+        self.assertTrue((self.install_dir / "notes.txt").exists())
+        self.assertTrue((self.install_dir / "piwifi" / "daemon.rs").exists())
 
 
 class TestPolkitRuleAndSystemdTemplates(unittest.TestCase):
