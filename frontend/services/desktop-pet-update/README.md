@@ -41,6 +41,35 @@ systemctl list-timers desktop-pet-update.timer
 systemctl is-enabled desktop-pet-boot-check.service
 ```
 
+## 一次性遷移指引
+
+1. **初次安裝與啟用定時更新**：
+   - 執行安裝腳本（安裝 systemd unit、timer 與 polkit 授權規則）：
+     ```sh
+     sudo sh frontend/services/desktop-pet-update/install.sh
+     ```
+   - 驗證更新器與自檢服務狀態：
+     ```sh
+     systemctl is-active desktop-pet-update.timer
+     systemctl is-enabled desktop-pet-boot-check.service
+     python3 frontend/tools/deploy/autoupdate.py --status
+     python3 frontend/tools/deploy/autoupdate.py --self-test
+     ```
+
+## 手動回退與復原程序
+
+若更新後遇到問題需要手動回退至上一個備份版本：
+
+```sh
+python3 frontend/tools/deploy/autoupdate.py --rollback
+```
+
+- 回退程式會比對備份清單完整還原先前版本、移除新版本引入的檔案、保留本機動畫包（`packs/`）與環境設定（`deploy.env`、`/etc/desktop-pet/env`），並安全重啟 `desktop-pet` 與受影響服務。
+- 查看更新紀錄：
+  ```sh
+  tail -n 20 ~/.local/state/desktop-pet/update/updates.jsonl
+  ```
+
 ## 移除
 
 若需停用並移除自動更新服務與計時器：

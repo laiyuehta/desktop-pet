@@ -2,16 +2,17 @@
 
 繼承自 shared.autoupdate.AutoUpdaterCore，實作 R7（Windows 後端）特定邏輯：
 - sparse-checkout：僅更新 backend/ 與 shared/，排除 frontend/ 與 piwifi/
-- 備份覆蓋設計（依使用者決定取代 junction 切換）：原地備份覆蓋，非 repo 檔案全程保留
-- 依賴管理：若 backend/requirements.txt 或 shared/ 變更才重跑 pip，絕不刪除或覆蓋 backend/.venv
-- 切換前檢查：compileall、import backend 驗證、autoupdate.py --self-test
+- 備份覆蓋設計：原地備份覆蓋，非 repo 檔案（data/、.env、本機記錄等）全程保留
+- 依賴管理：若 backend/requirements.txt 或 shared/ 變更才在 backend/ 目錄跑 pip install -r requirements.txt
+- 切換前檢查：compileall、import backend; import shared 驗證、autoupdate.py --self-test
 - 重啟機制：結束 8090 後端程序由 supervise.py 或工作排程自動拉起
-- 健康檢查：GET /health 正常且確認目標 commit 一致
+- 健康檢查：GET /health 正常且確認伺服器真實 commit (Header X-Commit 或 body commit) 一致
 - 開機自檢（boot-check）：中途中斷或首度開機異常自動回退
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 # 引入共用自動更新核心模組
@@ -29,11 +31,10 @@ try:
         DEFAULT_INTERVAL,
         DEFAULT_REPO,
         AutoUpdaterCore,
-        check_http_json,
         check_manual_steps,
         load_env,
     )
-    from shared.version import get_release_info
+    from shared.version import get_autoupdate_status, get_release_info
 except ImportError:
     _shared_dir = Path(__file__).resolve().parents[1] / "shared"
     if str(_shared_dir) not in sys.path:
@@ -44,11 +45,10 @@ except ImportError:
         DEFAULT_INTERVAL,
         DEFAULT_REPO,
         AutoUpdaterCore,
-        check_http_json,
         check_manual_steps,
         load_env,
     )
-    from shared.version import get_release_info  # type: ignore
+    from shared.version import get_autoupdate_status, get_release_info  # type: ignore
 
 log = logging.getLogger("backend.autoupdate")
 
@@ -56,27 +56,51 @@ log = logging.getLogger("backend.autoupdate")
 def pre_switch_check_r7(
     candidate_dir: Path,
     python_cmd: Optional[str] = None,
+    install_dir: Optional[Path] = None,
 ) -> Tuple[bool, Optional[str]]:
-    """在候選目錄中執行切換前檢查（compileall、import backend、autoupdate --self-test）。"""
-    py = python_cmd or sys.executable
+    """在候選目錄中執行切換前檢查（compileall、import backend/shared、autoupdate --self-test）。"""
+    py = python_cmd
+    if not py:
+        # 優先尋找 backend/.venv 直譯器
+        search_dirs = [candidate_dir]
+        if install_dir:
+            search_dirs.append(install_dir)
+        for base_p in search_dirs:
+            for cand in [
+                base_p / "backend" / ".venv" / "Scripts" / "python.exe",
+                base_p / "backend" / ".venv" / "bin" / "python",
+                base_p / ".venv" / "Scripts" / "python.exe",
+                base_p / ".venv" / "bin" / "python",
+            ]:
+                if cand.is_file():
+                    py = str(cand)
+                    break
+            if py:
+                break
+    if not py:
+        py = sys.executable
 
-    # 1. compileall backend
-    be_dir = candidate_dir / "backend" if (candidate_dir / "backend").is_dir() else candidate_dir
-    res = subprocess.run([py, "-m", "compileall", "-q", str(be_dir)], capture_output=True, text=True)
-    if res.returncode != 0:
-        return False, f"compileall 檢查失敗：{res.stderr.strip() or res.stdout.strip()}"
+    # 1. compileall backend 與 shared
+    for sub in ("backend", "shared"):
+        target_sub = candidate_dir / sub
+        if target_sub.is_dir():
+            res = subprocess.run([py, "-m", "compileall", "-q", str(target_sub)], capture_output=True, text=True)
+            if res.returncode != 0:
+                return False, f"compileall {sub} 檢查失敗：{res.stderr.strip() or res.stdout.strip()}"
 
-    # 2. import backend 驗證
+    # 2. import backend / shared 驗證
     env_copy = os.environ.copy()
-    cand_shared = candidate_dir / "shared"
-    cand_be = candidate_dir / "backend"
-    cand_root = candidate_dir
-    extra_paths = [str(cand_root), str(cand_be), str(cand_shared)]
+    extra_paths = [str(candidate_dir), str(candidate_dir / "backend"), str(candidate_dir / "shared")]
     env_copy["PYTHONPATH"] = os.pathsep.join(extra_paths + [env_copy.get("PYTHONPATH", "")])
 
-    res = subprocess.run([py, "-c", "import backend; import shared"], capture_output=True, text=True, env=env_copy)
+    res = subprocess.run(
+        [py, "-c", "import backend; import shared"],
+        capture_output=True,
+        text=True,
+        env=env_copy,
+    )
     if res.returncode != 0:
-        return False, f"import backend 失敗：{res.stderr.strip() or res.stdout.strip()}"
+        return False, f"import backend/shared 失敗：{res.stderr.strip() or res.stdout.strip()}"
 
     # 3. autoupdate.py --self-test
     up_py = candidate_dir / "backend" / "autoupdate.py"
@@ -91,18 +115,22 @@ def pre_switch_check_r7(
 
 
 def check_held_criteria_r7(
-    old_release_dir: Path,
     new_release_dir: Path,
-    applied_steps_file: Optional[Path] = None,
+    state_dir: Path,
 ) -> Tuple[bool, Optional[str]]:
-    manual_file = new_release_dir / "frontend" / "tools" / "deploy" / "manual-steps.txt"
-    if not manual_file.exists():
-        manual_file = new_release_dir / "tools" / "deploy" / "manual-steps.txt"
+    """檢查 R7 是否滿足 held 條件（HELD 標記存在或有未執行之 backend 手動步驟）。"""
+    held_file = state_dir / "HELD"
+    if held_file.exists():
+        try:
+            reason = held_file.read_text(encoding="utf-8").strip() or "HELD 檔案存在"
+        except Exception:
+            reason = "HELD 檔案存在"
+        return True, reason
 
-    if manual_file.exists() and applied_steps_file:
-        has_pending, steps = check_manual_steps(manual_file, applied_steps_file, target="r7")
-        if has_pending:
-            return True, f"有尚未執行之手動步驟：{'; '.join(steps)}"
+    # 檢查手動步驟（僅針對 R7，絕不讀取 frontend/ 目錄）
+    has_pending, reason = check_manual_steps(new_release_dir, state_dir, target_platform="r7")
+    if has_pending:
+        return True, reason
 
     return False, None
 
@@ -155,6 +183,18 @@ def stop_backend_process(port: int = 8090) -> None:
             pass
 
 
+def check_http_health_r7(url: str, timeout: float = 3.0) -> Tuple[Optional[Dict[str, Any]], Dict[str, str]]:
+    req = urllib.request.Request(url, headers={"User-Agent": "desktop-pet-autoupdate"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            headers = {k.lower(): v for k, v in resp.headers.items()}
+            data = resp.read()
+            body = json.loads(data.decode("utf-8")) if data else {}
+            return body, headers
+    except Exception:
+        return None, {}
+
+
 def run_health_check_r7(
     host: str = "127.0.0.1",
     port: int = 8090,
@@ -162,23 +202,25 @@ def run_health_check_r7(
     timeout: float = DEFAULT_HEALTH_TIMEOUT,
     install_dir: Optional[Path] = None,
 ) -> Tuple[bool, Optional[str]]:
-    """向 R7 後端 /health 發送請求並檢查狀態與 commit。"""
+    """向 R7 後端 /health 發送請求並檢查狀態與伺服器回傳之 commit。"""
     start_time = time.time()
     url = f"http://{host}:{port}/health"
+    last_err: Optional[str] = None
 
     while time.time() - start_time < timeout:
-        data = check_http_json(url, timeout=3.0)
-        if data and data.get("ok"):
-            # 檢查目標 commit 是否一致
-            if target_commit and install_dir:
-                rel_info = get_release_info(install_dir)
-                curr = rel_info.get("commit", "")
-                if curr and curr != target_commit and curr != "dev":
-                    return False, f"回報 commit ({curr[:12]}) 與目標 commit ({target_commit[:12]}) 不符"
-            return True, None
-        time.sleep(2.0)
+        body, headers = check_http_health_r7(url, timeout=3.0)
+        if body and body.get("ok"):
+            # 從 Header X-Commit 或 body commit 取得伺服器執行的真實 commit
+            server_commit = headers.get("x-commit") or body.get("commit")
+            if target_commit and server_commit:
+                if server_commit == target_commit or server_commit == "dev":
+                    return True, None
+                last_err = f"後端回報 commit ({server_commit[:12]}) 與目標 commit ({target_commit[:12]}) 不符"
+            else:
+                return True, None
+        time.sleep(1.0)
 
-    return False, f"後端健康檢查超時 ({timeout}s)，無法連線至 {url}"
+    return False, last_err or f"後端健康檢查超時 ({timeout}s)，無法連線至 {url}"
 
 
 class AutoUpdaterR7(AutoUpdaterCore):
@@ -196,6 +238,14 @@ class AutoUpdaterR7(AutoUpdaterCore):
         pin_commit: Optional[str] = None,
         dry_run: bool = False,
     ) -> None:
+        if install_dir is None:
+            env_inst = os.environ.get("PET_INSTALL_DIR")
+            if env_inst:
+                install_dir = Path(os.path.expanduser(os.path.expandvars(env_inst)))
+            else:
+                # 預設為執行後端之 repo 根目錄（而非 LOCALAPPDATA）
+                install_dir = Path(__file__).resolve().parent.parent
+
         super().__init__(
             target="r7",
             install_dir=install_dir,
@@ -213,19 +263,26 @@ class AutoUpdaterR7(AutoUpdaterCore):
         self.health_timeout = float(self.env.get("PET_AUTOUPDATE_HEALTH_TIMEOUT", DEFAULT_HEALTH_TIMEOUT))
 
     def pre_switch_check(self, staged_dir: Path) -> Tuple[bool, Optional[str]]:
-        return pre_switch_check_r7(staged_dir)
+        return pre_switch_check_r7(staged_dir, install_dir=self.install_dir)
 
     def check_held_criteria(self, old_dir: Path, new_dir: Path) -> Tuple[bool, Optional[str]]:
-        applied_file = self.state_dir / "applied-steps.txt"
-        return check_held_criteria_r7(old_dir, new_dir, applied_steps_file=applied_file)
+        return check_held_criteria_r7(new_dir, self.state_dir)
 
     def detect_affected(self, old_dir: Path, new_dir: Path) -> List[str]:
         return detect_affected_r7(old_dir, new_dir)
+
+    def get_default_affected(self) -> List[str]:
+        return ["desktop-pet-backend"]
 
     def restart_affected(self, affected: List[str]) -> bool:
         if affected:
             log.info("重啟後端：結束現有後端程序以由 supervisor 自動重啟...")
             stop_backend_process(self.backend_port)
+        return True
+
+    def restart_after_rollback(self) -> bool:
+        log.info("回退完成，結束後端程序以供自動重啟...")
+        stop_backend_process(self.backend_port)
         return True
 
     def run_health_check(self, target_commit: str) -> Tuple[bool, Optional[str]]:
@@ -238,29 +295,72 @@ class AutoUpdaterR7(AutoUpdaterCore):
         )
 
     def ensure_dependencies(self, staged_dir: Path) -> Tuple[bool, Optional[str]]:
-        # 若 backend/requirements.txt 或 shared/ 變更，在現有 backend/.venv 跑 pip
-        req_file = staged_dir / "backend" / "requirements.txt"
-        old_req = self.install_dir / "backend" / "requirements.txt"
+        # 僅在 backend/requirements.txt 或 shared/ 變更時，在 backend/ 目錄跑 pip install
+        req_staged = staged_dir / "backend" / "requirements.txt"
+        req_backup = self.backup_dir / "backend" / "requirements.txt"
+
+        shared_staged = staged_dir / "shared"
+        shared_backup = self.backup_dir / "shared"
 
         need_pip = False
-        if req_file.exists() and old_req.exists():
-            try:
-                if req_file.read_bytes() != old_req.read_bytes():
+        if req_staged.exists():
+            if not req_backup.exists():
+                need_pip = True
+            else:
+                try:
+                    if req_staged.read_bytes() != req_backup.read_bytes():
+                        need_pip = True
+                except OSError:
                     need_pip = True
-            except OSError:
-                pass
 
-        if need_pip:
-            pip_candidates = [
-                self.install_dir / "backend" / ".venv" / "Scripts" / "pip.exe",
-                self.install_dir / "backend" / ".venv" / "bin" / "pip",
-            ]
-            pip_bin = next((p for p in pip_candidates if p.exists()), None)
-            if pip_bin:
-                log.info("偵測到依賴變更，在 backend/.venv 執行 pip install ...")
-                res = subprocess.run([str(pip_bin), "install", "-r", str(req_file)], capture_output=True, text=True)
-                if res.returncode != 0:
-                    return False, f"pip 安裝依賴失敗：{res.stderr.strip()}"
+        if not need_pip and shared_staged.is_dir():
+            if not shared_backup.is_dir():
+                need_pip = True
+            else:
+                from shared.autoupdate import calculate_manifest
+                m_staged = calculate_manifest(shared_staged)
+                m_backup = calculate_manifest(shared_backup)
+                if m_staged != m_backup:
+                    need_pip = True
+
+        if not need_pip:
+            return True, None
+
+        # 尋找現有 backend/.venv 的 pip
+        pip_candidates = [
+            self.install_dir / "backend" / ".venv" / "Scripts" / "pip.exe",
+            self.install_dir / "backend" / ".venv" / "bin" / "pip",
+            self.install_dir / ".venv" / "Scripts" / "pip.exe",
+            self.install_dir / ".venv" / "bin" / "pip",
+        ]
+        pip_bin = next((p for p in pip_candidates if p.is_file()), None)
+        if not pip_bin:
+            log.warning("未找到 backend/.venv pip，使用目前直譯器之 pip")
+            pip_cmd = [sys.executable, "-m", "pip"]
+        else:
+            pip_cmd = [str(pip_bin)]
+
+        be_dir = self.install_dir / "backend"
+        req_file = be_dir / "requirements.txt"
+        if not req_file.exists():
+            return True, None
+
+        log.info("偵測到 requirements.txt 或 shared/ 變更，在 %s 執行 pip install ...", be_dir)
+        try:
+            res = subprocess.run(
+                pip_cmd + ["install", "-r", "requirements.txt"],
+                cwd=str(be_dir),
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if res.returncode != 0:
+                err_msg = res.stderr.strip() or res.stdout.strip()
+                log.error("pip 安裝依賴失敗：%s", err_msg)
+                return False, f"pip install 失敗：{err_msg}"
+        except Exception as exc:
+            return False, f"執行 pip install 異常：{exc}"
+
         return True, None
 
 
@@ -268,6 +368,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="desktop-pet R7 後端自動更新器")
     parser.add_argument("--once", action="store_true", help="執行一次更新檢查（受 PET_AUTOUPDATE_INTERVAL 限制）")
     parser.add_argument("--force", action="store_true", help="忽略檢查間隔強制執行檢查與更新")
+    parser.add_argument("--retry", action="store_true", help="清除失敗標記並重新嘗試更新")
+    parser.add_argument("--status", action="store_true", help="查詢目前版本與自動更新狀態")
     parser.add_argument("--dry-run", action="store_true", help="模擬更新週期，不修改檔案或重啟服務")
     parser.add_argument("--rollback", action="store_true", help="手動回退至上一個備份版本")
     parser.add_argument("--boot-check", action="store_true", help="開機自檢模式（檢查中途中斷與首度開機異常）")
@@ -297,6 +399,14 @@ def main() -> int:
         dry_run=args.dry_run,
     )
 
+    if args.status:
+        st = {
+            "version": get_release_info(updater.install_dir),
+            "autoupdate": get_autoupdate_status(updater.state_dir, target="r7"),
+        }
+        print(json.dumps(st, indent=2, ensure_ascii=False))
+        return 0
+
     if args.rollback:
         return 0 if updater.rollback() else 1
 
@@ -305,7 +415,7 @@ def main() -> int:
         print(f"Boot check result: {msg}")
         return 0 if ok else 1
 
-    return updater.run_cycle(force=args.force)
+    return updater.run_cycle(force=args.force, retry=args.retry)
 
 
 if __name__ == "__main__":

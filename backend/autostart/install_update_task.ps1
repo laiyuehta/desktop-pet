@@ -20,7 +20,7 @@ if (-not $PythonW -or -not (Test-Path $PythonW)) {
 }
 
 $user = "$env:USERDOMAIN\$env:USERNAME"
-$action = New-ScheduledTaskAction -Execute $PythonW -Argument "`"$upPy`" --once" -WorkingDirectory $root
+$action = New-ScheduledTaskAction -Execute $PythonW -Argument "`"$upPy`" --once --install-dir `"$root`"" -WorkingDirectory $root
 # 定時觸發：登入時啟動，並每 5 分鐘（可自訂）重複執行一次
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)).Repetition
@@ -35,3 +35,4 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Se
 
 $t = Get-ScheduledTask -TaskName $TaskName
 "task '$TaskName' state=$($t.State) user=$($t.Principal.UserId) trigger=AtLogOn(repeat ${IntervalMinutes}m) action=$PythonW $upPy"
+

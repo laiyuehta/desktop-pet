@@ -6,6 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=@USER@
+WorkingDirectory=@HOME@/desktop-pet
 EnvironmentFile=-/etc/desktop-pet/env
 Nice=10
 IOSchedulingClass=idle

@@ -52,7 +52,8 @@ sudo install -d -m 755 /etc/polkit-1/rules.d
 sudo install -m 644 "$tmp_rule" "$RULE"
 
 echo "== systemd-analyze verify"
-sudo systemd-analyze verify "$SVC" "$TMR" "$BOOT_SVC" && echo "verify OK"
+sudo systemd-analyze verify "$SVC" "$TMR" "$BOOT_SVC"
+echo "verify OK"
 
 echo "== daemon-reload 與啟動 timer"
 sudo systemctl daemon-reload

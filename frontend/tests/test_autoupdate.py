@@ -498,7 +498,7 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
 
         # 模擬新版本健康檢查失敗，但還原後舊版健康檢查通過
         health_calls = []
-        def fake_health(conf, units, timeout_sec=120, **kwargs):
+        def fake_health(conf, units=None, affected_units=None, timeout_sec=120, **kwargs):
             if not health_calls:
                 health_calls.append("new_failed")
                 return False, "新版本服務崩潰"
@@ -730,8 +730,8 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('unrestored_v1')")
         self.assertEqual(load_update_state(self.state_dir).get("status"), "updating")
 
-    def test_backend_offline_fails_health_check_and_triggers_rollback(self):
-        # 1. 測試 run_health_check 本身：後端 offline 時判定失敗
+    def test_backend_offline_warns_but_passes_health_check(self):
+        # 1. 測試 run_health_check：後端 offline 時僅發出警告，本機桌寵達標即通過
         conf = {
             "PET_BACKEND_URL": "http://127.0.0.1:8090",
             "PET_AUTOUPDATE_HEALTH_MIN_FPS": "18",
@@ -744,9 +744,10 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         with mock.patch("tools.deploy.autoupdate.check_http_json", return_value=fake_status), \
              mock.patch("subprocess.run") as mock_sub:
             mock_sub.return_value.stdout = "active\n"
+            mock_sub.return_value.returncode = 0
             ok, msg = run_health_check(conf, ["desktop-pet.service"], timeout_sec=0.1, poll_interval=0.02)
-            self.assertFalse(ok)
-            self.assertIn("後端", msg)
+            self.assertTrue(ok)
+            self.assertEqual(msg, "all ok")
 
         # 2. 測試 run_cycle 在後端不通時觸發回退
         (self.install_dir / "main.py").write_text("print('v1_orig')", encoding="utf-8")

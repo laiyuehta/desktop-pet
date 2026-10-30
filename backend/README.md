@@ -191,10 +191,40 @@ R7 後端支援拉取式自動更新（以「原地備份＋覆蓋」設計取�
   ```powershell
   python backend\autoupdate.py --once       # 檢查更新（受間隔保護，預設 300 秒）
   python backend\autoupdate.py --force      # 忽略間隔強制檢查與更新
+  python backend\autoupdate.py --retry      # 清除失敗標記並重新嘗試更新先前失敗之 commit
+  python backend\autoupdate.py --status     # 查詢目前版本與自動更新狀態
   python backend\autoupdate.py --dry-run    # 模擬測試，不更動檔案與服務
   python backend\autoupdate.py --rollback   # 手動從備份還原
   python backend\autoupdate.py --boot-check # 開機自檢
   ```
+
+### 一次性遷移與手動回退指引
+
+1. **初次設定與遷移至自動更新**：
+   - 確保已建立後端專用虛擬環境：
+     ```powershell
+     powershell -ExecutionPolicy Bypass -File backend\setup_venv.ps1
+     ```
+   - 註冊 Windows 工作排程器定時工作（自動傳入 `--install-dir` 指定 repo 根目錄）：
+     ```powershell
+     powershell -ExecutionPolicy Bypass -File backend\autostart\install_update_task.ps1
+     ```
+   - 驗證工作排程狀態與更新器功能：
+     ```powershell
+     python backend\autoupdate.py --status
+     python backend\autoupdate.py --self-test
+     ```
+
+2. **手動回退與復原程序**：
+   - 若更新後發現問題需立即回退：
+     ```powershell
+     python backend\autoupdate.py --rollback
+     ```
+   - 回退程式會完整自備份還原舊版本檔案、移除新版引入的新檔案、保留本機資料（`data/`、`logs/`、非 repo 檔案），並重啟後端程序。
+   - 檢視更新與回退歷史：
+     ```powershell
+     Get-Content -Tail 20 $env:LOCALAPPDATA\desktop-pet\state\update\updates.jsonl
+     ```
 
 ## 測試
 

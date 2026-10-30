@@ -250,8 +250,8 @@ async function poll() {
     const v = s.version || {};
     const au = s.autoupdate || {};
     if ($("#dep-commit")) {
-      if (v.commit && v.commit !== "dev" && v.commit !== "unknown") {
-        const cUrl = "https://github.com/laiyuehta/desktop-pet/commit/" + v.commit;
+      if (v.commit && v.commit !== "dev" && v.commit !== "unknown" && /^[0-9a-fA-F]{7,40}$/.test(v.commit)) {
+        const cUrl = "https://github.com/laiyuehta/desktop-pet/commit/" + encodeURIComponent(v.commit);
         $("#dep-commit").innerHTML = '<a href="' + cUrl + '" target="_blank" style="color:var(--acc)">' + esc(v.short || v.commit.slice(0, 12)) + '</a>';
       } else {
         $("#dep-commit").textContent = v.short || v.commit || "dev";

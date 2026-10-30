@@ -19,23 +19,24 @@
 - **自動部署（Pi 與 R7 自動更新器，#13、#14、PR #37）**：
   - 共用更新核心模組 `shared/shared/autoupdate.py` 與 `shared/shared/version.py`：以 Git smart HTTP 查詢遠端 main 分支最新 commit、雙重驗證 GitHub Actions CI check-runs（`tests (Python 3.13)` 與 `secrets & personal-info scan` 必過）、安全解壓 codeload tarball。
   - 原地「備份＋覆蓋」更新設計（依使用者決定全面取代多版本 symlink 與 junction 切換）：
-    - 取得 `autoupdate.lock` 行程鎖並通過 `PAUSE`、`PET_AUTOUPDATE=0`、dry-run 檢查後才動檔案。
+    - 取得 `autoupdate.lock` 行程鎖（Unix: `fcntl.flock`、Windows: `msvcrt.locking` 具備原子排他鎖定）並通過 `PAUSE`、`PET_AUTOUPDATE=0`、dry-run 檢查後才動檔案。
     - 原子建立暫存備份（中途中斷舊備份完整無損）。
     - 依平台 sparse 篩選：Pi 僅更新 `frontend/` 與 `shared/`（排除 `backend/` 與 `piwifi/`）；R7 僅更新 `backend/` 與 `shared/`（排除 `frontend/` 與 `piwifi/`）。
     - 依賴變更時在現有 venv 重新執行 pip，絕不刪除或覆蓋 `frontend/.venv` 與 `backend/.venv`。
-    - `MANIFEST.sha256` 僅記錄新版覆蓋之檔案，絕不掃描整個目錄，徹底保護非 repo 本機檔案（筆記、日誌、自訂檔案）不被後續更新誤刪。
-    - 切換後健康檢查：Pi 驗證 unit active、fps ≥ 18、畫面幀數遞增、piscreen 唯讀檢查與後端連線；R7 驗證 `/health` 與目標 commit；失敗自動自備份還原並記錄至 `failed.json`，後續週期不再自動嘗試同一 commit。
-    - 開機自檢（boot_check）：偵測覆蓋中途中斷（如斷電）或首度開機異常並自動還原。
+    - `MANIFEST.sha256` 僅記錄新版覆蓋之檔案，回退時嚴格僅刪除新發布引入之檔案 `(newly_overwritten ∪ failed_manifest) - backup_manifest`，徹底保護非 repo 本機檔案（筆記、存檔、自訂包、`deploy.env`）在更新或回退過程中不被誤刪。
+    - 切換後健康檢查：Pi 驗證 unit active、fps ≥ 18、畫面幀數遞增、piscreen 唯讀檢查，後端離線視為警告不阻擋；R7 公開 `/health` 回應 Header `X-Commit`、`/v1/health` 帶 `commit`，直接向伺服器連線比對真實執行 commit；失敗或覆蓋異常（如磁碟空間耗盡）自動自備份還原並記錄至 `failed.json`，後續週期不再自動嘗試同一 commit。
+    - 開機自檢（boot_check）：偵測覆蓋中途中斷（如斷電）或首度開機異常並自動還原，支援重試容錯。
+    - 每輪週期嘗試皆記錄於 `updates.jsonl`；更新器支援 `--status` 狀態查詢與 `--retry` 重新嘗試失敗版本。
   - Pi 服務與排程（`frontend/services/desktop-pet-update/`）：
     - `desktop-pet-update.service`（oneshot）與 `desktop-pet-update.timer`（5 分鐘週期；預設檢查間隔 `PET_AUTOUPDATE_INTERVAL=300`，`--once` 受檢查間隔保護，`--force` 強制執行）。
     - `desktop-pet-boot-check.service` 開機自檢服務。
     - `51-desktop-pet-update.rules` polkit 規則：僅允許重啟 desktop-pet、desktop-pet-admin、picam、piwifi，嚴禁 touch piscreen、嚴禁重開機與 daemon-reload。
   - R7 服務與排程（`backend/autostart/`）：
-    - `backend/autostart/install_update_task.ps1` 與 `uninstall_update_task.ps1`：建立/移除 Windows 工作排程器 `DesktopPet Update` 工作，背景隱藏每 5 分鐘執行一次 `autoupdate.py --once`。
+    - `backend/autostart/install_update_task.ps1` 與 `uninstall_update_task.ps1`：建立/移除 Windows 工作排程器 `DesktopPet Update` 工作，背景隱藏每 5 分鐘執行一次 `autoupdate.py --once`，傳入 `--install-dir` 錨定 repo 根目錄。
   - 單元測試完整覆蓋：
-    - `shared/tests/test_autoupdate.py`：測試 smart HTTP pkt-lines、CI check-runs 判定、安全解壓防穿越、保護路徑、連續兩次更新非 repo 檔案留存驗證、備份還原與行程鎖。
+    - `shared/tests/test_autoupdate.py`：測試 smart HTTP pkt-lines、CI check-runs 判定、安全解壓防穿越、保護路徑、連續兩次更新非 repo 檔案留存驗證、備份還原、跨平台檔案鎖與異常中斷回退。
     - `frontend/tests/test_autoupdate.py`：測試 Pi systemd 重啟偵測、切換前檢查、held 條件、Pi 健康檢查、開機自檢與 polkit/systemd 模板。
-    - `backend/tests/test_autoupdate_r7.py`：測試 R7 後端變更偵測、R7 健康檢查與 commit 比對、R7 備份覆蓋週期、失敗回退與 Windows 排程腳本。
+    - `backend/tests/test_autoupdate_r7.py`：測試 R7 後端變更偵測、R7 健康檢查與真實 commit 比對、R7 備份覆蓋週期、回退後重啟、兩週期更新與回退本機檔案留存驗證、Windows 排程腳本。
 - `.github/CODEOWNERS`、PR 範本、Issue 範本（Bug、任務）、`CONTRIBUTING.md`。
 
 ### 變更
