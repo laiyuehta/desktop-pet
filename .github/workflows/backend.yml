@@ -1,0 +1,32 @@
+name: Backend
+
+# 由 ci.yml 依路徑呼叫（backend/**、shared/**、.github/workflows/**）；也可手動執行
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: backend tests (Python 3.13)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          # 跟 R7 的 Python 3.13 一致
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies (backend/.venv 同樣的 requirements，含 -e ../shared)
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+      - name: Run backend tests
+        run: python -m pytest -q backend/tests
+      - name: Run shared tests
+        run: python -m pytest -q shared/tests
