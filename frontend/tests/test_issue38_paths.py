@@ -28,11 +28,18 @@ class AutoPackTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/srv/xdg"}):
             self.assertEqual(pet_main.auto_pack_candidates("seed"), ["/srv/xdg/desktop-pet/packs/seed"])
 
+    def test_relative_xdg_ignored_and_bake_shares_default(self):
+        from pet.pack import default_packs_dir
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "rel/path"}):
+            self.assertEqual(default_packs_dir(), os.path.expanduser("~/.local/share/desktop-pet/packs"))
+        src = (FRONTEND / "tools" / "bake.py").read_text(encoding="utf-8")
+        self.assertIn("default_packs_dir()", src)
+
     def test_missing_pack_warns_loudly(self):
         import io
         import contextlib
         err = io.StringIO()
-        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/srv/none"}), contextlib.redirect_stderr(err):
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/srv/none", "JOURNAL_STREAM": ""}), contextlib.redirect_stderr(err):
             with self.assertLogs("t38w", level="WARNING") as cm:
                 pet_main.warn_no_auto_pack("seed", logging.getLogger("t38w"))
         for text in ("\n".join(cm.output), err.getvalue()):

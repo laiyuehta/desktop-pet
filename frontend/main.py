@@ -120,11 +120,8 @@ def parse_args(argv=None, env=None, env_file=None):
 
 
 def default_packs_dir() -> str:
-    """動畫包的唯一預設位置：$XDG_DATA_HOME/desktop-pet/packs（未設 XDG_DATA_HOME 時 ~/.local/share/desktop-pet/packs）。"""
-    xdg = os.environ.get("XDG_DATA_HOME")
-    if xdg:
-        return os.path.join(xdg, "desktop-pet", "packs")
-    return os.path.expanduser(DEFAULT_EXTERNAL_PACKS_DIR)
+    from pet.pack import default_packs_dir as _d
+    return _d()
 
 
 def warn_no_auto_pack(skel_name: str, log: logging.Logger) -> None:
@@ -133,7 +130,8 @@ def warn_no_auto_pack(skel_name: str, log: logging.Logger) -> None:
     msg = (f"警告：--pack auto 找不到動畫包（找過：{searched}），改用較慢的即時骨架繪圖（Pi 3B 約 10–14 fps）。"
            "請把動畫包放到上述位置，或用 PET_PACK_DIR／--pack 指定（#38 起不再讀 repo 內的 packs/）")
     log.warning(msg)
-    print(msg, file=sys.stderr, flush=True)
+    if not os.environ.get("JOURNAL_STREAM"):   # systemd 下 log 已進 journald，不重複印
+        print(msg, file=sys.stderr, flush=True)
 
 
 def auto_pack_candidates(skel_name: str) -> list:

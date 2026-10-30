@@ -19,6 +19,16 @@ manifest.json（format 1）重點欄位：
 
 from __future__ import annotations
 
+import os as _os
+
+
+def default_packs_dir() -> str:
+    """動畫包的唯一預設位置：$XDG_DATA_HOME/desktop-pet/packs（XDG_DATA_HOME 未設或不是絕對路徑時用
+    ~/.local/share/desktop-pet/packs；依 XDG 規範忽略相對路徑）。main.py 的 --pack auto 與 tools/bake.py 共用。"""
+    xdg = _os.environ.get("XDG_DATA_HOME", "")
+    base = xdg if _os.path.isabs(xdg) else _os.path.expanduser("~/.local/share")
+    return _os.path.join(base, "desktop-pet", "packs")
+
 import io
 import json
 import logging

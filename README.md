@@ -67,7 +67,7 @@ python3 tools/bench.py --pack ~/.local/share/desktop-pet/packs/seed   # 量播�
 python3 main.py --sink piscreen --input web --web 0.0.0.0:8080            # --pack auto：讀上面那個位置
 ```
 
-- `--pack auto`（預設，或由 `PET_PACK_DIR` 指定）：先找 `~/.local/share/desktop-pet/packs/<骨架名稱>/`，再找 `~/.local/share/desktop-pet/packs/<骨架名稱>/`，存在就播動畫包，沒有就即時繪圖；`--pack none` 強制即時繪圖。
+- `--pack auto`（預設，或由 `PET_PACK_DIR` 指定）：找 `~/.local/share/desktop-pet/packs/<骨架名稱>/`（有設 `XDG_DATA_HOME` 時為 `$XDG_DATA_HOME/desktop-pet/packs/<骨架名稱>/`），存在就播動畫包，找不到會印 WARNING 列出找過的路徑，沒有就即時繪圖；`--pack none` 強制即時繪圖。
 - fps 預設跟動畫包一樣（20）；即時繪圖模式在 Pi 3B 只有 10~14 fps（`python3 frontend/tools/bench.py --stages` 可看各段毫秒）。
 
 - 手機或電腦開 `http://192.0.2.43:8080/` 就是網頁遙控。

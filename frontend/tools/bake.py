@@ -20,7 +20,7 @@ DEFAULT_PACKS_DIR = "~/.local/share/desktop-pet/packs"
 sys.path.insert(0, ROOT)
 
 from pet.baker import bake  # noqa: E402
-from pet.pack import AnimationPack  # noqa: E402
+from pet.pack import AnimationPack, default_packs_dir  # noqa: E402
 
 
 def check(path: str) -> int:
@@ -60,8 +60,7 @@ def main() -> int:
     cfg = a.config or os.path.join(ROOT, "config", "bake.json")
     with open(cfg, encoding="utf-8") as fh:
         look = json.load(fh).get("look", "seed")
-    default_dir = os.path.join(os.environ["XDG_DATA_HOME"], "desktop-pet", "packs") if os.environ.get("XDG_DATA_HOME") else os.path.expanduser(DEFAULT_PACKS_DIR)
-    out = os.path.expanduser(a.out) if a.out else os.path.join(default_dir, look)
+    out = os.path.expanduser(a.out) if a.out else os.path.join(default_packs_dir(), look)
     print(f"產生動畫包 {look} → {out}")
     bake(out, bake_cfg=cfg, states_cfg=a.states_config,
          only_states=a.states.split(",") if a.states else None, fps=a.fps, quality=a.quality,
