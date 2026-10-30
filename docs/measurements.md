@@ -30,4 +30,15 @@
 
 ### Pi 3B
 
-尚未量測：本次量測機器不在 Pi 所在的區網，連不到 Pi 的 ssh port，也沒有可登入 Pi 的金鑰。需要由能 ssh 進 Pi 的機器（桌寵專案機器人1）補跑上述測試，並把新烘的包換上（先備份舊包）。
+
+2026-10-30 10:25–10:50（台北時間），Raspberry Pi 3B（aarch64，Python 3.13.5），在暫存資料夾 clone main `fa540d4` 執行，沒有動到正在跑的服務。
+
+| 項目 | 結果 |
+|---|---|
+| `test_backend`、`test_pack`、`test_emotion_levels`、`test_backend_client`（含 `test_hanging_backend_does_not_block_loop`），連跑 2 輪 | 兩輪都是 83 個測試 OK（skipped=1），各約 309.6 秒 / 309.4 秒，沒有偶發失敗 |
+| 全套 `python3 -m unittest discover -s tests` | 141 個測試，315.0 秒；134 個通過、skipped=1，另有 7 個測試模組（`test_admin`、`test_camera`、`test_control_api`、`test_frames`、`test_mirror`、`test_picam`、`test_remote_page`）因為 Pi 沒裝 `pytest` 無法匯入（`ModuleNotFoundError: No module named 'pytest'`），不是測試本身失敗 |
+
+### Pi 換包（#31）
+
+同日在 R7（Windows，Python 3.12.10、Pillow 13.0.0）用 main `fa540d4` 重新 bake，耗時 93 秒，`frames.bin` 246,913,525 bytes，sha256 `4f02321f63ea12c8a3e010f62e856ff0b313d1135306898df2cfe1a0d6c05805`，與上方本機烘焙完全相同。scp 到 Pi 後比對雜湊一致。
+舊的 `~/desktop-pet/packs` 先備份成 `~/packs-backup-20261030.tar`（77 MB）再替換，10:18 重啟 desktop-pet 後日誌：`1263 段片段、21638 格、246.9 MB、20 fps`，fps 穩定 20.0，沒有缺少狀態的警告。
