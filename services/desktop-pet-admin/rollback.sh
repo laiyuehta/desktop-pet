@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 PET_REPO_ROOT="$(cd ../.. && pwd)"
 . "$PET_REPO_ROOT/tools/deploy/common.sh"
 load_deploy_env
-require_sys_env || true
+require_sys_env --warn || true
 
 if [ -z "$PET_BACKEND_URL" ]; then
     echo "警告：環境檔未設定 PET_BACKEND_URL，回退後將以離線單機模式執行。" >&2

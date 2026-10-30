@@ -140,11 +140,18 @@ class AutostartTest(unittest.TestCase):
 
     def _render(self, template, env_text, extra_env=None):
         (self.tmp_path / "deploy.env").write_text(env_text, encoding="utf-8")
-        script = f'. "{ROOT}/tools/deploy/common.sh"; load_deploy_env && render_template "{ROOT / template}"'
-        env = {"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(self.tmp_path), "PET_SYS_ENV": str(self.tmp_path / "no-sys-env")}
+        common_sh = (ROOT / "tools" / "deploy" / "common.sh").as_posix()
+        template_path = (ROOT / template).as_posix()
+        script = f'. "{common_sh}"; load_deploy_env && render_template "{template_path}"'
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "PET_REPO_ROOT": self.tmp_path.as_posix(),
+            "PET_SYS_ENV": (self.tmp_path / "no-sys-env").as_posix()
+        }
         if extra_env:
             env.update(extra_env)
-        return subprocess.run(["sh", "-c", script], capture_output=True, text=True, env=env)
+        return subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", env=env)
 
     def test_render_substitutes_all_placeholders(self):
         if not shutil.which("sh"):
@@ -169,26 +176,30 @@ class AutostartTest(unittest.TestCase):
         deploy_env.write_text("PET_USER=legacy_user\nPET_HOME=/srv/legacy\n", encoding="utf-8")
         custom_env.write_text("PET_USER=custom_user\nPET_HOME=/srv/custom\n", encoding="utf-8")
 
-        script = f'. "{ROOT}/tools/deploy/common.sh"; load_deploy_env && printf "%s|%s" "$PET_USER" "$PET_HOME"'
+        common_sh = (ROOT / "tools" / "deploy" / "common.sh").as_posix()
+        script = f'. "{common_sh}"; load_deploy_env && printf "%s|%s" "$PET_USER" "$PET_HOME"'
+        base_env = {"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": tmp_path.as_posix()}
+
         # 1. /etc/desktop-pet/env 優先於舊版 deploy.env，且不印舊版警告
         r1 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                            env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path), "PET_SYS_ENV": str(sys_env)})
+                            encoding="utf-8", errors="replace",
+                            env=dict(base_env, PET_SYS_ENV=sys_env.as_posix()))
         self.assertEqual(r1.returncode, 0)
         self.assertEqual(r1.stdout, "sys_user|/srv/sys")
         self.assertNotIn("警告", r1.stderr)
 
         # 2. PET_DEPLOY_ENV 優先於 /etc/desktop-pet/env
         r2 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                            env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path),
-                                 "PET_SYS_ENV": str(sys_env), "PET_DEPLOY_ENV": str(custom_env)})
+                            encoding="utf-8", errors="replace",
+                            env=dict(base_env, PET_SYS_ENV=sys_env.as_posix(), PET_DEPLOY_ENV=custom_env.as_posix()))
         self.assertEqual(r2.returncode, 0)
         self.assertEqual(r2.stdout, "custom_user|/srv/custom")
 
         # 3. 呼叫端已設的環境變數優先於環境檔
         r3 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                            env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path),
-                                 "PET_SYS_ENV": str(sys_env), "PET_DEPLOY_ENV": str(custom_env),
-                                 "PET_USER": "shell_user", "PET_HOME": "/srv/shell"})
+                            encoding="utf-8", errors="replace",
+                            env=dict(base_env, PET_SYS_ENV=sys_env.as_posix(), PET_DEPLOY_ENV=custom_env.as_posix(),
+                                     PET_USER="shell_user", PET_HOME="/srv/shell"))
         self.assertEqual(r3.returncode, 0)
         self.assertEqual(r3.stdout, "shell_user|/srv/shell")
 
@@ -202,64 +213,123 @@ class AutostartTest(unittest.TestCase):
         no_env = tmp_path / "no-env"
         legacy_env = tmp_path / "deploy.env"
 
-        script = f'. "{ROOT}/tools/deploy/common.sh"; load_deploy_env && require_sys_env'
+        common_sh = (ROOT / "tools" / "deploy" / "common.sh").as_posix()
+        script = f'. "{common_sh}"; load_deploy_env && require_sys_env'
+        base_env = {"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": tmp_path.as_posix(), "PET_SYS_ENV": no_env.as_posix()}
 
         # 1. 環境檔不存在且無舊版 deploy.env 時失敗（回傳碼非 0 且輸出錯誤引導）
         r1 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                            env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path), "PET_SYS_ENV": str(no_env)})
+                            encoding="utf-8", errors="replace", env=base_env)
         self.assertNotEqual(r1.returncode, 0)
         self.assertIn("找不到環境檔", r1.stderr)
+        self.assertIn("錯誤：", r1.stderr)
 
         # 2. 只有舊版 deploy.env 時相容通過（rc=0），但輸出警告
         legacy_env.write_text("PET_USER=legacy_user\nPET_HOME=/srv/legacy\n", encoding="utf-8")
         r_legacy = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                                  env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path), "PET_SYS_ENV": str(no_env)})
+                                  encoding="utf-8", errors="replace", env=base_env)
         self.assertEqual(r_legacy.returncode, 0)
         self.assertIn("暫由舊版", r_legacy.stderr)
 
         # 3. 系統環境檔存在時成功
         sys_env.write_text("PET_USER=sys_user\nPET_HOME=/srv/sys\n", encoding="utf-8")
+        env_3 = dict(base_env, PET_SYS_ENV=sys_env.as_posix())
         r2 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                            env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path), "PET_SYS_ENV": str(sys_env)})
+                            encoding="utf-8", errors="replace", env=env_3)
         self.assertEqual(r2.returncode, 0)
 
         # 4. 指定 PET_DEPLOY_ENV 存在時成功（自訂覆寫）
         custom_env.write_text("PET_USER=c_user\nPET_HOME=/srv/custom\n", encoding="utf-8")
+        env_4 = dict(base_env, PET_DEPLOY_ENV=custom_env.as_posix())
         r3 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                            env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path),
-                                 "PET_SYS_ENV": str(no_env), "PET_DEPLOY_ENV": str(custom_env)})
+                            encoding="utf-8", errors="replace", env=env_4)
         self.assertEqual(r3.returncode, 0)
 
         # 5. 指定 PET_DEPLOY_ENV 指向不存在檔案時失敗
+        env_5 = dict(base_env, PET_DEPLOY_ENV=missing_custom.as_posix())
         r4 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                            env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path),
-                                 "PET_SYS_ENV": str(no_env), "PET_DEPLOY_ENV": str(missing_custom)})
+                            encoding="utf-8", errors="replace", env=env_5)
         self.assertNotEqual(r4.returncode, 0)
         self.assertIn("不存在", r4.stderr)
 
+        # 6. require_sys_env --warn：環境檔不存在時不中止（rc=0）且輸出「警告：」非「錯誤：」
+        script_warn = f'. "{common_sh}"; load_deploy_env && require_sys_env --warn'
+        r_warn = subprocess.run(["sh", "-c", script_warn], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", env=base_env)
+        self.assertEqual(r_warn.returncode, 0)
+        self.assertIn("警告：找不到環境檔", r_warn.stderr)
+        self.assertNotIn("錯誤", r_warn.stderr)
+
+        # 7. require_sys_env --warn：PET_DEPLOY_ENV 指向不存在檔案但系統環境檔存在時（rc=0），輸出警告且不中斷
+        env_7 = dict(base_env, PET_SYS_ENV=sys_env.as_posix(), PET_DEPLOY_ENV=missing_custom.as_posix())
+        r_missing_custom_warn = subprocess.run(
+            ["sh", "-c", script_warn], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", env=env_7
+        )
+        self.assertEqual(r_missing_custom_warn.returncode, 0)
+        self.assertIn("警告：PET_DEPLOY_ENV 指定的環境檔不存在", r_missing_custom_warn.stderr)
+        self.assertNotIn("錯誤", r_missing_custom_warn.stderr)
+
     def test_rollback_sh_env_handling(self):
-        """驗證 rollback.sh 在 PET_DEPLOY_ENV 有設時不誤報，且無環境檔時僅警示不阻擋（Issue #35）。"""
-        if not shutil.which("sh"):
-            raise unittest.SkipTest("sh not available")
-        tmp_path = self.tmp_path
-        custom_env = tmp_path / "custom.env"
-        no_env = tmp_path / "no-env"
-        script = f'. "{ROOT}/tools/deploy/common.sh"; load_deploy_env && require_sys_env || true'
+        """驗證 rollback.sh 實際執行：
+        (a) PET_DEPLOY_ENV 有設且檔案存在時 exit 0、無「找不到環境檔」警告；
+        (b) 完全沒有環境檔時 exit 0 且仍跑到「回退完成」；
+        (c) PET_DEPLOY_ENV 指向不存在檔案但系統環境檔存在時印警告且順利完成。
+        """
+        if not shutil.which("sh") or os.name == "nt":
+            raise unittest.SkipTest("sh test requires posix environment")
 
-        # 設了 PET_DEPLOY_ENV 且檔案存在：rc=0 且不應有警告或錯誤
-        custom_env.write_text("PET_USER=c_user\nPET_HOME=/srv/custom\n", encoding="utf-8")
-        r1 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                            env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path),
-                                 "PET_SYS_ENV": str(no_env), "PET_DEPLOY_ENV": str(custom_env)})
-        self.assertEqual(r1.returncode, 0)
-        self.assertEqual(r1.stderr, "")
+        stub_bin = self.tmp_path / "bin"
+        stub_bin.mkdir()
+        for name in ["sudo", "systemctl", "systemd-analyze", "sleep"]:
+            stub = stub_bin / name
+            stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            stub.chmod(0o755)
 
-        # 無環境檔時：require_sys_env 失敗但因 || true 不阻擋執行
-        r2 = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                            env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": str(tmp_path),
-                                 "PET_SYS_ENV": str(no_env)})
-        self.assertEqual(r2.returncode, 0)
-        self.assertIn("找不到環境檔", r2.stderr)
+        base_path = f"{stub_bin.as_posix()}:{os.environ.get('PATH', '')}"
+        sys_env = self.tmp_path / "etc-env"
+        custom_env = self.tmp_path / "custom.env"
+        no_env = self.tmp_path / "no-env"
+        missing_custom = self.tmp_path / "nonexistent.env"
+        rollback_script = (ROOT / "services" / "desktop-pet-admin" / "rollback.sh").as_posix()
+
+        base_env = {
+            "PATH": base_path,
+            "PET_USER": "testuser",
+            "PET_HOME": self.tmp_path.as_posix(),
+            "PET_BACKEND_URL": "https://test.example.com",
+            "PET_SYS_ENV": no_env.as_posix(),
+        }
+
+        # (a) PET_DEPLOY_ENV 有設且檔案存在：exit 0，無「找不到環境檔」或「錯誤」訊息
+        custom_env.write_text("PET_USER=c_user\nPET_HOME=/srv/custom\nPET_BACKEND_URL=https://c.example.com\n", encoding="utf-8")
+        env_a = dict(base_env, PET_DEPLOY_ENV=custom_env.as_posix())
+        ra = subprocess.run(["sh", rollback_script], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", env=env_a)
+        self.assertEqual(ra.returncode, 0, ra.stderr)
+        self.assertIn("回退完成！", ra.stdout)
+        self.assertNotIn("找不到環境檔", ra.stderr)
+        self.assertNotIn("錯誤", ra.stderr)
+
+        # (b) 完全沒有環境檔：exit 0，印警告指引且仍順利跑到「回退完成」
+        env_b = dict(base_env)
+        env_b.pop("PET_DEPLOY_ENV", None)
+        rb = subprocess.run(["sh", rollback_script], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", env=env_b)
+        self.assertEqual(rb.returncode, 0, rb.stderr)
+        self.assertIn("回退完成！", rb.stdout)
+        self.assertIn("警告：找不到環境檔", rb.stderr)
+        self.assertNotIn("錯誤", rb.stderr)
+
+        # (c) PET_DEPLOY_ENV 不存在但系統環境檔存在：exit 0，印警告且順利完成
+        sys_env.write_text("PET_USER=s_user\nPET_HOME=/srv/sys\nPET_BACKEND_URL=https://s.example.com\n", encoding="utf-8")
+        env_c = dict(base_env, PET_DEPLOY_ENV=missing_custom.as_posix(), PET_SYS_ENV=sys_env.as_posix())
+        rc = subprocess.run(["sh", rollback_script], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", env=env_c)
+        self.assertEqual(rc.returncode, 0, rc.stderr)
+        self.assertIn("回退完成！", rc.stdout)
+        self.assertIn("警告：PET_DEPLOY_ENV 指定的環境檔不存在", rc.stderr)
+        self.assertNotIn("錯誤", rc.stderr)
 
     def test_install_scripts_never_write_deploy_env(self):
         for rel in ["services/desktop-pet/install.sh", "services/picam/install.sh", "tools/wifi/install.sh",
@@ -310,7 +380,7 @@ class AutostartTest(unittest.TestCase):
         raw.decode("ascii")  # cmd.exe 用 cp950 解析，非 ASCII 註解會把行拆壞
         text = raw.decode("ascii")
         self.assertIn("PET_BACKEND_PORT=8090", text)
-        self.assertTrue(": %PET_BACKEND_PORT% .*LISTENING" in text or ":%PET_BACKEND_PORT% .*LISTENING" in text)
+        self.assertIn(":%PET_BACKEND_PORT% .*LISTENING", text)
         self.assertIn("exit /b 0", text)
         self.assertIn("PET_BACKEND_LOG_DIR", text)
 
