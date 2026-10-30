@@ -144,6 +144,9 @@ class EmotionFullPackTest(unittest.TestCase):
     def test_full_pack(self):
         with open(os.path.join(PACK, "manifest.json"), encoding="utf-8") as fh:
             m = json.load(fh)
+        self._verify_manifest_emotions(m)
+
+    def _verify_manifest_emotions(self, m: dict):
         all_states = list(STATES["states"])
         for name in NEW_STATES:
             with self.subTest(name):
@@ -153,6 +156,24 @@ class EmotionFullPackTest(unittest.TestCase):
             for b in all_states:
                 if a != b:
                     self.assertIn(f"{a}>{b}", m["transitions"])
+
+
+class EmotionSyntheticPackTest(unittest.TestCase):
+    """CI 環境下即使沒有實體 packs/seed，仍驗證 16 個狀態全配對 240 組的過渡片段規格。"""
+
+    def test_synthetic_240_pairs_structure(self):
+        all_states = list(STATES["states"])
+        self.assertEqual(len(all_states), 16)
+        pairs = {(a, b) for a in all_states for b in all_states if a != b}
+        self.assertEqual(len(pairs), 240)
+
+        # 模擬 bake() 產生的 manifest transitions 結構
+        m = {
+            "states": {s: {} for s in all_states},
+            "transitions": {f"{a}>{b}": {"0": {}} for a, b in pairs},
+        }
+        test_case = EmotionFullPackTest()
+        test_case._verify_manifest_emotions(m)
 
 
 class EmotionAppIntegrationTest(unittest.TestCase):

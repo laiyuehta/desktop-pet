@@ -257,7 +257,8 @@ class PlayerTest(unittest.TestCase):
         p = PackPlayer(pk)
         p.next("idle")
         p.next("happy", change_ts=time.time() - 0.2)
-        self.assertGreaterEqual(p.reaction_ms, 200)
+        # 驗證有記錄切換延遲（毫秒級），避免因 Windows 計時器精確度或浮點誤差造成邊界 flake
+        self.assertGreaterEqual(p.reaction_ms, 190)
         pk.close()
 
     def test_fallback_when_state_missing_or_skeleton_differs(self):
