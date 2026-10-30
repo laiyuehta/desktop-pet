@@ -3,5 +3,5 @@ import os
 
 os.environ["PET_BACKEND_NO_LOCAL_CONFIG"] = "1"
 for _k in list(os.environ):
-    if _k.startswith("PET_") and _k != "PET_BACKEND_NO_LOCAL_CONFIG":
+    if _k.startswith("PET_") and _k != "PET_BACKEND_NO_LOCAL_CONFIG" and not _k.startswith("PET_TEST_"):
         os.environ.pop(_k, None)

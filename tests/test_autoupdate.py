@@ -652,6 +652,50 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         self.assertTrue((self.install_dir / "local_notes.txt").exists())
         self.assertTrue(wifi_bin.exists())
 
+    def test_consecutive_updates_preserve_external_files(self):
+        # 模擬安裝目錄中存在非 repo 外部檔案（例如使用者本機筆記 my_local_notes.txt）
+        (self.install_dir / "main.py").write_text("print('v0')", encoding="utf-8")
+        (self.install_dir / "my_local_notes.txt").write_text("my notes", encoding="utf-8")
+        (self.install_dir / "deploy.env").write_text("URL=https://pet.example.com", encoding="utf-8")
+
+        # 第一次更新：更新至 v1（包含 main.py 與 feat1.py）
+        tar_v1 = self._make_tarball({"main.py": "print('v1')", "feat1.py": "def f1(): pass"})
+        with mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value="1111111111111111111111111111111111111111"), \
+             mock.patch("tools.deploy.autoupdate.pre_switch_check", return_value=(True, None)), \
+             mock.patch("tools.deploy.autoupdate.run_health_check", return_value=(True, "all ok")), \
+             mock.patch("tools.deploy.autoupdate.restart_units"), \
+             mock.patch("urllib.request.urlopen") as mock_url:
+            mock_url.return_value = io.BytesIO(tar_v1)
+            res1 = self.updater.run_cycle(force=True)
+            self.assertEqual(res1, 0)
+
+        # 斷言第一次更新後，my_local_notes.txt 仍在，且 MANIFEST.sha256 不包含 my_local_notes.txt
+        self.assertTrue((self.install_dir / "my_local_notes.txt").exists())
+        self.assertEqual((self.install_dir / "my_local_notes.txt").read_text(encoding="utf-8"), "my notes")
+        manifest_text = (self.install_dir / "MANIFEST.sha256").read_text(encoding="utf-8")
+        self.assertNotIn("my_local_notes.txt", manifest_text)
+        self.assertIn("feat1.py", manifest_text)
+
+        # 第二次更新：更新至 v2（移除 feat1.py，新增 feat2.py）
+        tar_v2 = self._make_tarball({"main.py": "print('v2')", "feat2.py": "def f2(): pass"})
+        with mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value="2222222222222222222222222222222222222222"), \
+             mock.patch("tools.deploy.autoupdate.pre_switch_check", return_value=(True, None)), \
+             mock.patch("tools.deploy.autoupdate.run_health_check", return_value=(True, "all ok")), \
+             mock.patch("tools.deploy.autoupdate.restart_units"), \
+             mock.patch("urllib.request.urlopen") as mock_url:
+            mock_url.return_value = io.BytesIO(tar_v2)
+            res2 = self.updater.run_cycle(force=True)
+            self.assertEqual(res2, 0)
+
+        # 斷言第二次更新後：
+        # 1. feat1.py 已被正確刪除
+        self.assertFalse((self.install_dir / "feat1.py").exists())
+        # 2. feat2.py 已被建立
+        self.assertTrue((self.install_dir / "feat2.py").exists())
+        # 3. 非 repo 本機檔案 my_local_notes.txt 經歷兩次更新依然完好存在！
+        self.assertTrue((self.install_dir / "my_local_notes.txt").exists())
+        self.assertEqual((self.install_dir / "my_local_notes.txt").read_text(encoding="utf-8"), "my notes")
+
     def test_pause_and_dry_run_with_unfinished_state_touches_no_files(self):
         (self.install_dir / "main.py").write_text("print('unrestored_v1')", encoding="utf-8")
         self.backup_dir.mkdir(parents=True)

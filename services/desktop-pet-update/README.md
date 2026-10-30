@@ -22,7 +22,7 @@
   - 更新後第一次開機自檢失敗（狀態為 `restarting`）自動從備份還原。
   - 舊版本檔案若本來就有缺失則僅記錄警告，絕不修改或覆蓋檔案。
 - **`desktop-pet-update.service`**：`Type=oneshot` systemd 服務，以 `@USER@` 執行。
-- **`desktop-pet-update.timer`**：定時器（開機後 5 分鐘、每 5 分鐘觸發一次，隨機抖動 60 秒）。
+- **`desktop-pet-update.timer`**：定時器（開機後 5 分鐘、每 5 分鐘觸發一次，隨機抖動 60 秒；更新程式預設檢查間隔 `PET_AUTOUPDATE_INTERVAL` 為 300 秒，每次觸發皆會比對間隔）。
 - **`51-desktop-pet-update.rules`**：polkit 規則，允許 `@USER@` 無密碼重啟 `desktop-pet`、`desktop-pet-admin`、`picam`、`piwifi`。嚴格禁止碰觸 `piscreen.service`，嚴格禁止重開機與 `daemon-reload`。
 
 ## 安裝與啟用
@@ -51,10 +51,18 @@ sh services/desktop-pet-update/install.sh --uninstall
 
 ## 手動操作與除錯指令
 
-手動執行單次檢查（不等待計時器）：
+手動執行單次檢查（受檢查間隔保護，預設間隔 300 秒 / 5 分鐘）：
 
 ```sh
 python3 tools/deploy/autoupdate.py --once
+```
+
+忽略檢查間隔強制執行更新檢查：
+
+```sh
+python3 tools/deploy/autoupdate.py --force
+# 或單次強制執行：
+python3 tools/deploy/autoupdate.py --once --force
 ```
 
 模擬檢查（Dry Run，僅印出計畫操作而不進行下載或覆蓋）：

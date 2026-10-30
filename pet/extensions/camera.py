@@ -69,24 +69,48 @@ def picam_snapshot(socket_path: str = DEFAULT_PICAM_SOCKET, timeout: float = 25.
 class PhotoUploader:
     """POST /v1/pet/photo（內容是 JPEG），回傳 photo_id。"""
 
-    def __init__(self, base_url: str, pet_id: str, token: str = "", timeout: float = 15.0):
+    def __init__(self, base_url: str, pet_id: str, token: str = "", timeout: float = 15.0,
+                 token_file: Optional[str] = None, allow_insecure_lan: bool = False):
         self.base_url = base_url.rstrip("/")
         self.pet_id = pet_id
         self.token = token
         self.timeout = timeout
+        self.token_file = token_file
+        self.allow_insecure_lan = allow_insecure_lan
 
-    def upload(self, data: bytes, meta: dict) -> str:
+    def _upload_once(self, data: bytes, meta: dict, token: str) -> str:
+        from ..backend_client import is_safe_for_insecure_token
         q = urllib.parse.urlencode({"pet_id": self.pet_id, "reason": meta.get("reason", "manual"),
                                     "taken": "%.3f" % (round(float(meta.get("taken", time.time())) * 1000) / 1000)})
-        headers = {"Content-Type": "image/jpeg"}
-        if self.token:
-            headers["X-Pet-Token"] = self.token
+        headers = {"Content-Type": "image/jpeg", "Content-Length": str(len(data))}
+        if token and is_safe_for_insecure_token(self.base_url, self.allow_insecure_lan):
+            headers["X-Pet-Token"] = token
+        elif token:
+            log.warning("非 HTTPS 且非私有 IP/localhost，拒絕送出金鑰（可設定 --allow-insecure-lan 放行）：%s", self.base_url)
         req = urllib.request.Request(f"{self.base_url}/v1/pet/photo?{q}", data=data, headers=headers, method="POST")
         with _OPENER.open(req, timeout=self.timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
         if not body.get("ok") or not body.get("photo_id"):
             raise ValueError(f"後端回應不對：{body.get('error')}")
         return str(body["photo_id"])
+
+    def upload(self, data: bytes, meta: dict) -> str:
+        try:
+            return self._upload_once(data, meta, self.token)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401 and self.token_file:
+                try:
+                    exp_path = os.path.expanduser(self.token_file)
+                    if os.path.isfile(exp_path):
+                        with open(exp_path, "r", encoding="utf-8") as fh:
+                            new_tok = fh.read().strip()
+                        if new_tok and new_tok != self.token:
+                            log.info("上傳照片收到 401，已自 %s 重新載入金鑰並重試一次", exp_path)
+                            self.token = new_tok
+                            return self._upload_once(data, meta, self.token)
+                except Exception as read_exc:
+                    log.warning("上傳照片重新讀取金鑰檔失敗：%s", read_exc)
+            raise
 
 
 def make_thumb(data: bytes, size=(320, 240)) -> Optional[bytes]:

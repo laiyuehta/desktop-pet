@@ -33,7 +33,7 @@ import subprocess
 import sys
 import tarfile
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -364,17 +364,36 @@ def safe_extract_tarball(tar_path: Path, extract_to: Path) -> Path:
     return extract_to
 
 
-def calculate_manifest(root_dir: Path) -> Dict[str, str]:
-    """計算目錄內所有非保護檔案之 SHA-256 雜湊表（以相對路徑為 key）。"""
+def calculate_manifest(root_dir: Path, files: Optional[Iterable[str]] = None) -> Dict[str, str]:
+    """計算目錄內指定檔案（或所有非保護檔案）之 SHA-256 雜湊表（以相對路徑為 key）。"""
     manifest: Dict[str, str] = {}
     if not root_dir.exists():
         return manifest
-    for root, dirs, files in os.walk(root_dir):
+    if files is not None:
+        for rel_str in sorted(files):
+            rel_file = Path(rel_str)
+            if is_protected_path(rel_file):
+                continue
+            if rel_file.as_posix() in ("MANIFEST.sha256", "RELEASE.json"):
+                continue
+            p = root_dir / rel_file
+            if p.is_file():
+                try:
+                    h = hashlib.sha256()
+                    with p.open("rb") as fh:
+                        while chunk := fh.read(65536):
+                            h.update(chunk)
+                    manifest[rel_file.as_posix()] = h.hexdigest()
+                except OSError:
+                    pass
+        return manifest
+
+    for root, dirs, files_in_dir in os.walk(root_dir):
         rel_root = Path(root).relative_to(root_dir)
         if is_protected_path(rel_root):
             dirs[:] = []
             continue
-        for f in files:
+        for f in files_in_dir:
             rel_file = rel_root / f if str(rel_root) != "." else Path(f)
             if is_protected_path(rel_file):
                 continue
@@ -416,7 +435,7 @@ def verify_manifest(root_dir: Path) -> Tuple[bool, Optional[str]]:
     except Exception as exc:
         return False, f"讀取 MANIFEST.sha256 失敗：{exc}"
 
-    current = calculate_manifest(root_dir)
+    current = calculate_manifest(root_dir, files=expected.keys())
     for path, exp_sha in expected.items():
         if path not in current:
             return False, f"檔案遺失：{path}"
@@ -644,21 +663,6 @@ def restore_from_backup(install_dir: Path, backup_dir: Path) -> bool:
     if has_copy_error:
         log.error("還原過程中部分檔案複製失敗，標記為還原失敗。")
         return False
-
-    log.info("已從備份還原 %d 個檔案至 %s", restored_count, install_dir)
-    return True
-
-    # 3. 還原或移除 RELEASE.json
-    if (backup_dir / "RELEASE.json").exists():
-        try:
-            shutil.copy2(backup_dir / "RELEASE.json", install_dir / "RELEASE.json")
-        except OSError:
-            pass
-    elif (install_dir / "RELEASE.json").exists():
-        try:
-            (install_dir / "RELEASE.json").unlink()
-        except OSError:
-            pass
 
     log.info("已從備份還原 %d 個檔案至 %s", restored_count, install_dir)
     return True
@@ -1461,8 +1465,8 @@ class AutoUpdater:
                 previous_manifest_files=prev_manifest_files,
             )
 
-            # 產生新版本的 MANIFEST.sha256 與 RELEASE.json
-            new_manifest = calculate_manifest(self.install_dir)
+            # 產生新版本的 MANIFEST.sha256 與 RELEASE.json（僅記錄新版覆蓋之檔案，避免將非 repo 本機檔案記進清單）
+            new_manifest = calculate_manifest(self.install_dir, files=overwritten)
             write_manifest(self.install_dir, new_manifest)
             release_meta = {
                 "commit": target_commit,

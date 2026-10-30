@@ -12,6 +12,7 @@ deploy.env
 *.pem
 *.key
 backend-token
+*.token
 secrets*
 backend/config.json
 backend/config.local.json

@@ -28,14 +28,36 @@
    backend\run_backend.bat
    ```
    或直接 `py -3 -m backend`；背景執行用 `backend\start_hidden.cmd`（輸出寫進 `backend_out.log`／`backend_err.log`）。看到「桌寵後端 v0.1.0 啟動：http://0.0.0.0:8090/health」就好了，Ctrl+C 結束。
-5. 在 R7 本機測試：
+### 5. API 金鑰管理（PROPOSAL v2.7）
+
+後端採用「每台裝置一把金鑰、綁定 pet_ids」架構，設定檔中**僅儲存金鑰之 SHA-256 雜湊**，金鑰本體永不存入後端設定或日誌中。
+
+產生金鑰：
+```powershell
+py -3 -m backend.keys new --id pi-seed-001 --pet seed-001 --note "Pi 客廳桌寵" --output ~\.config\desktop-pet\backend-token
+```
+- 金鑰隨機生成並以權限 0600 寫入指定檔案（不印出至螢幕）。
+- 雜湊自動寫入 `backend/config.json`（或由 `PET_BACKEND_CONFIG` 指定之路徑）。
+- 查詢、啟用、停用與撤銷：
+  ```powershell
+  py -3 -m backend.keys list
+  py -3 -m backend.keys disable --id pi-seed-001
+  py -3 -m backend.keys enable --id pi-seed-001
+  py -3 -m backend.keys revoke --id pi-seed-001
+  ```
+
+### 6. 在 R7 本機測試：
    ```powershell
+   # 公開健康檢查（不帶金鑰只回 {"ok": true}）
    curl.exe http://127.0.0.1:8090/health
+
+   # 帶金鑰存取 API 或查詢詳細健康指標
    $body = [Text.Encoding]::UTF8.GetBytes('{"pet_id":"seed-001","text":"你好"}')
-   Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8090/v1/pet/talk -ContentType 'application/json; charset=utf-8' -Body $body
+   Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8090/v1/pet/talk -ContentType 'application/json; charset=utf-8' -Headers @{'X-Pet-Token'='<金鑰>'} -Body $body
+   Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8090/v1/health -Headers @{'X-Pet-Token'='<金鑰>'}
    ```
-   有設 `api_token` 時，`/v1/*` 要加標頭 `-Headers @{'X-Pet-Token'=...}`（token 從本機 backend/config.json 讀，不要貼在命令列歷史裡）。
-   帶 token 的 `/health` 裡 `llm.local.reachable` 是 `true` 代表連得到 llama-server；`/talk` 回覆的 `source` 是 `local` 代表是模型回的，`fallback` 代表用了備用台詞。
+   未設定金鑰時，`/v1/*` 預設回傳 503「後端未設定金鑰」（沒設定就不開放）；本機單元測試可設 `server.insecure_dev: true`（僅在綁定 127.0.0.1 時生效）。
+   帶金鑰的 `/v1/health` 裡 `llm.local.reachable` 是 `true` 代表連得到 llama-server；`/talk` 回覆的 `source` 是 `local` 代表是模型回的，`fallback` 代表用了備用台詞。
 
 ### Windows 防火牆（讓 Pi 連得到 8090）
 
@@ -78,7 +100,10 @@ python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 | 欄位 | 說明 |
 |---|---|
 | `server.host` / `server.port` | 監聽位址，預設 `0.0.0.0:8090` |
-| `server.api_token` | 留空不檢查（照片 API 例外：沒設就一律 403）；設定後所有 `/v1/*` 要帶 `X-Pet-Token`，裝置用 `--backend-token-file <檔案>` 帶上 |
+| `server.keys` | 每台裝置一把金鑰（陣列，只存 SHA-256，用 `python -m backend.keys new` 產生） |
+| `server.api_token` | 舊版共用金鑰（過渡期相容）；未設金鑰且未設 api_token 時，`/v1/*` 一律回 503（沒設定就不開放） |
+| `server.insecure_dev` | 僅限開發測試；只有綁定 `127.0.0.1` 時有效，允許無金鑰存取 `/v1/*` |
+| `server.trusted_proxies` | 信任之反向代理 IP 清單（預設 `["127.0.0.1", "::1"]`），僅在信任代理時採 `X-Forwarded-For` 最右側 IP |
 | `photos.retention` / `recent_in_record` | 每隻寵物保留幾張照片（預設 200）／存檔裡記幾筆最近照片（預設 20） |
 | `data_dir` | 存檔資料夾（相對路徑以 `backend/` 為準） |
 | `llm.local.base_url` / `model` / `timeout_s` / `retries` | 本機模型；之後換 1~3B 小模型只改這裡。llama-server 預設埠之後可能改成 9931，記得同步改 |
@@ -97,11 +122,12 @@ python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 |---|---|---|
 | POST | `/v1/pet/event` | 裝置回報事件，回傳指令 |
 | POST | `/v1/pet/talk` | 對寵物說話，回傳 LLM（或備用）回覆 + 指令 |
-| GET | `/v1/pet/<id>/state` | 存檔內容（心情、成長、短期記憶） |
-| GET | `/health` | 不帶 token 只回 `{ok, service, version}`；帶 token 才有 LLM 狀態 |
-| POST | `/v1/pet/photo?pet_id=&reason=&taken=` | 上傳 JPEG（body 是圖本身），回 `{ok, photo_id}`；一定要 token |
-| GET | `/v1/pet/<id>/photos[?limit=]` | 照片列表；一定要 token |
-| GET | `/v1/pet/<id>/photos/<photo_id>` | 取圖（image/jpeg）；一定要 token |
+| GET | `/v1/pet/<id>/state` | 存檔內容（心情、成長、短期記憶）；需金鑰且包含該 pet_id |
+| GET | `/health` | 公開健康檢查：未帶金鑰只回 `{"ok": true}` |
+| GET | `/v1/health` | 詳細健康檢查：需金鑰，回版本、uptime、LLM 狀態等指標 |
+| POST | `/v1/pet/photo?pet_id=&reason=&taken=` | 上傳 JPEG（body 是圖本身），回 `{ok, photo_id}`；需金鑰且限制 10 張/分 |
+| GET | `/v1/pet/<id>/photos[?limit=]` | 照片列表；需金鑰且包含該 pet_id |
+| GET | `/v1/pet/<id>/photos/<photo_id>` | 取圖（image/jpeg）；需金鑰且包含該 pet_id |
 
 事件範例：
 
