@@ -985,6 +985,7 @@ class AutoUpdaterCore:
             self.pin_commit = None
 
         self.lock = ProcessLock(self.state_dir / "autoupdate.lock")
+        self.last_affected: Optional[List[str]] = None
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
     def is_paused(self) -> Tuple[bool, Optional[str]]:
@@ -1348,6 +1349,7 @@ class AutoUpdaterCore:
             for pycache in root_extracted.rglob("__pycache__"):
                 shutil.rmtree(pycache, ignore_errors=True)
             affected = self.detect_affected(self.install_dir, root_extracted)
+            self.last_affected = affected
             log.info("受本次更新影響需重啟之服務：%s", affected if affected else "無（純文件/資源異動）")
 
             # 12. 建立現有版本備份（原子暫存保護，僅備份新版本對應之 sparse 範圍檔案）

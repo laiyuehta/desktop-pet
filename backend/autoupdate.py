@@ -241,8 +241,13 @@ def run_health_check_r7(
     target_commit: Optional[str] = None,
     timeout: float = DEFAULT_HEALTH_TIMEOUT,
     install_dir: Optional[Path] = None,
+    require_commit_match: bool = True,
 ) -> Tuple[bool, Optional[str]]:
-    """向 R7 後端 /health 發送請求並檢查狀態與伺服器回傳之 commit。"""
+    """向 R7 後端 /health 發送請求並檢查狀態與伺服器回傳之 commit。
+
+    若 require_commit_match=False（例如本次更新未更動 backend/ 或 shared/，後端未重啟），
+    則只要 /health 回傳 ok 即可放行，不要求伺服器 commit 與新 target_commit 一致。
+    """
     start_time = time.time()
     url = f"http://{host}:{port}/health"
     last_err: Optional[str] = None
@@ -250,6 +255,8 @@ def run_health_check_r7(
     while time.time() - start_time < timeout:
         body, headers = check_http_health_r7(url, timeout=3.0)
         if body and body.get("ok"):
+            if not require_commit_match:
+                return True, None
             # 從 Header X-Commit 或 body commit 取得伺服器執行的真實 commit
             server_commit = headers.get("x-commit") or body.get("commit")
             if target_commit:
@@ -301,6 +308,7 @@ class AutoUpdaterR7(AutoUpdaterCore):
         self.backend_host = self.env.get("PET_BACKEND_HOST", "127.0.0.1")
         self.backend_port = int(self.env.get("PET_BACKEND_PORT", "8090"))
         self.health_timeout = float(self.env.get("PET_AUTOUPDATE_HEALTH_TIMEOUT", DEFAULT_HEALTH_TIMEOUT))
+        self.last_affected: Optional[List[str]] = None
 
     def pre_switch_check(self, staged_dir: Path) -> Tuple[bool, Optional[str]]:
         return pre_switch_check_r7(staged_dir, install_dir=self.install_dir)
@@ -309,7 +317,9 @@ class AutoUpdaterR7(AutoUpdaterCore):
         return check_held_criteria_r7(new_dir, self.state_dir)
 
     def detect_affected(self, old_dir: Path, new_dir: Path) -> List[str]:
-        return detect_affected_r7(old_dir, new_dir)
+        affected = detect_affected_r7(old_dir, new_dir)
+        self.last_affected = affected
+        return affected
 
     def get_default_affected(self) -> List[str]:
         return ["desktop-pet-backend"]
@@ -322,6 +332,9 @@ class AutoUpdaterR7(AutoUpdaterCore):
         return True
 
     def restart_after_rollback(self) -> bool:
+        if self.last_affected is not None and "desktop-pet-backend" not in self.last_affected:
+            log.info("回退完成：本次更新未涉及後端，維持現有後端程序運行")
+            return True
         log.info("回退完成，結束後端程序以供自動重啟...")
         stop_backend_process(self.backend_port, supervise=True)
         return True
@@ -341,12 +354,21 @@ class AutoUpdaterR7(AutoUpdaterCore):
         return False, f"/health 無回應 ({url})"
 
     def run_health_check(self, target_commit: str) -> Tuple[bool, Optional[str]]:
+        require_commit_match = True
+        if self.last_affected is not None and "desktop-pet-backend" not in self.last_affected:
+            log.info(
+                "本次更新未涉及後端或共用模組 (affected=%s)，健康檢查僅驗證服務存活，略過 commit 比對",
+                self.last_affected,
+            )
+            require_commit_match = False
+
         return run_health_check_r7(
             host=self.backend_host,
             port=self.backend_port,
             target_commit=target_commit,
             timeout=self.health_timeout,
             install_dir=self.install_dir,
+            require_commit_match=require_commit_match,
         )
 
     def ensure_dependencies(self, staged_dir: Path) -> Tuple[bool, Optional[str]]:

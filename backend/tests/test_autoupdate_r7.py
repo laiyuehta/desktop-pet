@@ -151,6 +151,19 @@ class TestR7AutoupdateBasics(unittest.TestCase):
         self.assertIn("不符", reason_dev)
 
     @mock.patch("backend.autoupdate.check_http_health_r7")
+    def test_run_health_check_r7_require_commit_match_false_passes_on_commit_mismatch(self, mock_check_http):
+        mock_check_http.return_value = ({"ok": True}, {"x-commit": "old_commit_00000000000000000000000000000"})
+        ok, reason = run_health_check_r7(
+            host="127.0.0.1",
+            port=8090,
+            target_commit="new_commit_11111111111111111111111111111",
+            timeout=1.0,
+            require_commit_match=False,
+        )
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
+
+    @mock.patch("backend.autoupdate.check_http_health_r7")
     def test_run_health_check_r7_offline(self, mock_check_http):
         mock_check_http.return_value = (None, {})
         ok, reason = run_health_check_r7(host="127.0.0.1", port=8090, timeout=0.1)
@@ -339,6 +352,50 @@ class TestR7AutoUpdaterCycle(unittest.TestCase):
         # 4. 本機檔案未被破壞或刪除
         self.assertEqual((self.inst / "local_notes.txt").read_text(encoding="utf-8"), "my local notes")
         self.assertTrue((self.inst / "packs.moved-old" / "pack.json").is_file())
+
+    def test_frontend_only_commit_does_not_restart_backend_and_passes_health_check(self):
+        """Must-fix 2 驗證：當 commit 僅更動前端或文件時，R7 不重啟後端且健康檢查不因 commit 舊版而失敗。"""
+        (self.inst / "backend").mkdir()
+        (self.inst / "backend" / "server.py").write_text("server_v1", encoding="utf-8")
+        (self.inst / "RELEASE.json").write_text(json.dumps({
+            "commit": "old_commit_00000000000000000000000000000",
+            "short": "old_commit_0",
+        }), encoding="utf-8")
+        write_manifest(self.inst, calculate_manifest(self.inst))
+
+        new_commit = "9999999999999999999999999999999999999999"
+        tar_bytes = self._make_tarball({
+            "backend/server.py": "server_v1",
+            "frontend/app.py": "print('frontend update')",
+            "README.md": "updated docs",
+        })
+
+        running_health_resp = (
+            {"ok": True, "commit": "old_commit_00000000000000000000000000000"},
+            {"x-commit": "old_commit_00000000000000000000000000000"},
+        )
+
+        with mock.patch("shared.autoupdate.get_remote_commit", return_value=new_commit), \
+             mock.patch.object(self.updater, "pre_switch_check", return_value=(True, None)), \
+             mock.patch("backend.autoupdate.check_http_health_r7", return_value=running_health_resp), \
+             mock.patch("backend.autoupdate.stop_backend_process") as mock_stop_proc, \
+             mock.patch.object(self.updater, "restart_affected", wraps=self.updater.restart_affected) as spy_restart, \
+             mock.patch("urllib.request.urlopen", return_value=io.BytesIO(tar_bytes)):
+
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 0, "僅改前端之更新週期應成功返回 0")
+
+        # 斷言：
+        # 1. 8090 後端程序絕未被殺死
+        mock_stop_proc.assert_not_called()
+        # 2. restart_affected 絕未執行
+        spy_restart.assert_not_called()
+        # 3. RELEASE.json 更新為新 commit
+        rel_info = json.loads((self.inst / "RELEASE.json").read_text(encoding="utf-8"))
+        self.assertEqual(rel_info.get("commit"), new_commit)
+        # 4. failed.json 沒有記錄該 commit
+        failed = load_failed_json(self.state)
+        self.assertFalse(any(f.get("commit") == new_commit for f in failed))
 
     def test_scheduled_task_scripts_exist_and_valid(self):
         install_script = ROOT / "backend" / "autostart" / "install_update_task.ps1"
