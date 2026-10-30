@@ -144,8 +144,8 @@ class BackendApiTest(unittest.TestCase):
         r = api.post("/v1/pet/talk", {"pet_id": "p1", "text": "你好"})
         self.assertEqual(r["source"], "fallback")
         self.assertIn(r["say"], ["哈囉～", "你好呀！"])
-        # 測試目標為保護連線失敗時平滑退回 fallback，門檻避免綁緊特定機型與負載
-        self.assertLess(time.time() - t0, 3.5)
+        # 連線被拒為毫秒級，以 2.5s 門檻保護連線失敗平滑退回 fallback 且避免綁定特定負載
+        self.assertLess(time.time() - t0, 2.5)
         h = api.get("/health")
         self.assertTrue(h["ok"])
         self.assertFalse(h["llm"]["local"]["reachable"])
@@ -159,8 +159,9 @@ class BackendApiTest(unittest.TestCase):
             t0 = time.time()
             r = api.post("/v1/pet/talk", {"pet_id": "p1", "text": "你好"})
             self.assertEqual(r["source"], "fallback")
-            # timeout_s 為 1s，逾時後不應重試，放寬至 2.5s 避免慢速環境邊界抖動
-            self.assertLess(time.time() - t0, 2.5)
+            # 斷言只請求 1 次（逾時後不再重試），並保留時間門檻雙重保護
+            self.assertEqual(len(llm.calls), 1)
+            self.assertLess(time.time() - t0, 1.9)
         finally:
             llm.close()
 

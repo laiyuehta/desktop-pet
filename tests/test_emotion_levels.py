@@ -134,6 +134,18 @@ class EmotionBakeTest(unittest.TestCase):
             pk.close()
 
 
+def verify_manifest_emotions(tc: unittest.TestCase, m: dict) -> None:
+    all_states = list(STATES["states"])
+    for name in NEW_STATES:
+        with tc.subTest(name):
+            tc.assertIn(name, m["states"])
+            tc.assertEqual(list(m["transitions"][f"{name}>idle"]), ["0"])
+    for a in all_states:
+        for b in all_states:
+            if a != b:
+                tc.assertIn(f"{a}>{b}", m["transitions"])
+
+
 PACK = os.path.join(ROOT, "packs", "seed")
 
 
@@ -144,36 +156,26 @@ class EmotionFullPackTest(unittest.TestCase):
     def test_full_pack(self):
         with open(os.path.join(PACK, "manifest.json"), encoding="utf-8") as fh:
             m = json.load(fh)
-        self._verify_manifest_emotions(m)
-
-    def _verify_manifest_emotions(self, m: dict):
-        all_states = list(STATES["states"])
-        for name in NEW_STATES:
-            with self.subTest(name):
-                self.assertIn(name, m["states"])
-                self.assertEqual(list(m["transitions"][f"{name}>idle"]), ["0"])
-        for a in all_states:
-            for b in all_states:
-                if a != b:
-                    self.assertIn(f"{a}>{b}", m["transitions"])
+        verify_manifest_emotions(self, m)
 
 
-class EmotionSyntheticPackTest(unittest.TestCase):
-    """CI 環境下即使沒有實體 packs/seed，仍驗證 16 個狀態全配對 240 組的過渡片段規格。"""
+class EmotionAllTransitionsPackTest(unittest.TestCase):
+    """CI 環境下即使沒有實體 packs/seed，透過輕量真實 bake 覆蓋 16 個狀態全配對 240 組過渡片段。"""
 
-    def test_synthetic_240_pairs_structure(self):
-        all_states = list(STATES["states"])
-        self.assertEqual(len(all_states), 16)
-        pairs = {(a, b) for a in all_states for b in all_states if a != b}
-        self.assertEqual(len(pairs), 240)
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp()
+        cls.out = os.path.join(cls.dir, "seed")
+        # 覆蓋全部 16 個狀態，以 fps=1、無表情片段控制耗時與產出大小
+        cls.m = bake(cls.out, fps=1, expressions=[], preview=False, log=lambda *_: None)
 
-        # 模擬 bake() 產生的 manifest transitions 結構
-        m = {
-            "states": {s: {} for s in all_states},
-            "transitions": {f"{a}>{b}": {"0": {}} for a, b in pairs},
-        }
-        test_case = EmotionFullPackTest()
-        test_case._verify_manifest_emotions(m)
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def test_all_16_states_240_transitions_generated(self):
+        verify_manifest_emotions(self, self.m)
+        self.assertEqual(len(self.m["transitions"]), 240)
 
 
 class EmotionAppIntegrationTest(unittest.TestCase):

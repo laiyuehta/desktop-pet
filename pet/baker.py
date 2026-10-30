@@ -233,10 +233,11 @@ def bake(out_dir: str, bake_cfg: Optional[str] = None, states_cfg: Optional[str]
 
     trans_out: Dict[str, Dict[str, dict]] = {}
     if do_trans:
+        allowed_pairs = transition_pairs(sc, list(plan))
         n_tr = 0
         for a_name, A in plan.items():
             for b_name, B in plan.items():
-                if a_name == b_name:
+                if (a_name, b_name) not in allowed_pairs:
                     continue
                 anims = sk.animations
                 fade = max(c for c in (renderer.player.fade, anims[B["anim"]].fade_in, anims[A["anim"]].fade_out)
