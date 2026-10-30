@@ -3,12 +3,12 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend"))
 
 from pet.events import make_event  # noqa: E402
 from pet.state_machine import ClockEvents, StateMachine  # noqa: E402
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 with open(os.path.join(ROOT, "config", "states.json"), encoding="utf-8") as fh:
     CONFIG = json.load(fh)
 

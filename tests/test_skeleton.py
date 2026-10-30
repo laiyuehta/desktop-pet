@@ -2,12 +2,12 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend"))
 
 from pet.skeleton import (AnimationPlayer, Skeleton, blend_poses, mat_apply, mat_inverse,  # noqa: E402
                           mat_local, mat_mul, sample_track)
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
 MINI = {
     "name": "mini",

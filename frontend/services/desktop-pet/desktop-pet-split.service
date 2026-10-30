@@ -10,14 +10,14 @@ Type=simple
 # @USER@ / @HOME@ 是佔位，install.sh 依環境檔換成實際值；執行期設定由 EnvironmentFile=-/etc/desktop-pet/env 載入（見 deploy.env.example）
 User=@USER@
 Group=@USER@
-WorkingDirectory=@HOME@/desktop-pet
+WorkingDirectory=@HOME@/desktop-pet/frontend
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/desktop-pet/env
 RuntimeDirectory=desktop-pet
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes
 # 切換至後台模式：關閉主程式內建 web 與 wifi，改由 Unix sockets (/run/desktop-pet) 提供給 desktop-pet-admin
-ExecStart=/usr/bin/python3 @HOME@/desktop-pet/main.py --sink piscreen --input web --web off --wifi off --fps 20
+ExecStart=/usr/bin/python3 @HOME@/desktop-pet/frontend/main.py --sink piscreen --input web --web off --wifi off --fps 20
 Restart=always
 RestartSec=3
 TimeoutStopSec=15

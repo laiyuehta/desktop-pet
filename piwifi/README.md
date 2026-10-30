@@ -32,7 +32,7 @@
 ### 開發機交叉編譯（`aarch64-unknown-linux-musl`）
 
 ```bash
-cd services/piwifi
+cd piwifi
 
 # 1. 安裝 musl target（首次執行）
 rustup target add aarch64-unknown-linux-musl
@@ -52,7 +52,7 @@ ls -lh target/aarch64-unknown-linux-musl/release/piwifi
 ### 產生發行壓縮包（`dist/`）
 
 ```bash
-./services/piwifi/package.sh
+./piwifi/package.sh
 # 產出：
 #   dist/piwifi-0.1.0-aarch64-linux-musl.tar.gz
 #   dist/piwifi-0.1.0-aarch64-linux-musl.tar.gz.sha256
@@ -126,8 +126,8 @@ piwifi events
    systemctl status piwifi.service
    ps -o pid,user,rss,comm -C piwifi
    ```
-3. 執行 `piwifi status`、`piwifi scan`、`piwifi saved` 與 `/run/piwifi/status.json`，比對輸出是否與既有 `pet/wifi.py` 完全一致。
-4. 此階段主程式仍維持舊路徑（直接呼叫 `pet/wifi.py`），`piwifi` 絕不執行任何 `nmcli connection up/down/add/modify/delete`。
+3. 執行 `piwifi status`、`piwifi scan`、`piwifi saved` 與 `/run/piwifi/status.json`，比對輸出是否與既有 `frontend/pet/wifi.py` 完全一致。
+4. 此階段主程式仍維持舊路徑（直接呼叫 `frontend/pet/wifi.py`），`piwifi` 絕不執行任何 `nmcli connection up/down/add/modify/delete`。
 
 ### 階段二：正式切換（Switchover）
 
@@ -146,7 +146,7 @@ piwifi events
 
 ### 退回步驟（Rollback）
 
-若切換後發現任何異常，可在 30 秒內無縫退回原本的 `pet/wifi.py` 直呼模式，**已儲存的 Wi‑Fi 設定檔與目前連線完全不受影響**：
+若切換後發現任何異常，可在 30 秒內無縫退回原本的 `frontend/pet/wifi.py` 直呼模式，**已儲存的 Wi‑Fi 設定檔與目前連線完全不受影響**：
 
 ```bash
 # 1. 停止 piwifi 守護程式（或退回 --observe 模式）
@@ -154,9 +154,9 @@ sudo systemctl stop piwifi.service
 sudo systemctl disable piwifi.service
 
 # 2. 確保舊 polkit 規則存在（供主程式使用者直接呼叫 nmcli）
-sudo ./tools/wifi/install-wifi-setup.sh
+sudo ./frontend/tools/wifi/install.sh
 
-# 3. 將主程式切回內建 pet/wifi.py（移除 PET_WIFI_BACKEND=piwifi）並重啟
+# 3. 將主程式切回內建 frontend/pet/wifi.py（移除 PET_WIFI_BACKEND=piwifi）並重啟
 sudo systemctl restart desktop-pet.service
 ```
 

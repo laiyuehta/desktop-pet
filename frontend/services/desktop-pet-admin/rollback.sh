@@ -1,11 +1,11 @@
 #!/bin/sh
-# 回退前端後台切換（在 Pi 上執行）：sh services/desktop-pet-admin/rollback.sh
+# 回退前端後台切換（在 Pi 上執行）：sh frontend/services/desktop-pet-admin/rollback.sh
 # 停用 desktop-pet-admin，並將 desktop-pet 改回單體模式（--web 0.0.0.0:8080 --wifi auto）
 set -eu
 cd "$(dirname "$0")"
 
-PET_REPO_ROOT="$(cd ../.. && pwd)"
-. "$PET_REPO_ROOT/tools/deploy/common.sh"
+PET_REPO_ROOT="$(cd ../../.. && pwd)"
+. "$PET_REPO_ROOT/frontend/tools/deploy/common.sh"
 load_deploy_env
 require_sys_env --warn || true
 
@@ -24,7 +24,7 @@ fi
 sudo systemctl disable desktop-pet-admin 2>/dev/null || true
 
 tmp_pet=$(mktemp)
-render_template "$PET_REPO_ROOT/services/desktop-pet/desktop-pet.service" > "$tmp_pet" || { rm -f "$tmp_pet"; exit 1; }
+render_template "$PET_REPO_ROOT/frontend/services/desktop-pet/desktop-pet.service" > "$tmp_pet" || { rm -f "$tmp_pet"; exit 1; }
 sudo install -m 644 "$tmp_pet" "$PET_UNIT"
 rm -f "$tmp_pet"
 

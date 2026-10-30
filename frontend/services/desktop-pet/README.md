@@ -21,7 +21,7 @@
 
 2. **執行安裝／更新**：
    ```sh
-   sh ~/desktop-pet/services/desktop-pet/install.sh    # 安裝／更新（改 unit 參數後也跑這個）
+   sh ~/desktop-pet/frontend/services/desktop-pet/install.sh    # 安裝／更新（改 unit 參數後也跑這個）
    ```
 
 常用指令：
@@ -31,4 +31,4 @@ sudo systemctl enable --now desktop-pet              # 恢復
 sudo systemctl restart desktop-pet                   # 更新程式後重啟（不會動到 piscreen）
 journalctl -u desktop-pet -f                         # 日誌
 ```
-Wi‑Fi 管理用 polkit 規則 `/etc/polkit-1/rules.d/50-desktop-pet-wifi.rules`（看執行桌寵的使用者，`sudo sh tools/wifi/install.sh <使用者>` 安裝），在 systemd 服務裡照樣有效。
+Wi‑Fi 管理用 polkit 規則 `/etc/polkit-1/rules.d/50-desktop-pet-wifi.rules`（看執行桌寵的使用者，`sudo sh frontend/tools/wifi/install.sh <使用者>` 安裝），在 systemd 服務裡照樣有效。

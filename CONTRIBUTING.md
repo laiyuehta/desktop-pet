@@ -15,20 +15,20 @@
 7. **負責範圍**看 `.github/CODEOWNERS`；改到別人負責的路徑要在 PR 標出來，請負責的人確認。
 8. **不要放進 repo**：密碼、token、正式網址、區網 IP、Wi‑Fi 名稱、Windows 使用者路徑、照片、`deploy.env`、`/etc/desktop-pet/env`、`backend/config.json`。CI 會掃。新增的設定值一律做成環境變數並補進 `deploy.env.example`（見 PROPOSAL.md 16.2）。
 
-本機測試：`python -m pip install -r requirements.txt pytest && python -m pytest -q`（遙控頁的 script 測試需要 node）。
+本機測試：`python -m pip install -r frontend/requirements.txt -r backend/requirements.txt pytest && python -m pytest -q`（遙控頁的 script 測試需要 node）。
 
 ## Antigravity（AI 開發 agent）
 
 Antigravity 是使用者在自己的 Windows 電腦上跑的 AI 開發 agent，跟三個 bot 一樣是這個 repo 的開發者，**只透過 PR 貢獻**。分工見 PROPOSAL.md「15. 開發流程」的「負責範圍」。
 
 **負責**
-- Rust 守護程式：現在是 `services/piwifi/`，之後還有 `pitouch`、`piwheels`、`pigimbal`、`pimic`。
+- Rust 守護程式：現在是 `piwifi/`，之後還有 `pitouch`、`piwheels`、`pigimbal`、`pimic`。
 - 網頁介面：`desktop-pet-admin` 的頁面、R7 後端控制網頁。
-- 主程式的功能與重構，例如拆出前端後台：`main.py`、`pet/`、`backend/` 的程式。
+- 主程式的功能與重構，例如拆出前端後台：`frontend/main.py`、`frontend/pet/`、`backend/` 的程式。
 - 測試（`tests/`）與 CI 修正（`.github/workflows/`、`tools/ci/`）。
 
 **不碰**
-- 美術與動畫：`packs/`、`assets/`、`preview/`、動畫規格（桌寵專案機器人2 負責）。
+- 美術與動畫：`frontend/packs/`、`frontend/assets/`、`frontend/preview/`、動畫規格（桌寵專案機器人2 負責）。
 - 機器上的設定：`deploy.env`、`/etc/desktop-pet/env`、R7 的環境檔、`backend/config.json`。新增的設定值要做成環境變數（見項目書 16.2），在 PR 寫變數名稱，不寫值。
 - Pi 與 R7 上的任何東西，包括 piscreen。不改 piscreen 的程式，也不改 `piscreen.service`。
 - **不用 ssh 連 Pi 或 R7，不部署，不需要任何密碼、token 或金鑰。**
@@ -48,7 +48,7 @@ Antigravity 是使用者在自己的 Windows 電腦上跑的 AI 開發 agent，�
   ```bash
   sudo apt install python3 python3-venv python3-pip nodejs   # 要 Python 3.11 以上，CI 用 3.13
   python3 -m venv .venv && . .venv/bin/activate
-  pip install -r requirements.txt pytest
+  pip install -r frontend/requirements.txt -r backend/requirements.txt pytest
   python -m pytest -q
   ```
 - CI（Ubuntu、Python 3.13、node 22）是最後標準：本機沒辦法跑的測試，以 PR 上的 CI 結果為準。

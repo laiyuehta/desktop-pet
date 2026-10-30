@@ -17,37 +17,39 @@
 /.gitleaks.toml           @laiyuehta
 
 # 程式、網頁介面、Rust 守護程式、測試與 CI 修正：Antigravity（使用者在自己的 Windows 電腦上跑的 AI 開發 agent，只開 PR）
-/main.py                  @laiyueda12-star
-/pet/                     @laiyueda12-star
+/frontend/main.py         @laiyueda12-star
+/frontend/pet/            @laiyueda12-star
 /backend/                 @laiyueda12-star
-/services/                @laiyueda12-star
-/services/piwifi/         @laiyueda12-star
-/services/desktop-pet-admin/ @laiyueda12-star
+/frontend/services/       @laiyueda12-star
+/piwifi/                  @laiyueda12-star
+/frontend/services/desktop-pet-admin/ @laiyueda12-star
 /tests/                   @laiyueda12-star
 /.github/workflows/       @laiyueda12-star
-/requirements.txt         @laiyueda12-star
-/config/states.json       @laiyueda12-star
+/frontend/requirements.txt @laiyueda12-star
+/backend/requirements.txt @laiyueda12-star
+/frontend/config/states.json       @laiyueda12-star
 
 # 部署、實機驗收、規格、跨 bot 協調：桌寵專案機器人1
 /tools/                   @laiyuehta
-/tools/deploy/            @laiyuehta
-/tools/wifi/              @laiyuehta
-/services/*/install.sh    @laiyuehta
-/services/*/*.service     @laiyuehta
+/frontend/tools/          @laiyuehta
+/frontend/tools/deploy/   @laiyuehta
+/frontend/tools/wifi/     @laiyuehta
+/frontend/services/*/install.sh @laiyuehta
+/frontend/services/*/*.service  @laiyuehta
 /deploy.env.example       @laiyuehta
 # CI 檢查工具：Antigravity（要放在 /tools/ 後面才會蓋過）
 /tools/ci/                @laiyueda12-star
 
 # 美術與動畫：桌寵專案機器人2（包含素材工具與動畫規格）
-/packs/                   @laiyuehta
-/assets/                  @laiyuehta
-/preview/                 @laiyuehta
-/config/bake.json         @laiyuehta
+/frontend/packs/          @laiyuehta
+/frontend/assets/         @laiyuehta
+/frontend/preview/        @laiyuehta
+/frontend/config/bake.json         @laiyuehta
 /docs/emotion-levels.md   @laiyuehta
 /docs/anim/               @laiyuehta
-/tools/bake.py            @laiyuehta
-/tools/gen_seed_parts.py  @laiyuehta
-/tools/render_demo.py     @laiyuehta
+/frontend/tools/bake.py   @laiyuehta
+/frontend/tools/gen_seed_parts.py @laiyuehta
+/frontend/tools/render_demo.py @laiyuehta
 /tests/test_emotion_levels.py @laiyuehta
 
 # 公開與授權（桌寵專案機器人3 做過公開前整理與歷史改寫；之後改動由使用者核准）

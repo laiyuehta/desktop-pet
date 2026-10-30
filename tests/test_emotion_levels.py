@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend"))
 
 from pet.app import PetApp  # noqa: E402
 from pet.baker import bake  # noqa: E402
@@ -19,7 +19,7 @@ from pet.pack import AnimationPack  # noqa: E402
 from pet.skeleton import Skeleton  # noqa: E402
 from pet.state_machine import StateMachine  # noqa: E402
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 NEW_STATES = ["happy_1", "happy_2", "happy_3", "surprised_1", "surprised_2", "surprised_3",
               "sad_1", "sad_2", "sad_3", "shy", "annoyed_1", "annoyed_2"]
 OLD_STATES = ["idle", "happy", "bored", "sleep"]

@@ -1,13 +1,13 @@
 #!/bin/sh
-# 安裝／更新桌寵的開機自動啟動服務（在 Pi 上執行）：sh services/desktop-pet/install.sh
+# 安裝／更新桌寵的開機自動啟動服務（在 Pi 上執行）：sh frontend/services/desktop-pet/install.sh
 # 會：裝 unit → systemd-analyze verify → 停掉舊的（含 systemd-run 臨時 unit）→ daemon-reload → enable → start。
 # 不碰 piscreen.service、不碰 USB。停用：sudo systemctl disable --now desktop-pet
 set -eu
 cd "$(dirname "$0")"
 UNIT=/etc/systemd/system/desktop-pet.service
 # 部署值從 /etc/desktop-pet/env（或舊版 deploy.env）讀（不進 repo；只讀不寫）
-PET_REPO_ROOT="$(cd ../.. && pwd)"
-. "$PET_REPO_ROOT/tools/deploy/common.sh"
+PET_REPO_ROOT="$(cd ../../.. && pwd)"
+. "$PET_REPO_ROOT/frontend/tools/deploy/common.sh"
 load_deploy_env
 require_sys_env
 [ -n "$PET_BACKEND_URL" ] || { echo "環境檔（${PET_SYS_ENV:-/etc/desktop-pet/env} 或 deploy.env）沒設 PET_BACKEND_URL（見 deploy.env.example）" >&2; exit 1; }

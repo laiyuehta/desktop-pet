@@ -15,10 +15,10 @@ import pytest
 from pet.control_api import ControlAPIServer
 from pet.frames import FramesServer
 
-# 動態載入 services/desktop-pet-admin/admin.py
+# 動態載入 frontend/services/desktop-pet-admin/admin.py
 ADMIN_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "services", "desktop-pet-admin", "admin.py"
+    "frontend", "services", "desktop-pet-admin", "admin.py"
 )
 spec = importlib.util.spec_from_file_location("desktop_pet_admin", ADMIN_PATH)
 admin_mod = importlib.util.module_from_spec(spec)

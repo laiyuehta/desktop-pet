@@ -75,7 +75,7 @@ New-NetFirewallRule -DisplayName "DesktopPet Backend (TCP 8090, LAN only)" -Dire
 ### Pi 端接上後端
 
 ```bash
-python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
+python3 frontend/main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 ```
 
 網頁遙控（`http://192.0.2.43:8080/`）多了「跟寵物說話」輸入框；寵物說的話會以對話框顯示在螢幕上。
@@ -164,5 +164,5 @@ LLM 的 `intent`（`sleep/wake/nod/shake/play`）會轉成對應指令。
 ## 測試
 
 ```bash
-python3 -m unittest discover -s tests -v     # 用假 LLM 伺服器，不需要真的模型
+python3 -m unittest discover -s tests -t . -v     # 用假 LLM 伺服器，不需要真的模型
 ```

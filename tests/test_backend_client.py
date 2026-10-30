@@ -96,7 +96,7 @@ class DirectiveConversionTest(unittest.TestCase):
     def test_emotion_levels_single_source_of_truth(self):
         from pet.backend_client import EMOTION_MAX_LEVEL, load_emotion_levels
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(root, "config", "states.json"), encoding="utf-8") as fh:
+        with open(os.path.join(root, "frontend", "config", "states.json"), encoding="utf-8") as fh:
             cfg = json.load(fh)
         expected = cfg["emotions"]["levels"]
         self.assertEqual(EMOTION_MAX_LEVEL, expected)
@@ -320,7 +320,7 @@ class DeviceBackendTest(unittest.TestCase):
 
     def test_backend_client_max_levels_passed_from_app_config(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(root, "config", "states.json"), encoding="utf-8") as fh:
+        with open(os.path.join(root, "frontend", "config", "states.json"), encoding="utf-8") as fh:
             cfg = json.load(fh)
         cfg["emotions"]["levels"] = {"custom_emo": 2, "happy": 1}
         cfg["emotions"].setdefault("accept", {}).setdefault("*", []).append("custom_emo")
@@ -356,7 +356,7 @@ class DeviceBackendTest(unittest.TestCase):
 
     def test_app_without_emotions_falls_back_with_warning(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(root, "config", "states.json"), encoding="utf-8") as fh:
+        with open(os.path.join(root, "frontend", "config", "states.json"), encoding="utf-8") as fh:
             cfg = json.load(fh)
         del cfg["emotions"]
 

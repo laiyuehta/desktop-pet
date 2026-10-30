@@ -10,14 +10,14 @@ Type=simple
 # @USER@ / @HOME@ 是佔位，install.sh 依環境檔換成實際值；執行期設定由 EnvironmentFile=-/etc/desktop-pet/env 載入（見 deploy.env.example）
 User=@USER@
 Group=@USER@
-WorkingDirectory=@HOME@/desktop-pet
+WorkingDirectory=@HOME@/desktop-pet/frontend
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/desktop-pet/env
 RuntimeDirectory=desktop-pet
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes
 # 後端網址、token 檔、動畫包路徑等由環境變數（PET_BACKEND_URL、PET_BACKEND_TOKEN_FILE、PET_PACK_DIR 等）或內建預設決定
-ExecStart=/usr/bin/python3 @HOME@/desktop-pet/main.py --sink piscreen --input web --fps 20
+ExecStart=/usr/bin/python3 @HOME@/desktop-pet/frontend/main.py --sink piscreen --input web --fps 20
 Restart=always
 RestartSec=3
 TimeoutStopSec=15
