@@ -36,6 +36,7 @@ try:
         load_env,
         load_manifest,
         load_update_state,
+        parse_pip_timeout,
     )
     from shared.version import get_autoupdate_status, get_release_info
 except ImportError:
@@ -51,6 +52,7 @@ except ImportError:
             load_env,
             load_manifest,
             load_update_state,
+            parse_pip_timeout,
         )
         from shared.shared.version import get_autoupdate_status, get_release_info
     except ImportError:
@@ -67,6 +69,7 @@ except ImportError:
             check_manual_steps,
             load_env,
             load_manifest,
+            parse_pip_timeout,
         )
         from shared.version import get_autoupdate_status, get_release_info  # type: ignore
 
@@ -198,7 +201,7 @@ def _scan_relevant_r7_files(base_dir: Path) -> Set[str]:
 
 def detect_affected_r7(old_dir: Path, new_dir: Path) -> List[str]:
     """比對檔案差異決定是否需重啟後端（涵蓋修改、刪除與 requirements 異動）。
-    
+
     舊版比對集合取自 old_dir / MANIFEST.sha256（僅計算前版實際部署之檔案，排除本機未追蹤檔案）；
     若無 MANIFEST.sha256 則退回預設重啟。
     """
@@ -482,10 +485,8 @@ class AutoUpdaterR7(AutoUpdaterCore):
         if not req_file.exists():
             return True, None
 
-        try:
-            pip_timeout = int(self.env.get("PET_PIP_TIMEOUT", os.environ.get("PET_PIP_TIMEOUT", "600")))
-        except (ValueError, TypeError):
-            pip_timeout = 600
+        raw_timeout = self.env.get("PET_PIP_TIMEOUT", os.environ.get("PET_PIP_TIMEOUT", 600))
+        pip_timeout = parse_pip_timeout(raw_timeout, default=600)
         log.info("偵測到 requirements.txt 或 shared/ 變更，在 %s 執行 pip install ...", be_dir)
         try:
             res = subprocess.run(
