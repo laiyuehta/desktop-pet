@@ -507,10 +507,10 @@ class TestSymlinkSwitchAndPruning(unittest.TestCase):
         self.assertEqual(pet_dir.resolve(), legacy_dir.resolve())
         self.assertTrue((pet_dir / "packs" / "cat" / "a.png").exists())
 
-        # 連續進行 6 次發布與切換
+        # 連續進行 6 次發布與切換（使用未來時間戳以確保新版本時間晚於 legacy 遷移時間）
         cur_rel = legacy_dir
         for i in range(1, 7):
-            new_rel = releases_dir / f"20261030T00000{i}Z-rel{i}"
+            new_rel = releases_dir / f"20991030T00000{i}Z-rel{i}"
             new_rel.mkdir()
             (new_rel / "main.py").write_text(f"v{i}", encoding="utf-8")
             link_shared_resources(new_rel, cur_rel, home_dir=home_dir)
