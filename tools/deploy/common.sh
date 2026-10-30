@@ -46,16 +46,32 @@ load_deploy_env() {
     PET_BACKEND_URL="${PET_BACKEND_URL:-}"
 }
 
-# require_sys_env：檢查環境檔是否存在；若完全沒有環境檔則中止，若僅有舊版 deploy.env 則印警告相容
+# require_sys_env [--warn]：檢查環境檔是否存在；若完全沒有環境檔則中止（--warn 時僅印警告且回傳 0），若僅有舊版 deploy.env 則印警告相容
 require_sys_env() {
-    if [ -n "${PET_DEPLOY_ENV:-}" ]; then
-        if [ ! -f "$PET_DEPLOY_ENV" ]; then
-            echo "錯誤：PET_DEPLOY_ENV 指定的環境檔不存在：$PET_DEPLOY_ENV" >&2
-            return 1
-        fi
-        return 0
+    _warn_only=0
+    if [ "${1:-}" = "--warn" ] || [ "${1:-}" = "warn" ]; then
+        _warn_only=1
     fi
     _sys_env="${PET_SYS_ENV:-/etc/desktop-pet/env}"
+    if [ -n "${PET_DEPLOY_ENV:-}" ]; then
+        if [ -f "$PET_DEPLOY_ENV" ]; then
+            return 0
+        fi
+        if [ "$_warn_only" -eq 1 ]; then
+            if [ -f "$_sys_env" ]; then
+                echo "警告：PET_DEPLOY_ENV 指定的環境檔不存在：$PET_DEPLOY_ENV（已由 $_sys_env 載入設定）。" >&2
+                return 0
+            elif [ -f "$PET_REPO_ROOT/deploy.env" ]; then
+                echo "警告：PET_DEPLOY_ENV 指定的環境檔不存在：$PET_DEPLOY_ENV（目前暫由舊版 $PET_REPO_ROOT/deploy.env 提供設定）。" >&2
+                return 0
+            else
+                echo "警告：PET_DEPLOY_ENV 指定的環境檔不存在：$PET_DEPLOY_ENV（且無其他環境檔），回退後請盡快補齊設定。" >&2
+                return 0
+            fi
+        fi
+        echo "錯誤：PET_DEPLOY_ENV 指定的環境檔不存在：$PET_DEPLOY_ENV" >&2
+        return 1
+    fi
     if [ -f "$_sys_env" ]; then
         return 0
     fi
@@ -68,6 +84,10 @@ require_sys_env() {
         echo "  sudo cp \"$PET_REPO_ROOT/deploy.env\" \"$_sys_env\"" >&2
         echo "  sudo chown root:\"$u\" \"$_sys_env\"" >&2
         echo "  sudo chmod 640 \"$_sys_env\"" >&2
+        return 0
+    fi
+    if [ "$_warn_only" -eq 1 ]; then
+        echo "警告：找不到環境檔 $_sys_env（且無舊版 $PET_REPO_ROOT/deploy.env），回退後請盡快補齊設定。" >&2
         return 0
     fi
     echo "錯誤：找不到環境檔 $_sys_env（且無舊版 $PET_REPO_ROOT/deploy.env）。" >&2
