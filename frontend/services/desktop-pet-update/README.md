@@ -4,12 +4,12 @@
 
 ## 元件說明
 
-- **`tools/deploy/autoupdate.py`**：自動更新主程式（僅使用 Python 標準函式庫）。
+- **`frontend/tools/deploy/autoupdate.py`**：自動更新主程式（僅使用 Python 標準函式庫）。
   - 以 Git smart HTTP 查詢遠端 `main` 分支最新 commit（免 GitHub API 配額限制）。
   - 驗證 GitHub Actions CI check-runs（`tests (Python 3.13)` 與 `secrets & personal-info scan` 必過）。
   - 從 GitHub codeload 下載 tarball 並解壓至 `.staging/`，嚴格防止目錄穿越。
   - 執行切換前檢查（`compileall`、`main.py --help`、`autoupdate.py --self-test`）。
-  - 檢查手動步驟（`tools/deploy/manual-steps.txt`）與 16.7 項目（有改動時標記為 `held` 不自動切換）。
+  - 檢查手動步驟（`frontend/tools/deploy/manual-steps.txt`）與 16.7 項目（有改動時標記為 `held` 不自動切換）。
   - **原地備份＋覆蓋更新流程（In-place Backup & Overwrite）**：
     1. 拿鎖並通過 `PAUSE` / `PET_AUTOUPDATE=0` / dry-run 檢查。
     2. 將現有檔案複製至暫存備份資料夾，完成後原子取代舊備份；絕不預先清空舊備份，確保中途斷電或錯誤時備份完整。
@@ -86,19 +86,19 @@ python3 frontend/tools/deploy/autoupdate.py --rollback
 查詢目前更新狀態：
 
 ```sh
-python3 tools/deploy/autoupdate.py --status
+python3 frontend/tools/deploy/autoupdate.py --status
 ```
 
 模組自我檢測：
 
 ```sh
-python3 tools/deploy/autoupdate.py --self-test
+python3 frontend/tools/deploy/autoupdate.py --self-test
 ```
 
 手動清除失敗紀錄並重試先前失敗的 commit：
 
 ```sh
-python3 tools/deploy/autoupdate.py --retry
+python3 frontend/tools/deploy/autoupdate.py --retry
 ```
 
 ## 暫停更新
