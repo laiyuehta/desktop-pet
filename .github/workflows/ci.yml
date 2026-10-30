@@ -102,7 +102,9 @@ jobs:
         with:
           python-version: "3.13"
       - name: CI tool tests (tools/ci/tests)
-        run: python -m unittest discover -s tools/ci/tests -v
+        run: |
+          python -m pip install Pillow   # test_check_png_metadata 用 Pillow 產生測試 PNG
+          python -m unittest discover -s tools/ci/tests -v
       - name: Install gitleaks (pinned + checksum)
         run: |
           curl -sSfL -o /tmp/gitleaks.tgz \
