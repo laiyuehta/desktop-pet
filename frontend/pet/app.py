@@ -55,6 +55,10 @@ class PetApp:
         self.emotion_cfg: dict = self.config.get("emotions", {})
         self._input_streaks: Dict[str, dict] = {}
         self.fps = 0.0
+        self.frame_count = 0
+        self._last_version_check = 0.0
+        self._cached_version = None
+        self._cached_autoupdate = None
         self.started = time.time()
         self._status: dict = {}
         self.state_changed_ts = time.time()   # 最近一次狀態改變的事件時間（量反應延遲用）
@@ -99,6 +103,7 @@ class PetApp:
 
     # -- 每格 -------------------------------------------------------------------
     def step(self, dt: float) -> None:
+        self.frame_count += 1
         self.bus.dispatch_pending()
         self._sim_time += dt
         self.fsm.update(dt)
@@ -373,7 +378,20 @@ class PetApp:
             "bubble": self.renderer.bubble.text if self.renderer._bubble is not None else None,
             "last_say": getattr(self, "last_say", None),
             "render": dict(self.render_info) if self.render_info else {"mode": "live"},
+            "frame_count": self.frame_count,
+            "frame_seq": self.frame_count,
         }
+        now_mono = time.monotonic()
+        if now_mono - self._last_version_check >= 5.0 or self._cached_version is None:
+            self._last_version_check = now_mono
+            try:
+                from .version import get_release_info, get_autoupdate_status
+                self._cached_version = get_release_info()
+                self._cached_autoupdate = get_autoupdate_status()
+            except Exception:
+                pass
+        st["version"] = self._cached_version
+        st["autoupdate"] = self._cached_autoupdate
         with self._status_lock:
             self._status = st
 

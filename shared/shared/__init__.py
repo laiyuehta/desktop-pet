@@ -4,5 +4,7 @@
 - protocol：HTTP API 路徑、金鑰標頭、情緒／意圖清單
 - apikey：API 金鑰格式（產生、雜湊、讀金鑰檔）
 - envfile：KEY=VALUE 環境檔格式（PROPOSAL.md 16.2）
+- autoupdate：Pi 與 R7 共用的自動更新核心（PROPOSAL.md 16、#13、#14）
+- version：版本與更新狀態讀取
 """
-__all__ = ["protocol", "apikey", "envfile"]
+__all__ = ["protocol", "apikey", "envfile", "autoupdate", "version"]

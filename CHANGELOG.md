@@ -15,6 +15,32 @@
 - CI（`.github/workflows/ci.yml`）：Python 3.13 跑全部測試（含 node 檢查遙控頁 script）；gitleaks 掃 PR 差異與全部歷史；個人資訊檢查（`.gitleaks.toml` 的 personal 規則＋`tools/ci/check_personal.py` 雜湊比對）。
 - Antigravity 加入開發：`CONTRIBUTING.md` 新增它的負責範圍、禁止事項、流程、Windows（WSL2）測試方式與 Rust 編譯說明；項目書負責範圍表與 CODEOWNERS 同步。
 - CI 檢查 PNG 有沒有夾帶生成資料（`tools/ci/check_png_metadata.py`）：tEXt／zTXt／iTXt 的 prompt、workflow、parameters 等關鍵字，或任何超過 1 KB 的文字 chunk 都會失敗。
+- **自動部署（Pi 與 R7 自動更新器，#13、#14、PR #37）**：
+  - 共用更新核心模組 `shared/shared/autoupdate.py` 與 `shared/shared/version.py`：以 Git smart HTTP 查詢遠端 main 分支最新 commit、雙重驗證 GitHub Actions CI check-runs（`tests (Python 3.13)` 與 `secrets & personal-info scan` 必過）、安全解壓 codeload tarball。
+  - 原地「備份＋覆蓋」更新設計（依使用者決定全面取代多版本 symlink 與 junction 切換）：
+    - 取得 `autoupdate.lock` 行程鎖（Unix: `fcntl.flock`、Windows: `msvcrt.locking` 具備原子排他鎖定）並通過 `PAUSE`、`PET_AUTOUPDATE=0`、dry-run 檢查後才動檔案。
+    - 原子建立暫存備份（中途中斷舊備份完整無損）。
+    - 依平台 sparse 篩選：Pi 僅更新 `frontend/` 與 `shared/`（排除 `backend/` 與 `piwifi/`）；R7 僅更新 `backend/` 與 `shared/`（排除 `frontend/` 與 `piwifi/`）。
+    - 依賴變更時在現有 venv 重新執行 pip，絕不刪除或覆蓋 `frontend/.venv` 與 `backend/.venv`。
+    - `MANIFEST.sha256` 僅記錄新版覆蓋之檔案，回退時嚴格僅刪除新發布引入之檔案 `(newly_overwritten ∪ failed_manifest) - backup_manifest`，徹底保護非 repo 本機檔案（筆記、存檔、自訂包、`deploy.env`）在更新或回退過程中不被誤刪。
+    - 比對新舊版本（以舊版 `MANIFEST.sha256` 與新版發布掃描聯集比對）精確偵測刪檔與 requirements 變更，僅在實際影響時重啟對應服務，排除本機未追蹤檔案干擾。
+    - `affected` 受影響服務清單持久化記錄於 `update_state.json`，於手動或自動回退時依此紀錄決定是否重啟服務（未影響者維持運行不盲目重啟）。
+    - 外部行程呼叫全面設定 timeout 逾時防護，防止更新程式異常掛起佔用行程鎖；POSIX 下執行子行程（如 `ensure_frontend_venv` 與 pip）採用 `start_new_session=True` 獨立行程群組，逾時以 `os.killpg(SIGKILL)` 徹底清理孫行程，防止背景行程殘留持續修改虛擬環境；pip 逾時預設調升至 600 秒（支援 `PET_PIP_TIMEOUT` 自訂）。
+    - 切換後健康檢查：Pi 驗證 unit active、fps ≥ 18、畫面幀數遞增、piscreen 唯讀檢查，後端離線視為警告不阻擋；R7 公開 `/health` 回應 Header `X-Commit`、`/v1/health` 帶 `commit`，直接向伺服器連線比對真實執行 commit；失敗或覆蓋異常（如磁碟空間耗盡）自動自備份還原並記錄至 `failed.json`，後續週期不再自動嘗試同一 commit。
+    - 開機自檢（boot_check）與週期中斷自動復原：`run_cycle` 於起首主動偵測前次更新是否中斷或留在 `restarting` / `pending_boot_check`，先對目標版本驗證健康檢查，失敗立即自備份還原並寫入 `failed.json`，成功則標記為 `success`、清除 `held_commit.txt` 並清理暫停標記；若備份目錄不存在或回退失敗，明確標記為 `rollback_failed`、記錄於 `updates.jsonl` 並回傳失敗碼 1；`boot_check` 遇 `in_progress` 且 `pending_boot_check` 時正確執行健康檢查自檢而非誤觸斷電還原。
+    - 全面統一以 `load_manifest` 解析 `MANIFEST.sha256`（涵蓋 `create_backup`、`restore_from_backup`、候選備份與前次發布檔案清單），嚴格防範路徑穿越；`create_backup` 與 `restore_from_backup` 均校驗相對安裝目錄與暫存目錄邊界，絕不刪除或複製目錄外檔案。
+    - Pi 與 R7 依賴更新之 `PET_PIP_TIMEOUT` 解析防禦性處理非整數例外（預設 600 秒），並於 `deploy.env.example` 補上範本說明；Pi 更新器在 `frontend/.venv` 缺失時硬性報錯終止，移除 `sys.executable` 隱性退回（與 R7 一致）。
+    - 每輪週期嘗試皆記錄於 `updates.jsonl`；更新器支援 `--status` 狀態查詢與 `--retry` 重新嘗試失敗版本。
+  - Pi 服務與排程（`frontend/services/desktop-pet-update/`）：
+    - `desktop-pet-update.service`（oneshot）與 `desktop-pet-update.timer`（5 分鐘週期；預設檢查間隔 `PET_AUTOUPDATE_INTERVAL=300`，`--once` 受檢查間隔保護，`--force` 強制執行）。
+    - `desktop-pet-boot-check.service` 開機自檢服務。
+    - `51-desktop-pet-update.rules` polkit 規則：僅允許重啟 desktop-pet、desktop-pet-admin、picam、piwifi，嚴禁 touch piscreen、嚴禁重開機與 daemon-reload。
+  - R7 服務與排程（`backend/autostart/`）：
+    - `backend/autostart/install_update_task.ps1` 與 `uninstall_update_task.ps1`：建立/移除 Windows 工作排程器 `DesktopPet Update` 工作，背景隱藏每 5 分鐘執行一次 `autoupdate.py --once`，傳入 `--install-dir` 錨定 repo 根目錄。
+  - 單元測試完整覆蓋：
+    - `shared/tests/test_autoupdate.py`：測試 smart HTTP pkt-lines、CI check-runs 判定、安全解壓防穿越、保護路徑、連續兩次更新非 repo 檔案留存驗證、備份還原、跨平台檔案鎖與異常中斷回退。
+    - `frontend/tests/test_autoupdate.py`：測試 Pi systemd 重啟偵測、切換前檢查、held 條件、Pi 健康檢查、開機自檢與 polkit/systemd 模板。
+    - `backend/tests/test_autoupdate_r7.py`：測試 R7 後端變更偵測、R7 健康檢查與真實 commit 比對、R7 備份覆蓋週期、回退後重啟、兩週期更新與回退本機檔案留存驗證、Windows 排程腳本。
 - `.github/CODEOWNERS`、PR 範本、Issue 範本（Bug、任務）、`CONTRIBUTING.md`。
 
 ### 變更

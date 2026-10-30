@@ -1,0 +1,15 @@
+[Unit]
+Description=Desktop Pet Boot Self-Check & Recovery
+After=desktop-pet.service
+Wants=desktop-pet.service
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@HOME@/desktop-pet
+EnvironmentFile=-/etc/desktop-pet/env
+ExecStart=/usr/bin/python3 @HOME@/desktop-pet/frontend/tools/deploy/autoupdate.py --boot-check
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

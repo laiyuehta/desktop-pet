@@ -78,6 +78,19 @@
   <div class="dim" id="st-conn">連線中…</div>
 </div>
 
+<div class="card" id="deploy-card">
+  <h2>版本與部署</h2>
+  <div class="status">
+    <span>目前版本</span><span id="dep-commit">—</span>
+    <span>分支 / 標籤</span><span id="dep-describe">—</span>
+    <span>部署時間</span><span id="dep-time">—</span>
+    <span>自動更新</span><b id="dep-status">—</b>
+    <span>上次檢查</span><span id="dep-checked">—</span>
+    <span>檢查結果</span><span id="dep-check-result">—</span>
+  </div>
+  <div class="dim" id="dep-detail" style="margin-top:6px;word-break:break-all"></div>
+</div>
+
 <div class="card">
   <h2>跟寵物說話</h2>
   <form class="talk" id="talk-form">
@@ -234,6 +247,29 @@ async function poll() {
     renderStates(s);
     document.querySelectorAll("[data-stage]").forEach(b => b.classList.toggle("on", +b.dataset.stage === s.stage));
     $("#st-conn").textContent = "已連線 · 每秒更新";
+    const v = s.version || {};
+    const au = s.autoupdate || {};
+    if ($("#dep-commit")) {
+      if (v.commit && v.commit !== "dev" && v.commit !== "unknown" && /^[0-9a-fA-F]{7,40}$/.test(v.commit)) {
+        const cUrl = "https://github.com/laiyuehta/desktop-pet/commit/" + encodeURIComponent(v.commit);
+        $("#dep-commit").innerHTML = '<a href="' + cUrl + '" target="_blank" style="color:var(--acc)">' + esc(v.short || v.commit.slice(0, 12)) + '</a>';
+      } else {
+        $("#dep-commit").textContent = v.short || v.commit || "dev";
+      }
+      $("#dep-describe").textContent = v.describe || "—";
+      $("#dep-time").textContent = v.deployed_at || "—";
+      const stText = (au.status || "on").toUpperCase();
+      $("#dep-status").textContent = stText + (au.paused && au.pause_reason ? "（" + au.pause_reason + "）" : "");
+      $("#dep-checked").textContent = au.last_checked_at ? au.last_checked_at.replace("T", " ").replace(/\..+/, "") : "—";
+      $("#dep-check-result").textContent = au.last_check_result || "—";
+      if (au.status === "held" && au.pause_reason) {
+        $("#dep-detail").textContent = "需要手動安裝：" + au.pause_reason;
+      } else if (au.status === "broken" && au.pause_reason) {
+        $("#dep-detail").textContent = "狀態異常：" + au.pause_reason;
+      } else {
+        $("#dep-detail").textContent = "";
+      }
+    }
   } catch (e) {
     const banner = $("#admin-banner");
     if (banner) banner.style.display = "block";

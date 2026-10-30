@@ -1,0 +1,13 @@
+[Unit]
+Description=Desktop Pet Auto-Updater (Pi)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@HOME@/desktop-pet
+EnvironmentFile=-/etc/desktop-pet/env
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/usr/bin/python3 @HOME@/desktop-pet/frontend/tools/deploy/autoupdate.py --once

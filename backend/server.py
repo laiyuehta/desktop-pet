@@ -34,6 +34,7 @@ from urllib.parse import parse_qs
 
 from . import __version__
 from shared.protocol import PATH_EVENT, PATH_HEALTH, PATH_HEALTH_V1, PATH_PHOTO, PATH_TALK, TOKEN_HEADER
+from shared.version import get_release_info
 
 from .keys import hash_key, match_key, resolve_config_path
 from .mood import MoodEngine
@@ -73,6 +74,7 @@ class Brain:
         pcfg = cfg.get("photos") or {}
         self.photos = PhotoStore(cfg["data_dir"], int(pcfg.get("retention", 200)))
         self.started = time.time()
+        self.server_commit = str(get_release_info().get("commit", "dev"))
         self._health_cache: Tuple[float, Dict[str, Any]] = (0.0, {})
 
     # -- 共用 ---------------------------------------------------------------------
@@ -198,6 +200,7 @@ class Brain:
         except OSError:
             pets = 0
         return {"ok": True, "service": "desktop-pet-backend", "version": __version__,
+                "commit": self.server_commit,
                 "uptime_s": round(time.time() - self.started, 1), "pets": pets, "llm": cached}
 
 
@@ -427,7 +430,7 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
             path = self.path.split("?", 1)[0]
             if path == PATH_HEALTH:
                 # 公開健康檢查：不碰任何認證邏輯，固定只回 {"ok": true}，不記錯誤亦不觸發鎖定
-                self._json(200, {"ok": True})
+                self._json(200, {"ok": True}, headers={"X-Commit": getattr(brain, "server_commit", "dev")})
                 return
 
             if path == PATH_HEALTH_V1:

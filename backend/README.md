@@ -168,6 +168,64 @@ LLM 的 `intent`（`sleep/wake/nod/shake/play`）會轉成對應指令。
 4. 失敗（連不上、HTTP 錯誤、不是合格 JSON）重試一次；如果第一次已經花了超過一半逾時時間就不重試
 5. 還是失敗 → 備用台詞（`source: "fallback"`），對話永遠有回應
 
+## 自動更新（PROPOSAL.md 16、Issue #14）
+
+R7 後端支援拉取式自動更新（以「原地備份＋覆蓋」設計取代 junction 切換）：
+- **`backend\autoupdate.py`**：
+  - 以 Git smart HTTP 查詢遠端 `main` 分支最新 commit。
+  - 雙重檢查 CI check-runs（`tests (Python 3.13)` 與 `secrets & personal-info scan` 必過）。
+  - sparse 篩選：僅更新 `backend/` 與 `shared/`，不拉取 `frontend/` 或 `piwifi/`。
+  - 依賴管理：若 `backend/requirements.txt` 或 `shared/` 變更才重新安裝依賴，絕不刪除或覆蓋 `backend\.venv`。
+  - 保護機制：`config.json`、`data/`（寵物存檔）、`logs/`、`secrets/` 與非 repo 本機檔案全程保護。
+  - 重啟與自檢：結束 8090 連線由 supervisor 重啟，驗證 `/health` 正常且 commit 一致；失敗自動自備份還原並記錄至 `failed.json`。
+- **Windows 工作排程器（Task Scheduler）**：
+  - 安裝背景定時排程（每 5 分鐘執行一次 `--once`）：
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File backend\autostart\install_update_task.ps1
+    ```
+  - 移除定時排程：
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File backend\autostart\uninstall_update_task.ps1
+    ```
+- **手動操作指令**：
+  ```powershell
+  python backend\autoupdate.py --once       # 檢查更新（受間隔保護，預設 300 秒）
+  python backend\autoupdate.py --force      # 忽略間隔強制檢查與更新
+  python backend\autoupdate.py --retry      # 清除失敗標記並重新嘗試更新先前失敗之 commit
+  python backend\autoupdate.py --status     # 查詢目前版本與自動更新狀態
+  python backend\autoupdate.py --dry-run    # 模擬測試，不更動檔案與服務
+  python backend\autoupdate.py --rollback   # 手動從備份還原
+  python backend\autoupdate.py --boot-check # 開機自檢
+  ```
+
+### 一次性遷移與手動回退指引
+
+1. **初次設定與遷移至自動更新**：
+   - 確保已建立後端專用虛擬環境：
+     ```powershell
+     powershell -ExecutionPolicy Bypass -File backend\setup_venv.ps1
+     ```
+   - 註冊 Windows 工作排程器定時工作（自動傳入 `--install-dir` 指定 repo 根目錄）：
+     ```powershell
+     powershell -ExecutionPolicy Bypass -File backend\autostart\install_update_task.ps1
+     ```
+   - 驗證工作排程狀態與更新器功能：
+     ```powershell
+     python backend\autoupdate.py --status
+     python backend\autoupdate.py --self-test
+     ```
+
+2. **手動回退與復原程序**：
+   - 若更新後發現問題需立即回退：
+     ```powershell
+     python backend\autoupdate.py --rollback
+     ```
+   - 回退程式會完整自備份還原舊版本檔案、移除新版引入的新檔案、保留本機資料（`data/`、`logs/`、非 repo 檔案），並重啟後端程序。
+   - 檢視更新與回退歷史：
+     ```powershell
+     Get-Content -Tail 20 $env:LOCALAPPDATA\desktop-pet\state\update\updates.jsonl
+     ```
+
 ## 測試
 
 ```bash
