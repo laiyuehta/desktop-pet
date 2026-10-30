@@ -234,7 +234,10 @@ class TestProcessLock(unittest.TestCase):
         # 同一個 lock 物件重複 acquire 回傳 True
         self.assertTrue(lock.acquire())
         lock.release()
-        self.assertFalse(self.lock_file.exists())
+        # 釋放後檔案保留避免 unlink 競態，但後續 ProcessLock 可再次順利獲取
+        lock2 = ProcessLock(self.lock_file)
+        self.assertTrue(lock2.acquire())
+        lock2.release()
 
 
 if __name__ == "__main__":

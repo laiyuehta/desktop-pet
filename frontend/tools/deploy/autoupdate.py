@@ -193,8 +193,25 @@ def detect_affected_units(old_dir: Path, new_dir: Path) -> List[str]:
     if not old_dir.exists():
         return ["desktop-pet.service"]
 
-    old_manifest = calculate_manifest(old_dir)
-    new_manifest = calculate_manifest(new_dir)
+    # 僅針對 new_dir 中的 frontend/ 與 shared/ 檔案進行雜湊比對（排除 __pycache__ 與非執行文件/圖片）
+    relevant_files: List[str] = []
+    for root, dirs, files in os.walk(new_dir):
+        rel_root = Path(root).relative_to(new_dir)
+        if any(part in ("__pycache__", ".git", ".venv", "tests") for part in rel_root.parts):
+            dirs[:] = []
+            continue
+        for f in files:
+            if f.endswith(".pyc") or f.endswith(".md") or f.endswith(".txt") or f.endswith(".png") or f.endswith(".gif") or f.endswith(".webp"):
+                continue
+            rel_f = (rel_root / f if str(rel_root) != "." else Path(f)).as_posix()
+            if (
+                any(rel_f.startswith(prefix) for prefix in ("frontend/", "shared/", "pet/", "services/", "config/"))
+                or rel_f in ("main.py", "deploy.env.example")
+            ):
+                relevant_files.append(rel_f)
+
+    old_manifest = calculate_manifest(old_dir, files=relevant_files)
+    new_manifest = calculate_manifest(new_dir, files=relevant_files)
 
     changed_files: Set[str] = set()
     for p, sha in new_manifest.items():
@@ -206,12 +223,17 @@ def detect_affected_units(old_dir: Path, new_dir: Path) -> List[str]:
 
     units: Set[str] = set()
     for f in changed_files:
+        if "__pycache__" in f or f.endswith(".pyc"):
+            continue
         if any(f.startswith(prefix) for prefix in (
-            "frontend/main.py", "frontend/pet/", "frontend/assets/", "frontend/config/",
+            "frontend/main.py", "frontend/pet/", "frontend/config/",
             "main.py", "pet/", "config/", "shared/"
         )):
             units.add("desktop-pet.service")
-        if any(f.startswith(prefix) for prefix in ("frontend/pet/admin.py", "frontend/pet/web/admin", "pet/admin.py")):
+        if any(f.startswith(prefix) for prefix in (
+            "frontend/services/desktop-pet-admin/", "services/desktop-pet-admin/",
+            "frontend/pet/admin.py", "frontend/pet/web/admin", "pet/admin.py"
+        )):
             units.add("desktop-pet-admin.service")
         if any(f.startswith(prefix) for prefix in ("frontend/services/picam/", "services/picam/")):
             units.add("picam.service")
@@ -219,13 +241,16 @@ def detect_affected_units(old_dir: Path, new_dir: Path) -> List[str]:
     return sorted(units)
 
 
-def restart_units(units: List[str], systemctl_cmd: str = "systemctl") -> None:
-    """呼叫 systemctl 重啟指定 unit。"""
+def restart_units(units: List[str], systemctl_cmd: str = "systemctl") -> bool:
+    """呼叫 systemctl 重啟指定 unit。若重啟失敗回傳 False。"""
+    all_ok = True
     for u in units:
         log.info("正在重啟服務：%s", u)
         res = subprocess.run([systemctl_cmd, "restart", u], capture_output=True, text=True)
         if res.returncode != 0:
             log.warning("重啟服務 %s 失敗：%s", u, res.stderr.strip())
+            all_ok = False
+    return all_ok
 
 
 def run_health_check(
@@ -294,6 +319,24 @@ def run_health_check(
                     res = subprocess.run([systemctl_cmd, "is-active", "piscreen.service"], capture_output=True, text=True)
                     if res.returncode == 0 and res.stdout.strip() not in ("active", "activating"):
                         log.warning("piscreen 服務狀態異常：%s", res.stdout.strip())
+                    piscreen_stat = Path("/run/piscreen/status.json")
+                    if piscreen_stat.exists():
+                        try:
+                            ps_data = json.loads(piscreen_stat.read_text(encoding="utf-8"))
+                            if ps_data.get("rescues", 0) > 0 or ps_data.get("errors", 0) > 5:
+                                log.warning("piscreen 狀態檔顯示異常救援或錯誤：%s", ps_data)
+                        except Exception:
+                            pass
+
+                    # 4. picam 狀態檢查（若 picam 運行中則確認無嚴重錯誤）
+                    picam_stat = Path("/run/picam/status.json")
+                    if picam_stat.exists():
+                        try:
+                            pc_data = json.loads(picam_stat.read_text(encoding="utf-8"))
+                            if pc_data.get("errors", 0) > 0 and not pc_data.get("ok", True):
+                                log.warning("picam 服務回報異常狀態：%s", pc_data)
+                        except Exception:
+                            pass
                     return True, "all ok"
 
         time.sleep(poll_interval)
@@ -372,12 +415,52 @@ class AutoUpdaterPi(AutoUpdaterCore):
         return ["desktop-pet.service"]
 
     def restart_affected(self, affected: List[str]) -> bool:
-        restart_units(affected)
-        return True
+        self._last_affected = affected
+        return restart_units(affected)
 
     def restart_after_rollback(self) -> bool:
-        restart_units(["desktop-pet.service"])
-        return True
+        units = getattr(self, "_last_affected", None) or ["desktop-pet.service", "desktop-pet-admin.service", "picam.service"]
+        return restart_units(units)
+
+    def ensure_dependencies(self, staged_dir: Path) -> Tuple[bool, Optional[str]]:
+        new_req = staged_dir / "frontend" / "requirements.txt"
+        if not new_req.exists():
+            new_req = staged_dir / "requirements.txt"
+        if not new_req.exists():
+            return True, None
+
+        cur_req = self.install_dir / "frontend" / "requirements.txt"
+        if not cur_req.exists():
+            cur_req = self.install_dir / "requirements.txt"
+
+        need_pip = False
+        if not cur_req.exists():
+            need_pip = True
+        else:
+            try:
+                need_pip = (cur_req.read_bytes() != new_req.read_bytes())
+            except Exception:
+                need_pip = True
+
+        if not need_pip:
+            return True, None
+
+        log.info("偵測到前端 requirements.txt 變更，準備更新 frontend/.venv 依賴...")
+        py_venv = self.install_dir / "frontend" / ".venv" / "bin" / "python3"
+        if not py_venv.exists():
+            py_venv = self.install_dir / "frontend" / ".venv" / "bin" / "python"
+        if not py_venv.exists():
+            py_venv = Path(sys.executable)
+
+        res = subprocess.run(
+            [str(py_venv), "-m", "pip", "install", "-r", str(new_req)],
+            cwd=str(self.install_dir / "frontend" if (self.install_dir / "frontend").exists() else self.install_dir),
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            return False, f"pip 安裝依賴失敗：{res.stderr.strip() or res.stdout.strip()}"
+        return True, None
 
     def run_health_check(self, target_commit: str) -> Tuple[bool, Optional[str]]:
         ok, msg = run_health_check(self.env, affected_units=["desktop-pet.service"], timeout_sec=self.health_timeout)

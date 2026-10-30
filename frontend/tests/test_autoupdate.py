@@ -549,19 +549,21 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         (self.install_dir / "packs" / "cat").mkdir(parents=True)
         (self.install_dir / "packs" / "cat" / "sprite.png").write_text("cat_sprite", encoding="utf-8")
 
-        # 3. update_state.json 標記為 updating
+        # 3. update_state.json 標記為 updating，並模擬中斷引發之自動 PAUSE 檔
         write_update_state(self.state_dir, {
             "status": "updating",
             "target_commit": "cccccccccccccccccccccccccccccccccccccccc",
             "previous_commit": "1111111111111111111111111111111111111111",
         })
+        (self.state_dir / "PAUSE").write_text("本地檔案遭手動修改: 檔案遺失：main.py", encoding="utf-8")
 
         with mock.patch("tools.deploy.autoupdate.restart_units"):
             ok, msg = self.updater.boot_check()
             self.assertTrue(ok)
             self.assertEqual(msg, "power_cut_recovered")
 
-        # 斷言檔案已自備份還原
+        # 斷言檔案已自備份還原且自動 PAUSE 被清理
+        self.assertFalse((self.state_dir / "PAUSE").exists())
         self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1_intact')")
         # 斷言 packs 與 deploy.env 未受影響
         self.assertTrue((self.install_dir / "deploy.env").exists())
@@ -765,6 +767,114 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
             self.assertEqual(res, 1)
 
         # 驗證回退至 v1
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1_orig')")
+        failed = load_failed_json(self.state_dir)
+        self.assertTrue(any(f.get("commit") == new_commit for f in failed))
+
+    def test_first_update_failure_without_initial_manifest_cleans_manifest_and_allows_next_cycle(self):
+        # 1. 模擬線上 Pi 初次更新環境：
+        #    有 main.py、notes.txt、deploy.env，但完全沒有 MANIFEST.sha256 與 RELEASE.json
+        (self.install_dir / "main.py").write_text("print('v1_old')", encoding="utf-8")
+        (self.install_dir / "notes.txt").write_text("my notes", encoding="utf-8")
+        (self.install_dir / "deploy.env").write_text("URL=https://pet.example.com", encoding="utf-8")
+        self.assertFalse((self.install_dir / "MANIFEST.sha256").exists())
+
+        # 2. 模擬來自 GitHub 的真實 repo 結構 tarball
+        #    包含 frontend/main.py, frontend/new_feature.py, shared/shared/autoupdate.py
+        new_commit = "9999999999999999999999999999999999999999"
+        tar_bytes = self._make_tarball({
+            "frontend/main.py": "print('v2_crashes')",
+            "frontend/new_feature.py": "def new(): pass",
+            "shared/shared/autoupdate.py": "# shared v2",
+            "README.md": "# pet",
+        })
+
+        # 3. 第一次更新：切換後健康檢查失敗觸發回退
+        with mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value=new_commit), \
+             mock.patch("tools.deploy.autoupdate.pre_switch_check", return_value=(True, None)), \
+             mock.patch("tools.deploy.autoupdate.run_health_check", return_value=(False, "啟動異常")), \
+             mock.patch("tools.deploy.autoupdate.restart_units"), \
+             mock.patch("urllib.request.urlopen") as mock_url:
+            mock_url.return_value = io.BytesIO(tar_bytes)
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 1)
+
+        # 驗證回退保護：
+        # a. 舊檔案還原且本機資料 notes.txt 完好
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1_old')")
+        self.assertTrue((self.install_dir / "notes.txt").exists())
+        self.assertTrue((self.install_dir / "deploy.env").exists())
+        self.assertFalse((self.install_dir / "frontend" / "new_feature.py").exists())
+        # b. 關鍵 Must-fix 1：回退後 MANIFEST.sha256 必須被徹底刪除，不能遺留新版雜湊！
+        self.assertFalse((self.install_dir / "MANIFEST.sha256").exists())
+
+        # 4. 下一輪更新驗證：
+        #    確認下一輪不會因殘留 MANIFEST 而將缺失的 new_feature.py 誤判為「本地檔案遭手動修改」寫入 PAUSE！
+        good_commit = "8888888888888888888888888888888888888888"
+        good_tar = self._make_tarball({
+            "frontend/main.py": "print('v2_good')",
+        })
+        with mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value=good_commit), \
+             mock.patch("tools.deploy.autoupdate.pre_switch_check", return_value=(True, None)), \
+             mock.patch("tools.deploy.autoupdate.run_health_check", return_value=(True, None)), \
+             mock.patch("tools.deploy.autoupdate.restart_units"), \
+             mock.patch("urllib.request.urlopen") as mock_url:
+            mock_url.return_value = io.BytesIO(good_tar)
+            res2 = self.updater.run_cycle(force=True)
+            self.assertEqual(res2, 0)
+
+        # 驗證未被 PAUSE 阻擋且更新成功
+        self.assertFalse((self.state_dir / "PAUSE").exists())
+        self.assertEqual((self.install_dir / "frontend" / "main.py").read_text(encoding="utf-8"), "print('v2_good')")
+
+    def test_interrupted_in_progress_auto_recovers_and_cleans_automatic_pause(self):
+        # 模擬更新程序被 kill 或斷電：
+        # 1. 備份目錄完整存在
+        self.backup_dir.mkdir(parents=True)
+        (self.backup_dir / "main.py").write_text("print('v1_intact')", encoding="utf-8")
+        (self.backup_dir / "backup_manifest.json").write_text(json.dumps({"files": ["main.py"]}), encoding="utf-8")
+
+        # 2. install_dir 處於毀損狀態（被半途覆蓋）
+        (self.install_dir / "main.py").write_text("half_overwritten_garbage", encoding="utf-8")
+
+        # 3. 狀態為 in_progress
+        bad_commit = "7777777777777777777777777777777777777777"
+        write_update_state(self.state_dir, {
+            "status": "in_progress",
+            "target_commit": bad_commit,
+        })
+
+        # 4. 模擬先前曾因為檔案不完整被自動寫入 PAUSE（含「本地檔案遭手動修改」字樣）
+        (self.state_dir / "PAUSE").write_text("本地檔案遭手動修改: 檔案遺失：main.py", encoding="utf-8")
+
+        # 執行 run_cycle：自動偵測中斷並回退、清理自動 PAUSE
+        with mock.patch("tools.deploy.autoupdate.restart_units"):
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 0)
+
+        # 驗證檔案已自備份復原
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1_intact')")
+        # 驗證自動產生的 PAUSE 檔已被清除
+        self.assertFalse((self.state_dir / "PAUSE").exists())
+        # 驗證 failed.json 記錄了 interrupted
+        failed = load_failed_json(self.state_dir)
+        self.assertTrue(any(f.get("commit") == bad_commit and f.get("stage") == "interrupted" for f in failed))
+
+    def test_restart_units_failure_aborts_update_and_triggers_rollback(self):
+        (self.install_dir / "main.py").write_text("print('v1_orig')", encoding="utf-8")
+        write_manifest(self.install_dir, calculate_manifest(self.install_dir))
+        new_commit = "6666666666666666666666666666666666666666"
+        tar_bytes = self._make_tarball({"main.py": "print('v2_fail_restart')"})
+
+        with mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value=new_commit), \
+             mock.patch("tools.deploy.autoupdate.pre_switch_check", return_value=(True, None)), \
+             mock.patch("tools.deploy.autoupdate.restart_units", return_value=False), \
+             mock.patch("urllib.request.urlopen") as mock_url:
+            mock_url.return_value = io.BytesIO(tar_bytes)
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 1)
+
+        # 驗證重啟失敗中止切換並回退至 v1
         self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1_orig')")
         failed = load_failed_json(self.state_dir)
         self.assertTrue(any(f.get("commit") == new_commit for f in failed))

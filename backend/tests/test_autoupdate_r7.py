@@ -139,6 +139,17 @@ class TestR7AutoupdateBasics(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("不符", reason)
 
+        # 當伺服器回傳 "dev" 時，也必須嚴格視為 commit 不符而失敗（防止舊版或開發中伺服器放行）
+        mock_check_http.return_value = ({"ok": True}, {"x-commit": "dev"})
+        ok_dev, reason_dev = run_health_check_r7(
+            host="127.0.0.1",
+            port=8090,
+            target_commit="new_commit_11111111111111111111111111111",
+            timeout=1.0,
+        )
+        self.assertFalse(ok_dev)
+        self.assertIn("不符", reason_dev)
+
     @mock.patch("backend.autoupdate.check_http_health_r7")
     def test_run_health_check_r7_offline(self, mock_check_http):
         mock_check_http.return_value = (None, {})
@@ -272,7 +283,7 @@ class TestR7AutoUpdaterCycle(unittest.TestCase):
             self.assertTrue(ok)
             self.assertTrue(mock_run.called)
             kwargs = mock_run.call_args[1]
-            self.assertEqual(kwargs.get("cwd"), str(self.inst / "backend"))
+            self.assertEqual(Path(kwargs.get("cwd")).resolve(), (self.inst / "backend").resolve())
 
     def test_two_cycles_with_second_cycle_rollback_preserves_local_and_c1_files(self):
         """完整兩週期測試：第一週期成功升級至 C1，第二週期升級至 C2 失敗回退，驗證 C1 與本機檔案完整保留。"""

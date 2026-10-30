@@ -127,11 +127,6 @@ class ProcessLock:
                 except Exception:
                     pass
             fh.close()
-            try:
-                if self.lock_file.exists():
-                    self.lock_file.unlink()
-            except OSError:
-                pass
         except Exception as exc:
             log.debug("釋放鎖定檔案失敗：%s", exc)
 
@@ -285,7 +280,9 @@ def check_ci_runs(
         return "pending", "尚未有任何 CI check-runs 結果"
 
     latest_by_name: Dict[str, Dict[str, Any]] = {}
-    for r in runs:
+    # 依 id 升冪排序，確保同名檢查後續覆蓋時取到最新的 check_run
+    sorted_runs = sorted(runs, key=lambda x: x.get("id", 0))
+    for r in sorted_runs:
         name = r.get("name", "")
         latest_by_name[name] = r
 
@@ -309,10 +306,10 @@ def is_protected_path(rel: Path) -> bool:
     if not parts:
         return False
     top = parts[0]
-    if top in PROTECTED_ENTRIES or top.endswith(".lock"):
+    if top in PROTECTED_ENTRIES or top.endswith(".lock") or top.startswith("packs.moved"):
         return True
     for part in parts:
-        if part in PROTECTED_ENTRIES or part.endswith(".lock"):
+        if part in PROTECTED_ENTRIES or part.endswith(".lock") or part.startswith("packs.moved"):
             return True
     return False
 
@@ -551,6 +548,7 @@ def overwrite_release(
     backup_dir: Optional[Path] = None,
     previous_manifest_files: Optional[Set[str]] = None,
     sparse_subdirs: Optional[Set[str]] = None,
+    overwritten_collector: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[str]]:
     """覆蓋新版檔案至 install_dir，並依 previous_manifest_files 移除新版已刪之檔案。"""
     install_dir.mkdir(parents=True, exist_ok=True)
@@ -575,6 +573,8 @@ def overwrite_release(
             dst_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_file, dst_file)
             overwritten.append(rel_file.as_posix())
+            if overwritten_collector is not None:
+                overwritten_collector.append(rel_file.as_posix())
 
     # 2. 移除新版本已刪除的舊檔案（僅依上一版清單 previous_manifest_files 為準）
     deleted: List[str] = []
@@ -744,6 +744,11 @@ def restore_from_backup(
             shutil.copy2(backup_dir / "MANIFEST.sha256", install_dir / "MANIFEST.sha256")
         except OSError:
             pass
+    elif (install_dir / "MANIFEST.sha256").exists():
+        try:
+            (install_dir / "MANIFEST.sha256").unlink()
+        except OSError:
+            pass
 
     if has_copy_error:
         log.error("還原過程中部分檔案複製失敗，標記為還原失敗。")
@@ -817,9 +822,16 @@ def write_status_json(state_dir: Path, status_data: Dict[str, Any]) -> None:
     target.write_text(json.dumps(status_data, indent=2), encoding="utf-8")
 
 
-def append_updates_jsonl(state_dir: Path, entry: Dict[str, Any]) -> None:
+def append_updates_jsonl(state_dir: Path, entry: Dict[str, Any], max_bytes: int = 1_000_000) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     target = state_dir / "updates.jsonl"
+    try:
+        if target.exists() and target.stat().st_size > max_bytes:
+            lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+            keep_lines = lines[len(lines) // 2 :]
+            target.write_text("\n".join(keep_lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass
     with target.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -977,6 +989,12 @@ class AutoUpdaterCore:
     def is_paused(self) -> Tuple[bool, Optional[str]]:
         pause_file = self.state_dir / "PAUSE"
         if pause_file.exists():
+            try:
+                txt = pause_file.read_text(encoding="utf-8").strip()
+                if txt:
+                    return True, f"PAUSE: {txt}"
+            except Exception:
+                pass
             return True, "PAUSE 暫停檔存在"
         if self.env.get("PET_AUTOUPDATE") == "0" or os.environ.get("PET_AUTOUPDATE") == "0":
             return True, "環境變數 PET_AUTOUPDATE=0"
@@ -1035,79 +1053,121 @@ class AutoUpdaterCore:
     def check_http_json(self, url: str, timeout: float = 3.0, headers: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
         return check_http_json(url, timeout=timeout, headers=headers)
 
-    def boot_check(self) -> Tuple[bool, str]:
-        """開機自檢：檢查覆蓋中途中斷或更新後首度開機異常，自動復原。"""
-        paused, reason = self.is_paused()
-        if paused:
-            return True, f"更新已暫停 ({reason})，略過開機自檢還原"
-        if self.dry_run:
-            return True, "dry-run 模式，開機自檢略過還原"
-
-        st = load_update_state(self.state_dir)
-        status = st.get("status")
-
-        if status in ("in_progress", "updating"):
-            log.warning("偵測到前次更新中途中斷（status=%s），執行備份還原...", status)
-            if not self.backup_dir.exists():
-                return False, "前次更新中途中斷，但備份目錄不存在，無法還原！"
-            recovered = self.rollback()
-            record_failed_commit(self.state_dir, st.get("target_commit", "unknown"), "boot_check", "更新中途中斷（斷電），開機自檢自動還原")
-            return recovered, "power_cut_recovered" if recovered else "power_cut_recovery_failed"
-
-        if st.get("pending_boot_check") or status == "restarting":
-            target_commit = st.get("target_commit", "")
-            log.info("偵測到更新後首度開機自檢（target_commit: %s）", target_commit)
-            health_ok, fail_reason = self.run_health_check(target_commit)
-            if not health_ok:
-                log.error("首度開機健康檢查失敗：%s，啟動自動回退...", fail_reason)
-                if not self.backup_dir.exists():
-                    return False, f"開機健康檢查失敗 ({fail_reason})，且備份目錄不存在無法還原"
-                record_failed_commit(self.state_dir, target_commit, "boot_check", f"開機自檢失敗: {fail_reason}")
-                self.rollback()
-                st["pending_boot_check"] = False
-                st["status"] = "rolled_back"
-                write_update_state(self.state_dir, st)
-                return False, f"first_boot_failed_rolled_back: {fail_reason}"
-            st["pending_boot_check"] = False
-            st["status"] = "idle"
-            write_update_state(self.state_dir, st)
-            return True, "first_boot_success"
-
-        # 正常開機：檢查檔案完整性與服務狀態
+    def check_normal_boot_health(self) -> Tuple[bool, str]:
+        """正常開機健康檢查，支援重試容錯（至多 30 秒）。"""
         main_py = self.install_dir / "frontend" / "main.py"
         if not main_py.exists():
             main_py = self.install_dir / "main.py"
         if not main_py.exists():
             return False, "main.py 不存在"
 
-        # 檢查 /v1/status 或 /status
-        st_data = self.check_http_json("http://127.0.0.1:8080/v1/status", timeout=2.0)
-        if not st_data:
-            st_data = self.check_http_json("http://127.0.0.1:8080/status", timeout=2.0)
-        if not st_data:
-            return False, "/status 無回應"
+        start_t = time.time()
+        while time.time() - start_t < 30.0:
+            st_data = self.check_http_json("http://127.0.0.1:8080/v1/status", timeout=2.0)
+            if not st_data:
+                st_data = self.check_http_json("http://127.0.0.1:8080/status", timeout=2.0)
+            if st_data:
+                return True, "ok"
+            time.sleep(1.0)
+        return False, "/status 無回應"
 
-        return True, "ok"
+    def boot_check(self) -> Tuple[bool, str]:
+        """開機自檢：檢查覆蓋中途中斷或更新後首度開機異常，自動復原。"""
+        if not self.lock.acquire():
+            log.warning("開機自檢獲取鎖定失敗，已有其他程序持有鎖")
+            return False, "lock_busy"
+
+        try:
+            st = load_update_state(self.state_dir)
+            status = st.get("status")
+
+            # 1. 優先處理中途中斷：無論是否暫停，若處於 in_progress / updating 均必須先回退復原
+            if status in ("in_progress", "updating"):
+                log.warning("偵測到前次更新中途中斷（status=%s），執行備份還原...", status)
+                if not self.backup_dir.exists():
+                    return False, "前次更新中途中斷，但備份目錄不存在，無法還原！"
+                recovered = self.rollback()
+                record_failed_commit(self.state_dir, st.get("target_commit", "unknown"), "boot_check", "更新中途中斷（斷電），開機自檢自動還原")
+                # 若中斷曾自動引發暫停，清理該暫停標記
+                pause_f = self.state_dir / "PAUSE"
+                if pause_f.exists():
+                    try:
+                        if "本地檔案遭手動修改" in pause_f.read_text(encoding="utf-8"):
+                            pause_f.unlink()
+                    except Exception:
+                        pass
+                return recovered, "power_cut_recovered" if recovered else "power_cut_recovery_failed"
+
+            paused, reason = self.is_paused()
+            if paused:
+                return True, f"更新已暫停 ({reason})，略過開機自檢還原"
+            if self.dry_run:
+                return True, "dry-run 模式，開機自檢略過還原"
+
+            # 2. 首度開機自檢
+            if st.get("pending_boot_check") or status == "restarting":
+                target_commit = st.get("target_commit", "")
+                log.info("偵測到更新後首度開機自檢（target_commit: %s）", target_commit)
+                health_ok, fail_reason = self.run_health_check(target_commit)
+                if not health_ok:
+                    log.error("首度開機健康檢查失敗：%s，啟動自動回退...", fail_reason)
+                    if not self.backup_dir.exists():
+                        return False, f"開機健康檢查失敗 ({fail_reason})，且備份目錄不存在無法還原"
+                    record_failed_commit(self.state_dir, target_commit, "boot_check", f"開機自檢失敗: {fail_reason}")
+                    self.rollback()
+                    st["pending_boot_check"] = False
+                    st["status"] = "rolled_back"
+                    write_update_state(self.state_dir, st)
+                    return False, f"first_boot_failed_rolled_back: {fail_reason}"
+                st["pending_boot_check"] = False
+                st["status"] = "idle"
+                write_update_state(self.state_dir, st)
+                return True, "first_boot_success"
+
+            # 3. 正常開機：檢查檔案完整性與服務狀態（含重試容錯）
+            return self.check_normal_boot_health()
+        finally:
+            self.lock.release()
 
     def run_cycle(self, force: bool = False, retry: bool = False) -> int:
         """執行一次自動更新生命週期。"""
         now_ts = time.time()
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
+        if retry:
+            clear_failed_records(self.state_dir)
+
         if not self.lock.acquire():
             log.info("已有另一個更新程序在執行中，本次週期跳過")
             return 0
 
         try:
-            # 1. 檢查暫停與 dry-run
+            # 1. 檢查暫停與 dry-run（注意：手動 PAUSE、PET_AUTOUPDATE=0 或 dry-run 絕不動檔案與服務）
             paused, pause_reason = self.is_paused()
-            if paused:
+            if paused and "本地檔案遭手動修改" not in (pause_reason or ""):
                 log.info("自動更新已暫停：%s", pause_reason)
                 self._record_status("paused", pause_reason=pause_reason, check_result=f"已暫停: {pause_reason}")
                 return 0
 
             if self.dry_run:
                 log.info("[Dry Run] 僅執行檢查，不動任何檔案與服務。")
+                return 0
+
+            # 0. 檢查前次更新是否曾中途中斷（如斷電、kill、crash 導致留在 in_progress / updating）
+            st_pre = load_update_state(self.state_dir)
+            if st_pre.get("status") in ("in_progress", "updating"):
+                log.warning("偵測到前次更新程序異常中斷（status=%s），優先執行回退還原...", st_pre.get("status"))
+                if self.backup_dir.exists():
+                    self.rollback()
+                record_failed_commit(self.state_dir, st_pre.get("target_commit", "unknown"), "interrupted", "更新中途中斷，run_cycle 自動復原")
+                pause_f = self.state_dir / "PAUSE"
+                if pause_f.exists():
+                    try:
+                        if "本地檔案遭手動修改" in pause_f.read_text(encoding="utf-8"):
+                            pause_f.unlink()
+                            log.info("已清理因中途中斷產生的自動 PAUSE 標記")
+                    except Exception:
+                        pass
                 return 0
 
             # 2. 檢查間隔（給予 30 秒彈性容許 timer 週期微小誤差）
@@ -1184,6 +1244,16 @@ class AutoUpdaterCore:
                         })
                         return 0
 
+            # 6.5 檢查是否處於 held 狀態（避免每輪重複下載未改變之 held commit）
+            held_record_file = self.state_dir / "held_commit.txt"
+            if not force and not retry and held_record_file.exists():
+                try:
+                    if held_record_file.read_text(encoding="utf-8").strip() == target_commit:
+                        log.info("目標 commit %s 已被標記為 held，略過重複下載", target_commit[:12])
+                        return 0
+                except Exception:
+                    pass
+
             # 7. CI 狀態確認
             if self.require_ci:
                 ci_status, ci_reason = self.check_ci_runs(self.repo_url, target_commit)
@@ -1233,6 +1303,10 @@ class AutoUpdaterCore:
             is_held, held_reason = self.check_held_criteria(self.install_dir, root_extracted)
             if is_held:
                 log.warning("更新包含系統層級變更，標記為 held 並停止自動切換：%s", held_reason)
+                try:
+                    (self.state_dir / "held_commit.txt").write_text(target_commit, encoding="utf-8")
+                except Exception:
+                    pass
                 self._record_status("held", current_commit=current_commit, pause_reason=held_reason, check_result=f"需手動安裝: {held_reason}")
                 append_updates_jsonl(self.state_dir, {
                     "timestamp": now_iso, "target": self.target, "from_commit": current_commit,
@@ -1262,14 +1336,47 @@ class AutoUpdaterCore:
                 shutil.rmtree(staging_dir, ignore_errors=True)
                 return 0
 
-            # 11. 偵測哪些服務受影響
+            # 11. 偵測哪些服務受影響（比對前先清理 staging 中 compileall 產生的 __pycache__）
+            for pycache in root_extracted.rglob("__pycache__"):
+                shutil.rmtree(pycache, ignore_errors=True)
             affected = self.detect_affected(self.install_dir, root_extracted)
             log.info("受本次更新影響需重啟之服務：%s", affected if affected else "無（純文件/資源異動）")
 
-            # 12. 建立現有版本備份（原子暫存保護）
+            # 12. 建立現有版本備份（原子暫存保護，僅備份新版本對應之 sparse 範圍檔案）
             log.info("正在建立現有版本備份至 %s ...", self.backup_dir)
+            sparse_subdirs: Optional[Set[str]] = None
+            if self.target == "pi":
+                sparse_subdirs = {"frontend", "shared"}
+            elif self.target == "r7":
+                sparse_subdirs = {"backend", "shared"}
+
+            candidate_backup_files: Set[str] = set()
+            m_file = self.install_dir / "MANIFEST.sha256"
+            if m_file.exists():
+                try:
+                    for line in m_file.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            parts = line.split(None, 1)
+                            if len(parts) == 2:
+                                candidate_backup_files.add(parts[1].strip())
+                except Exception:
+                    pass
+
+            for root, dirs, f_list in os.walk(root_extracted):
+                rel_root = Path(root).relative_to(root_extracted)
+                if is_protected_path(rel_root):
+                    dirs[:] = []
+                    continue
+                for f in f_list:
+                    rel_f = rel_root / f if str(rel_root) != "." else Path(f)
+                    if is_protected_path(rel_f):
+                        continue
+                    if should_include_in_sparse(rel_f, sparse_subdirs):
+                        candidate_backup_files.add(rel_f.as_posix())
+
             try:
-                create_backup(self.install_dir, self.backup_dir)
+                create_backup(self.install_dir, self.backup_dir, files=candidate_backup_files)
             except Exception as exc:
                 log.error("建立備份失敗：%s", exc)
                 self._record_status("broken", current_commit=current_commit, check_result=f"建立備份失敗: {exc}")
@@ -1303,13 +1410,6 @@ class AutoUpdaterCore:
                     except Exception as exc:
                         log.warning("讀取現有 MANIFEST.sha256 失敗：%s", exc)
 
-                # 依 target 平台篩選 sparse 子目錄
-                sparse_subdirs: Optional[Set[str]] = None
-                if self.target == "pi":
-                    sparse_subdirs = {"frontend", "shared"}
-                elif self.target == "r7":
-                    sparse_subdirs = {"backend", "shared"}
-
                 # 清理 staging 中可能殘留的 __pycache__，避免被複製進安裝目錄
                 for pycache in root_extracted.rglob("__pycache__"):
                     shutil.rmtree(pycache, ignore_errors=True)
@@ -1320,6 +1420,7 @@ class AutoUpdaterCore:
                     self.backup_dir,
                     previous_manifest_files=prev_manifest_files,
                     sparse_subdirs=sparse_subdirs,
+                    overwritten_collector=overwritten_files,
                 )
                 overwritten_files = overwritten
 
@@ -1347,7 +1448,9 @@ class AutoUpdaterCore:
                 # 15. 重啟受影響服務
                 if affected:
                     log.info("正在重啟受影響服務：%s", affected)
-                    self.restart_affected(affected)
+                    restart_ok = self.restart_affected(affected)
+                    if not restart_ok:
+                        raise RuntimeError(f"重啟受影響服務失敗: {affected}")
 
                 # 標記狀態為 pending_boot_check
                 write_update_state(self.state_dir, {
@@ -1381,6 +1484,10 @@ class AutoUpdaterCore:
 
             # 17. 成功完成
             clear_failed_records(self.state_dir)
+            try:
+                (self.state_dir / "held_commit.txt").unlink()
+            except OSError:
+                pass
             write_update_state(self.state_dir, {
                 "status": "success",
                 "pending_boot_check": False,

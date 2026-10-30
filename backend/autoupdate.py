@@ -31,24 +31,39 @@ try:
         DEFAULT_INTERVAL,
         DEFAULT_REPO,
         AutoUpdaterCore,
+        calculate_manifest,
         check_manual_steps,
         load_env,
     )
     from shared.version import get_autoupdate_status, get_release_info
 except ImportError:
-    _shared_dir = Path(__file__).resolve().parents[1] / "shared"
-    if str(_shared_dir) not in sys.path:
-        sys.path.insert(0, str(_shared_dir))
-    from shared.autoupdate import (  # type: ignore
-        DEFAULT_BRANCH,
-        DEFAULT_HEALTH_TIMEOUT,
-        DEFAULT_INTERVAL,
-        DEFAULT_REPO,
-        AutoUpdaterCore,
-        check_manual_steps,
-        load_env,
-    )
-    from shared.version import get_autoupdate_status, get_release_info  # type: ignore
+    try:
+        from shared.shared.autoupdate import (
+            DEFAULT_BRANCH,
+            DEFAULT_HEALTH_TIMEOUT,
+            DEFAULT_INTERVAL,
+            DEFAULT_REPO,
+            AutoUpdaterCore,
+            calculate_manifest,
+            check_manual_steps,
+            load_env,
+        )
+        from shared.shared.version import get_autoupdate_status, get_release_info
+    except ImportError:
+        _shared_dir = Path(__file__).resolve().parents[1] / "shared"
+        if str(_shared_dir) not in sys.path:
+            sys.path.insert(0, str(_shared_dir))
+        from shared.autoupdate import (  # type: ignore
+            DEFAULT_BRANCH,
+            DEFAULT_HEALTH_TIMEOUT,
+            DEFAULT_INTERVAL,
+            DEFAULT_REPO,
+            AutoUpdaterCore,
+            calculate_manifest,
+            check_manual_steps,
+            load_env,
+        )
+        from shared.version import get_autoupdate_status, get_release_info  # type: ignore
 
 log = logging.getLogger("backend.autoupdate")
 
@@ -137,13 +152,25 @@ def check_held_criteria_r7(
 
 def detect_affected_r7(old_dir: Path, new_dir: Path) -> List[str]:
     """比對檔案差異決定是否需重啟後端。"""
-    from shared.autoupdate import calculate_manifest
-
     if not old_dir.exists():
         return ["desktop-pet-backend"]
 
-    old_manifest = calculate_manifest(old_dir)
-    new_manifest = calculate_manifest(new_dir)
+    # 僅針對 new_dir 中的 backend/ 與 shared/ 檔案進行雜湊比對（排除 __pycache__ 與非執行文件）
+    relevant_files: List[str] = []
+    for root, dirs, files in os.walk(new_dir):
+        rel_root = Path(root).relative_to(new_dir)
+        if any(part in ("__pycache__", ".git", ".venv", "tests") for part in rel_root.parts):
+            dirs[:] = []
+            continue
+        for f in files:
+            if f.endswith(".pyc") or f.endswith(".md") or f.endswith(".txt"):
+                continue
+            rel_f = (rel_root / f if str(rel_root) != "." else Path(f)).as_posix()
+            if rel_f.startswith("backend/") or rel_f.startswith("shared/"):
+                relevant_files.append(rel_f)
+
+    old_manifest = calculate_manifest(old_dir, files=relevant_files)
+    new_manifest = calculate_manifest(new_dir, files=relevant_files)
 
     changed_files: Set[str] = set()
     for p, sha in new_manifest.items():
@@ -153,16 +180,24 @@ def detect_affected_r7(old_dir: Path, new_dir: Path) -> List[str]:
         if p not in new_manifest:
             changed_files.add(p)
 
+    units: List[str] = []
     for f in changed_files:
-        if any(f.startswith(prefix) for prefix in ("backend/", "shared/")):
-            return ["desktop-pet-backend"]
+        if f.startswith("backend/autostart/supervise.py") and "desktop-pet-supervisor" not in units:
+            units.append("desktop-pet-supervisor")
+        if any(f.startswith(prefix) for prefix in ("backend/", "shared/")) and "desktop-pet-backend" not in units:
+            units.append("desktop-pet-backend")
 
-    return []
+    return units
 
 
-def stop_backend_process(port: int = 8090) -> None:
-    """結束佔用後端通訊埠的程序（讓 supervise.py 自動重啟）。"""
+def stop_backend_process(port: int = 8090, supervise: bool = False) -> None:
+    """結束佔用後端通訊埠的程序（讓 supervise.py 自動重啟）。若 supervise=True 則一併重啟 supervisor 工作。"""
     if os.name == "nt":
+        if supervise:
+            try:
+                subprocess.run(["schtasks", "/End", "/TN", "DesktopPet Backend"], capture_output=True)
+            except Exception:
+                pass
         # Windows: 用 netstat 找出 PID 並 taskkill
         try:
             out = subprocess.check_output(f'netstat -ano | findstr :{port}', shell=True, text=True)
@@ -175,6 +210,11 @@ def stop_backend_process(port: int = 8090) -> None:
                         subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
         except Exception:
             pass
+        if supervise:
+            try:
+                subprocess.run(["schtasks", "/Run", "/TN", "DesktopPet Backend"], capture_output=True)
+            except Exception:
+                pass
     else:
         # POSIX (CI/Linux 環境)
         try:
@@ -212,10 +252,10 @@ def run_health_check_r7(
         if body and body.get("ok"):
             # 從 Header X-Commit 或 body commit 取得伺服器執行的真實 commit
             server_commit = headers.get("x-commit") or body.get("commit")
-            if target_commit and server_commit:
-                if server_commit == target_commit or server_commit == "dev":
+            if target_commit:
+                if server_commit and (server_commit == target_commit or target_commit.startswith(server_commit)):
                     return True, None
-                last_err = f"後端回報 commit ({server_commit[:12]}) 與目標 commit ({target_commit[:12]}) 不符"
+                last_err = f"後端回報 commit ({server_commit}) 與目標 commit ({target_commit[:12]}) 不符"
             else:
                 return True, None
         time.sleep(1.0)
@@ -277,13 +317,28 @@ class AutoUpdaterR7(AutoUpdaterCore):
     def restart_affected(self, affected: List[str]) -> bool:
         if affected:
             log.info("重啟後端：結束現有後端程序以由 supervisor 自動重啟...")
-            stop_backend_process(self.backend_port)
+            supervise = "desktop-pet-supervisor" in affected
+            stop_backend_process(self.backend_port, supervise=supervise)
         return True
 
     def restart_after_rollback(self) -> bool:
         log.info("回退完成，結束後端程序以供自動重啟...")
-        stop_backend_process(self.backend_port)
+        stop_backend_process(self.backend_port, supervise=True)
         return True
+
+    def check_normal_boot_health(self) -> Tuple[bool, str]:
+        """R7 開機自檢健康檢查：確認 backend/server.py 存在並連線 /health。"""
+        server_py = self.install_dir / "backend" / "server.py"
+        if not server_py.exists():
+            return False, "backend/server.py 不存在"
+        start_t = time.time()
+        url = f"http://127.0.0.1:{self.backend_port}/health"
+        while time.time() - start_t < 30.0:
+            body, _ = check_http_health_r7(url, timeout=2.0)
+            if body and body.get("ok"):
+                return True, "ok"
+            time.sleep(1.0)
+        return False, f"/health 無回應 ({url})"
 
     def run_health_check(self, target_commit: str) -> Tuple[bool, Optional[str]]:
         return run_health_check_r7(
