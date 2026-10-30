@@ -49,6 +49,7 @@ try:
         is_protected_path,
         load_env,
         load_failed_json,
+        load_manifest,
         load_update_state,
         overwrite_release,
         parse_pkt_lines,
@@ -86,6 +87,7 @@ except ImportError:
         is_protected_path,
         load_env,
         load_failed_json,
+        load_manifest,
         load_update_state,
         overwrite_release,
         parse_pkt_lines,
@@ -157,9 +159,12 @@ def pre_switch_check(
 
     # 1. compileall
     fe_dir = candidate_dir / "frontend" if (candidate_dir / "frontend").is_dir() else candidate_dir
-    res = subprocess.run([py, "-m", "compileall", "-q", str(fe_dir)], capture_output=True, text=True)
-    if res.returncode != 0:
-        return False, f"compileall 檢查失敗：{res.stderr.strip() or res.stdout.strip()}"
+    try:
+        res = subprocess.run([py, "-m", "compileall", "-q", str(fe_dir)], capture_output=True, text=True, timeout=60)
+        if res.returncode != 0:
+            return False, f"compileall 檢查失敗：{res.stderr.strip() or res.stdout.strip()}"
+    except Exception as exc:
+        return False, f"compileall 異常或逾時：{exc}"
 
     # 2. main.py --help
     main_py = candidate_dir / "frontend" / "main.py"
@@ -172,9 +177,12 @@ def pre_switch_check(
         cand_fe = candidate_dir / "frontend"
         extra_paths = [str(cand_fe), str(cand_shared), str(candidate_dir)]
         env_copy["PYTHONPATH"] = os.pathsep.join(extra_paths + [env_copy.get("PYTHONPATH", "")])
-        res = subprocess.run([py, str(main_py), "--help"], capture_output=True, text=True, env=env_copy)
-        if res.returncode != 0:
-            return False, f"main.py --help 檢查失敗：{res.stderr.strip() or res.stdout.strip()}"
+        try:
+            res = subprocess.run([py, str(main_py), "--help"], capture_output=True, text=True, env=env_copy, timeout=30)
+            if res.returncode != 0:
+                return False, f"main.py --help 檢查失敗：{res.stderr.strip() or res.stdout.strip()}"
+        except Exception as exc:
+            return False, f"main.py --help 異常或逾時：{exc}"
 
     # 3. autoupdate.py --self-test
     up_py = candidate_dir / "frontend" / "tools" / "deploy" / "autoupdate.py"
@@ -182,11 +190,30 @@ def pre_switch_check(
         up_py = candidate_dir / "tools" / "deploy" / "autoupdate.py"
 
     if up_py.exists():
-        res = subprocess.run([py, str(up_py), "--self-test"], capture_output=True, text=True)
-        if res.returncode != 0:
-            return False, f"autoupdate.py --self-test 失敗：{res.stderr.strip() or res.stdout.strip()}"
+        try:
+            res = subprocess.run([py, str(up_py), "--self-test"], capture_output=True, text=True, timeout=30)
+            if res.returncode != 0:
+                return False, f"autoupdate.py --self-test 失敗：{res.stderr.strip() or res.stdout.strip()}"
+        except Exception as exc:
+            return False, f"autoupdate.py --self-test 異常或逾時：{exc}"
 
     return True, None
+
+
+def _is_relevant_pi_file(rel_f: str) -> bool:
+    """判斷指定相對路徑是否屬於受控之 Pi 檔案（排除 __pycache__、非執行文字檔與圖片/文件）。"""
+    parts = Path(rel_f).parts
+    if any(part in ("__pycache__", ".git", ".venv", "tests") for part in parts):
+        return False
+    if rel_f.endswith(".pyc") or rel_f.endswith(".md") or rel_f.endswith(".png") or rel_f.endswith(".gif") or rel_f.endswith(".webp"):
+        return False
+    # 排除非 requirements 的純文字檔（例如 notes.txt）
+    if rel_f.endswith(".txt") and "requirements" not in rel_f.lower():
+        return False
+    return (
+        any(rel_f.startswith(prefix) for prefix in ("frontend/", "shared/", "pet/", "services/", "config/"))
+        or rel_f in ("main.py", "deploy.env.example", "requirements.txt")
+    )
 
 
 def _scan_relevant_pi_files(base_dir: Path) -> Set[str]:
@@ -200,29 +227,41 @@ def _scan_relevant_pi_files(base_dir: Path) -> Set[str]:
             dirs[:] = []
             continue
         for f in files:
-            if f.endswith(".pyc") or f.endswith(".md") or f.endswith(".png") or f.endswith(".gif") or f.endswith(".webp"):
-                continue
-            # 排除非 requirements 的純文字檔（例如 notes.txt）
-            if f.endswith(".txt") and "requirements" not in f.lower():
-                continue
             rel_f = (rel_root / f if str(rel_root) != "." else Path(f)).as_posix()
-            if (
-                any(rel_f.startswith(prefix) for prefix in ("frontend/", "shared/", "pet/", "services/", "config/"))
-                or rel_f in ("main.py", "deploy.env.example", "requirements.txt")
-            ):
+            if _is_relevant_pi_file(rel_f):
                 files_found.add(rel_f)
     return files_found
 
 
 def detect_affected_units(old_dir: Path, new_dir: Path) -> List[str]:
-    """比對新舊版本檔案差異，決定需重啟之 systemd unit（涵蓋修改、刪除與 requirements 異動）。"""
+    """比對新舊版本檔案差異，決定需重啟之 systemd unit（涵蓋修改、刪除與 requirements 異動）。
+    
+    舊版比對集合取自 old_dir / MANIFEST.sha256（僅計算前版實際部署之檔案，排除本機未追蹤檔案）；
+    若無 MANIFEST.sha256 則退回預設重啟。
+    """
     if not old_dir.exists():
         return ["desktop-pet.service"]
 
-    # 聯集舊版與新版之檔案清單，確保新版刪檔與修改皆能比對
-    relevant_files = sorted(_scan_relevant_pi_files(old_dir) | _scan_relevant_pi_files(new_dir))
+    manifest_file = old_dir / "MANIFEST.sha256"
+    if not manifest_file.exists():
+        log.info("舊版目錄缺少 MANIFEST.sha256，退回預設重啟 desktop-pet")
+        return ["desktop-pet.service"]
+
+    manifest_entries = load_manifest(manifest_file)
+    if not manifest_entries:
+        log.info("MANIFEST.sha256 為空或讀取失敗，退回預設重啟 desktop-pet")
+        return ["desktop-pet.service"]
+
+    old_files = {p for p in manifest_entries if _is_relevant_pi_file(p)}
+    new_files = _scan_relevant_pi_files(new_dir)
+    relevant_files = sorted(old_files | new_files)
 
     old_manifest = calculate_manifest(old_dir, files=relevant_files)
+    # 確保 MANIFEST 中記錄的舊版檔案仍保留其紀錄（用於比對新版已刪除檔案）
+    for p in old_files:
+        if p not in old_manifest and p in manifest_entries:
+            old_manifest[p] = manifest_entries[p]
+
     new_manifest = calculate_manifest(new_dir, files=relevant_files)
 
     changed_files: Set[str] = set()
@@ -259,9 +298,13 @@ def restart_units(units: List[str], systemctl_cmd: str = "systemctl") -> bool:
     all_ok = True
     for u in units:
         log.info("正在重啟服務：%s", u)
-        res = subprocess.run([systemctl_cmd, "restart", u], capture_output=True, text=True)
-        if res.returncode != 0:
-            log.warning("重啟服務 %s 失敗：%s", u, res.stderr.strip())
+        try:
+            res = subprocess.run([systemctl_cmd, "restart", u], capture_output=True, text=True, timeout=60)
+            if res.returncode != 0:
+                log.warning("重啟服務 %s 失敗：%s", u, res.stderr.strip())
+                all_ok = False
+        except Exception as exc:
+            log.warning("重啟服務 %s 異常或逾時：%s", u, exc)
             all_ok = False
     return all_ok
 
@@ -299,8 +342,12 @@ def run_health_check(
         # 1. 檢查 unit 是否 active
         units_ok = True
         for u in units:
-            res = subprocess.run([systemctl_cmd, "is-active", u], capture_output=True, text=True)
-            if res.stdout.strip() != "active":
+            try:
+                res = subprocess.run([systemctl_cmd, "is-active", u], capture_output=True, text=True, timeout=10)
+                if res.stdout.strip() != "active":
+                    units_ok = False
+                    break
+            except Exception:
                 units_ok = False
                 break
         if not units_ok:
@@ -329,9 +376,12 @@ def run_health_check(
 
                 if seq_increased or frame_seq is None:
                     # 3. piscreen 唯讀檢查（確保未被停止且正常運行）
-                    res = subprocess.run([systemctl_cmd, "is-active", "piscreen.service"], capture_output=True, text=True)
-                    if res.returncode == 0 and res.stdout.strip() not in ("active", "activating"):
-                        log.warning("piscreen 服務狀態異常：%s", res.stdout.strip())
+                    try:
+                        res = subprocess.run([systemctl_cmd, "is-active", "piscreen.service"], capture_output=True, text=True, timeout=10)
+                        if res.returncode == 0 and res.stdout.strip() not in ("active", "activating"):
+                            log.warning("piscreen 服務狀態異常：%s", res.stdout.strip())
+                    except Exception:
+                        pass
                     piscreen_stat = Path("/run/piscreen/status.json")
                     if piscreen_stat.exists():
                         try:
@@ -411,12 +461,23 @@ class AutoUpdaterPi(AutoUpdaterCore):
         return check_http_json(url, timeout=timeout, headers=headers)
 
     def pre_switch_check(self, staged_dir: Path) -> Tuple[bool, Optional[str]]:
-        # 優先尋找 frontend/.venv 中的 python
-        py_venv = self.install_dir / "frontend" / ".venv" / "bin" / "python3"
-        if not py_venv.exists():
-            py_venv = self.install_dir / "frontend" / ".venv" / "bin" / "python"
-        py_cmd = str(py_venv) if py_venv.exists() else sys.executable
-        return pre_switch_check(staged_dir, python_cmd=py_cmd)
+        # 尋找服務實際使用的 python（frontend/.venv 或 .venv）
+        search_dirs = [self.install_dir / "frontend" / ".venv", self.install_dir / ".venv"]
+        py_venv = None
+        for base in search_dirs:
+            for sub in ("bin", "Scripts"):
+                for name in ("python", "python3", "python.exe", "python3.exe"):
+                    cand = base / sub / name
+                    if cand.is_file():
+                        py_venv = cand
+                        break
+                if py_venv:
+                    break
+            if py_venv:
+                break
+        if not py_venv:
+            return False, f"找不到服務虛擬環境 Python (預期路徑：{self.install_dir / 'frontend' / '.venv'})，無法進行切換前檢查"
+        return pre_switch_check(staged_dir, python_cmd=str(py_venv))
 
     def check_held_criteria(self, old_dir: Path, new_dir: Path) -> Tuple[bool, Optional[str]]:
         return check_held_criteria(old_dir, new_dir, state_dir=self.state_dir, target_platform="pi")
@@ -480,22 +541,27 @@ class AutoUpdaterPi(AutoUpdaterCore):
             common_sh = staged_dir / "frontend" / "tools" / "deploy" / "common.sh"
 
         sh_bin = shutil.which("bash") or shutil.which("sh")
-        if common_sh.exists() and sh_bin and (os.name != "nt" or getattr(self, "_force_common_sh", False)):
+        if common_sh.exists() and sh_bin and os.name != "nt":
             env_copy = os.environ.copy()
             env_copy["PET_REPO_ROOT"] = str(self.install_dir)
             log.info("呼叫 common.sh ensure_frontend_venv 更新前端虛擬環境與依賴...")
-            res = subprocess.run(
-                [sh_bin, "-c", '. "$1" && ensure_frontend_venv', "sh", str(common_sh)],
-                cwd=str(self.install_dir / "frontend" if (self.install_dir / "frontend").exists() else self.install_dir),
-                capture_output=True,
-                text=True,
-                env=env_copy,
-            )
-            if res.returncode != 0:
-                err_msg = res.stderr.strip() or res.stdout.strip()
-                log.error("ensure_frontend_venv 失敗：%s", err_msg)
-                return False, f"ensure_frontend_venv 失敗：{err_msg}"
-            return True, None
+            try:
+                res = subprocess.run(
+                    [sh_bin, "-c", '. "$1" && ensure_frontend_venv', "sh", str(common_sh)],
+                    cwd=str(self.install_dir / "frontend" if (self.install_dir / "frontend").exists() else self.install_dir),
+                    capture_output=True,
+                    text=True,
+                    env=env_copy,
+                    timeout=300,
+                )
+                if res.returncode != 0:
+                    err_msg = res.stderr.strip() or res.stdout.strip()
+                    log.error("ensure_frontend_venv 失敗：%s", err_msg)
+                    return False, f"ensure_frontend_venv 失敗：{err_msg}"
+                return True, None
+            except Exception as exc:
+                log.error("ensure_frontend_venv 異常或逾時：%s", exc)
+                return False, f"ensure_frontend_venv 異常或逾時：{exc}"
 
         # Python 原生處理（適用非 POSIX 或缺少 common.sh 環境）：
         # 去掉 -e ../shared 避免離線時嘗試下載 setuptools 或建置 shared
@@ -533,11 +599,14 @@ class AutoUpdaterPi(AutoUpdaterCore):
                 str(tmp_req),
             ]
             cwd = self.install_dir / "frontend" if (self.install_dir / "frontend").exists() else self.install_dir
-            res = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
+            res = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=300)
             if res.returncode != 0:
                 err_msg = res.stderr.strip() or res.stdout.strip()
                 log.error("pip 安裝依賴失敗：%s", err_msg)
                 return False, f"pip 安裝依賴失敗：{err_msg}"
+        except Exception as exc:
+            log.error("pip 安裝依賴異常或逾時：%s", exc)
+            return False, f"pip 安裝依賴異常或逾時：{exc}"
         finally:
             if tmp_req and tmp_req.exists():
                 try:

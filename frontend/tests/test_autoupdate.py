@@ -312,6 +312,7 @@ class TestSelectiveRestart(unittest.TestCase):
     def test_docs_only_change_no_restart(self):
         (self.old_dir / "README.md").write_text("old doc", encoding="utf-8")
         (self.new_dir / "README.md").write_text("new doc", encoding="utf-8")
+        write_manifest(self.old_dir, calculate_manifest(self.old_dir))
 
         units = detect_affected_units(self.old_dir, self.new_dir)
         self.assertEqual(units, [])
@@ -321,6 +322,7 @@ class TestSelectiveRestart(unittest.TestCase):
         (self.new_dir / "pet").mkdir()
         (self.old_dir / "pet" / "app.py").write_text("v1", encoding="utf-8")
         (self.new_dir / "pet" / "app.py").write_text("v2", encoding="utf-8")
+        write_manifest(self.old_dir, calculate_manifest(self.old_dir))
 
         units = detect_affected_units(self.old_dir, self.new_dir)
         self.assertIn("desktop-pet.service", units)
@@ -330,6 +332,7 @@ class TestSelectiveRestart(unittest.TestCase):
         (self.new_dir / "services" / "picam").mkdir(parents=True)
         (self.old_dir / "services" / "picam" / "picamd.py").write_text("v1", encoding="utf-8")
         (self.new_dir / "services" / "picam" / "picamd.py").write_text("v2", encoding="utf-8")
+        write_manifest(self.old_dir, calculate_manifest(self.old_dir))
 
         units = detect_affected_units(self.old_dir, self.new_dir)
         self.assertIn("picam.service", units)
@@ -340,6 +343,7 @@ class TestSelectiveRestart(unittest.TestCase):
         (self.new_dir / "frontend").mkdir(parents=True)
         (self.old_dir / "frontend" / "requirements.txt").write_text("v1", encoding="utf-8")
         (self.new_dir / "frontend" / "requirements.txt").write_text("v2", encoding="utf-8")
+        write_manifest(self.old_dir, calculate_manifest(self.old_dir))
 
         units = detect_affected_units(self.old_dir, self.new_dir)
         self.assertIn("desktop-pet.service", units)
@@ -350,10 +354,39 @@ class TestSelectiveRestart(unittest.TestCase):
         (self.old_dir / "frontend" / "pet" / "__init__.py").write_text("# init", encoding="utf-8")
         (self.old_dir / "frontend" / "pet" / "old_mod.py").write_text("# old", encoding="utf-8")
         (self.new_dir / "frontend" / "pet" / "__init__.py").write_text("# init", encoding="utf-8")
+        write_manifest(self.old_dir, calculate_manifest(self.old_dir))
         # old_mod.py deleted in new_dir
 
         units = detect_affected_units(self.old_dir, self.new_dir)
         self.assertIn("desktop-pet.service", units)
+
+    def test_detect_affected_units_untracked_files_ignored_and_missing_manifest_fallback(self):
+        """驗證：舊版有未追蹤檔案時不被誤判為刪檔，無 MANIFEST 時安全退回預設重啟。"""
+        # A. 無 MANIFEST 時退回預設重啟
+        (self.old_dir / "frontend").mkdir(parents=True, exist_ok=True)
+        (self.new_dir / "frontend").mkdir(parents=True, exist_ok=True)
+        (self.old_dir / "frontend" / "main.py").write_text("same", encoding="utf-8")
+        (self.new_dir / "frontend" / "main.py").write_text("same", encoding="utf-8")
+        # 此時無 MANIFEST.sha256
+        self.assertEqual(detect_affected_units(self.old_dir, self.new_dir), ["desktop-pet.service"])
+
+        # B. 寫入 MANIFEST.sha256 後，新增本機未追蹤檔案（local.json, debug.log, scratch.py 等）
+        write_manifest(self.old_dir, calculate_manifest(self.old_dir))
+        (self.old_dir / "frontend" / "config").mkdir(parents=True, exist_ok=True)
+        (self.old_dir / "frontend" / "config" / "local.json").write_text("{}", encoding="utf-8")
+        (self.old_dir / "frontend" / "pet").mkdir(parents=True, exist_ok=True)
+        (self.old_dir / "frontend" / "pet" / "debug.log").write_text("log line", encoding="utf-8")
+        (self.old_dir / "shared" / "shared").mkdir(parents=True, exist_ok=True)
+        (self.old_dir / "shared" / "shared" / "scratch.py").write_text("# scratch", encoding="utf-8")
+
+        # 新版只改根目錄 README.md 或 backend 檔案
+        (self.new_dir / "README.md").write_text("new doc", encoding="utf-8")
+        (self.new_dir / "backend").mkdir(parents=True, exist_ok=True)
+        (self.new_dir / "backend" / "server.py").write_text("new backend", encoding="utf-8")
+
+        # 斷言：未追蹤檔案不應被當成已刪除檔案，units 應為 []
+        units = detect_affected_units(self.old_dir, self.new_dir)
+        self.assertEqual(units, [])
 
 
 class TestBackupAndOverwriteUpdate(unittest.TestCase):
@@ -364,6 +397,14 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         self.backup_dir = self.tmp_dir / "backup"
         self.install_dir.mkdir(parents=True)
         self.state_dir.mkdir(parents=True)
+
+        # 建立模擬之 frontend/.venv python 直譯器供 pre_switch_check 偵測
+        venv_bin = self.install_dir / "frontend" / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+        venv_bin.mkdir(parents=True, exist_ok=True)
+        py_name = "python.exe" if os.name == "nt" else "python"
+        (venv_bin / py_name).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (self.install_dir / "frontend" / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
+        (self.install_dir / "frontend" / ".venv" / "bin" / "python").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
 
         self.env_file = self.tmp_dir / "env"
         self.env_file.write_text(
@@ -620,6 +661,38 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         # 斷言已從備份還原
         self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1_good')")
         self.assertFalse((self.install_dir / "new_bad.py").exists())
+
+    def test_first_boot_after_update_success_marks_idle(self):
+        # 模擬更新後首度開機（狀態為 restarting / pending_boot_check）且健康檢查成功
+        write_update_state(self.state_dir, {
+            "status": "restarting",
+            "pending_boot_check": True,
+            "target_commit": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "previous_commit": "1111111111111111111111111111111111111111",
+        })
+
+        with mock.patch.object(self.updater, "run_health_check", return_value=(True, None)):
+            ok, msg = self.updater.boot_check()
+            self.assertTrue(ok)
+            self.assertEqual(msg, "first_boot_success")
+
+        # 斷言狀態已標記為 success/idle，pending_boot_check 為 False
+        st = load_update_state(self.state_dir)
+        self.assertFalse(st.get("pending_boot_check"))
+        self.assertIn(st.get("status"), ("success", "idle"))
+
+        # 斷言 failed.json 未記錄該 commit
+        failed = load_failed_json(self.state_dir)
+        self.assertFalse(any(f.get("commit") == "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" for f in failed))
+
+    def test_pre_switch_check_fails_when_frontend_venv_missing(self):
+        # 模擬 frontend/.venv 不存在時，拒絕退回 sys.executable 並報錯
+        shutil.rmtree(self.install_dir / "frontend" / ".venv", ignore_errors=True)
+        staged = self.tmp_dir / "staged"
+        staged.mkdir(parents=True, exist_ok=True)
+        ok, reason = self.updater.pre_switch_check(staged)
+        self.assertFalse(ok)
+        self.assertTrue("frontend/.venv" in str(reason).replace("\\", "/"))
 
     def test_normal_boot_check_only_logs_and_touches_no_files(self):
         # 正常運作開機：狀態為 success 或無狀態檔
@@ -1064,31 +1137,28 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         common_sh.parent.mkdir(parents=True, exist_ok=True)
         common_sh.write_text("#!/bin/sh\nensure_frontend_venv() { return 0; }\n", encoding="utf-8")
 
-        self.updater._force_common_sh = True
-        try:
-            with mock.patch("shutil.which", return_value="/bin/bash"), \
-                 mock.patch("subprocess.run") as mock_run:
-                mock_run.return_value = mock.Mock(returncode=0, stdout="ok", stderr="")
+        with mock.patch("tools.deploy.autoupdate.os.name", "posix"), \
+             mock.patch("shutil.which", return_value="/bin/bash"), \
+             mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="ok", stderr="")
 
-                ok, err = self.updater.ensure_dependencies(staged_dir)
-                self.assertTrue(ok)
-                self.assertIsNone(err)
-                self.assertTrue(mock_run.called)
+            ok, err = self.updater.ensure_dependencies(staged_dir)
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+            self.assertTrue(mock_run.called)
 
-                cmd = mock_run.call_args[0][0]
-                self.assertEqual(cmd[0], "/bin/bash")
-                self.assertEqual(cmd[1], "-c")
-                self.assertIn("ensure_frontend_venv", cmd[2])
-                self.assertIn("common.sh", str(cmd))
-                env = mock_run.call_args[1]["env"]
-                self.assertEqual(env.get("PET_REPO_ROOT"), str(self.updater.install_dir))
-        finally:
-            delattr(self.updater, "_force_common_sh")
+            cmd = mock_run.call_args[0][0]
+            self.assertEqual(cmd[0], "/bin/bash")
+            self.assertEqual(cmd[1], "-c")
+            self.assertIn("ensure_frontend_venv", cmd[2])
+            self.assertIn("common.sh", str(cmd))
+            env = mock_run.call_args[1]["env"]
+            self.assertEqual(env.get("PET_REPO_ROOT"), str(self.updater.install_dir))
 
     def test_pi_full_cycle_with_requirements_change_executes_dependencies(self):
         """Must-fix 3 整合驗證：全更新週期中 requirements 變更，即使 install_dir 被 overwrite 也正確偵測並執行 pip。"""
         # 初始版本 v1
-        (self.install_dir / "frontend").mkdir(parents=True)
+        (self.install_dir / "frontend").mkdir(parents=True, exist_ok=True)
         (self.install_dir / "frontend" / "main.py").write_text("print('v1')", encoding="utf-8")
         (self.install_dir / "frontend" / "requirements.txt").write_text("-e ../shared\npytest==8.0.0\n", encoding="utf-8")
         write_manifest(self.install_dir, calculate_manifest(self.install_dir))

@@ -67,6 +67,7 @@ class TestR7AutoupdateBasics(unittest.TestCase):
         (self.new_dir / "backend").mkdir()
         (self.old_dir / "backend" / "server.py").write_text("v1", encoding="utf-8")
         (self.new_dir / "backend" / "server.py").write_text("v2", encoding="utf-8")
+        write_manifest(self.old_dir, calculate_manifest(self.old_dir))
         affected = detect_affected_r7(self.old_dir, self.new_dir)
         self.assertEqual(affected, ["desktop-pet-backend"])
 
@@ -74,21 +75,52 @@ class TestR7AutoupdateBasics(unittest.TestCase):
         (self.old_dir / "backend" / "server.py").write_text("v2", encoding="utf-8")
         (self.old_dir / "README.md").write_text("doc1", encoding="utf-8")
         (self.new_dir / "README.md").write_text("doc2", encoding="utf-8")
+        write_manifest(self.old_dir, calculate_manifest(self.old_dir))
         affected2 = detect_affected_r7(self.old_dir, self.new_dir)
         self.assertEqual(affected2, [])
 
         # 3. backend/requirements.txt 變更需重啟後端
         (self.old_dir / "backend" / "requirements.txt").write_text("pytest==8.0.0\n", encoding="utf-8")
         (self.new_dir / "backend" / "requirements.txt").write_text("pytest==8.1.0\n", encoding="utf-8")
+        write_manifest(self.old_dir, calculate_manifest(self.old_dir))
         affected3 = detect_affected_r7(self.old_dir, self.new_dir)
         self.assertEqual(affected3, ["desktop-pet-backend"])
 
         # 4. 刪除 backend 模組需重啟後端
         (self.new_dir / "backend" / "requirements.txt").write_text("pytest==8.0.0\n", encoding="utf-8")
         (self.old_dir / "backend" / "old_mod.py").write_text("def old(): pass", encoding="utf-8")
+        write_manifest(self.old_dir, calculate_manifest(self.old_dir))
         # old_mod.py 不在 new_dir
         affected4 = detect_affected_r7(self.old_dir, self.new_dir)
         self.assertEqual(affected4, ["desktop-pet-backend"])
+
+    def test_detect_affected_r7_untracked_files_ignored_and_missing_manifest_fallback(self):
+        """驗證：舊版有未追蹤檔案時不被誤判為刪檔，無 MANIFEST 時安全退回預設重啟。"""
+        # A. 無 MANIFEST 時退回預設重啟
+        (self.old_dir / "backend").mkdir(parents=True, exist_ok=True)
+        (self.new_dir / "backend").mkdir(parents=True, exist_ok=True)
+        (self.old_dir / "backend" / "server.py").write_text("same", encoding="utf-8")
+        (self.new_dir / "backend" / "server.py").write_text("same", encoding="utf-8")
+        # 此時無 MANIFEST.sha256
+        self.assertEqual(detect_affected_r7(self.old_dir, self.new_dir), ["desktop-pet-backend"])
+
+        # B. 寫入 MANIFEST.sha256 後，新增本機未追蹤檔案（.env, server.log, config.local.json 等）
+        write_manifest(self.old_dir, calculate_manifest(self.old_dir))
+        (self.old_dir / "backend" / ".env").write_text("SECRET=123", encoding="utf-8")
+        (self.old_dir / "backend" / "server.log").write_text("log line", encoding="utf-8")
+        (self.old_dir / "backend" / "config.local.json").write_text("{}", encoding="utf-8")
+        (self.old_dir / "backend" / "backend-token").write_text("token", encoding="utf-8")
+        (self.old_dir / "shared").mkdir(parents=True, exist_ok=True)
+        (self.old_dir / "shared" / "notes.json").write_text("{}", encoding="utf-8")
+
+        # 新版只改前端檔案與文件
+        (self.new_dir / "frontend" / "pet").mkdir(parents=True, exist_ok=True)
+        (self.new_dir / "frontend" / "pet" / "app.py").write_text("new frontend", encoding="utf-8")
+        (self.new_dir / "README.md").write_text("new doc", encoding="utf-8")
+
+        # 斷言：未追蹤檔案不應被當成已刪除檔案，affected 應為 []
+        affected = detect_affected_r7(self.old_dir, self.new_dir)
+        self.assertEqual(affected, [])
 
     def test_check_held_criteria_r7_held_file(self):
         (self.state_dir / "HELD").write_text("管理者手動暫停", encoding="utf-8")

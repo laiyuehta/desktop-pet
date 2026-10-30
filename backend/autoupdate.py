@@ -34,6 +34,7 @@ try:
         calculate_manifest,
         check_manual_steps,
         load_env,
+        load_manifest,
         load_update_state,
     )
     from shared.version import get_autoupdate_status, get_release_info
@@ -48,6 +49,7 @@ except ImportError:
             calculate_manifest,
             check_manual_steps,
             load_env,
+            load_manifest,
             load_update_state,
         )
         from shared.shared.version import get_autoupdate_status, get_release_info
@@ -64,6 +66,7 @@ except ImportError:
             calculate_manifest,
             check_manual_steps,
             load_env,
+            load_manifest,
         )
         from shared.version import get_autoupdate_status, get_release_info  # type: ignore
 
@@ -101,32 +104,42 @@ def pre_switch_check_r7(
     for sub in ("backend", "shared"):
         target_sub = candidate_dir / sub
         if target_sub.is_dir():
-            res = subprocess.run([py, "-m", "compileall", "-q", str(target_sub)], capture_output=True, text=True)
-            if res.returncode != 0:
-                return False, f"compileall {sub} 檢查失敗：{res.stderr.strip() or res.stdout.strip()}"
+            try:
+                res = subprocess.run([py, "-m", "compileall", "-q", str(target_sub)], capture_output=True, text=True, timeout=60)
+                if res.returncode != 0:
+                    return False, f"compileall {sub} 檢查失敗：{res.stderr.strip() or res.stdout.strip()}"
+            except Exception as exc:
+                return False, f"compileall {sub} 異常或逾時：{exc}"
 
     # 2. import backend / shared 驗證
     env_copy = os.environ.copy()
     extra_paths = [str(candidate_dir), str(candidate_dir / "backend"), str(candidate_dir / "shared")]
     env_copy["PYTHONPATH"] = os.pathsep.join(extra_paths + [env_copy.get("PYTHONPATH", "")])
 
-    res = subprocess.run(
-        [py, "-c", "import backend; import shared"],
-        capture_output=True,
-        text=True,
-        env=env_copy,
-    )
-    if res.returncode != 0:
-        return False, f"import backend/shared 失敗：{res.stderr.strip() or res.stdout.strip()}"
+    try:
+        res = subprocess.run(
+            [py, "-c", "import backend; import shared"],
+            capture_output=True,
+            text=True,
+            env=env_copy,
+            timeout=30,
+        )
+        if res.returncode != 0:
+            return False, f"import backend/shared 失敗：{res.stderr.strip() or res.stdout.strip()}"
+    except Exception as exc:
+        return False, f"import backend/shared 異常或逾時：{exc}"
 
     # 3. autoupdate.py --self-test
     up_py = candidate_dir / "backend" / "autoupdate.py"
     if not up_py.exists():
         up_py = candidate_dir / "autoupdate.py"
     if up_py.exists():
-        res = subprocess.run([py, str(up_py), "--self-test"], capture_output=True, text=True)
-        if res.returncode != 0:
-            return False, f"autoupdate.py --self-test 失敗：{res.stderr.strip() or res.stdout.strip()}"
+        try:
+            res = subprocess.run([py, str(up_py), "--self-test"], capture_output=True, text=True, timeout=30)
+            if res.returncode != 0:
+                return False, f"autoupdate.py --self-test 失敗：{res.stderr.strip() or res.stdout.strip()}"
+        except Exception as exc:
+            return False, f"autoupdate.py --self-test 異常或逾時：{exc}"
 
     return True, None
 
@@ -152,6 +165,19 @@ def check_held_criteria_r7(
     return False, None
 
 
+def _is_relevant_r7_file(rel_f: str) -> bool:
+    """判斷指定相對路徑是否屬於受控之 R7 檔案（排除 __pycache__、非執行文字檔與文件）。"""
+    parts = Path(rel_f).parts
+    if any(part in ("__pycache__", ".git", ".venv", "tests") for part in parts):
+        return False
+    if rel_f.endswith(".pyc") or rel_f.endswith(".md"):
+        return False
+    # 排除非 requirements 的純文字檔（例如 notes.txt、license.txt）
+    if rel_f.endswith(".txt") and "requirements" not in rel_f.lower():
+        return False
+    return rel_f.startswith("backend/") or rel_f.startswith("shared/")
+
+
 def _scan_relevant_r7_files(base_dir: Path) -> Set[str]:
     """掃描指定目錄下屬於 backend/ 與 shared/ 的受控檔案清單（排除 __pycache__、非執行文件等）。"""
     files_found: Set[str] = set()
@@ -163,26 +189,41 @@ def _scan_relevant_r7_files(base_dir: Path) -> Set[str]:
             dirs[:] = []
             continue
         for f in files:
-            if f.endswith(".pyc") or f.endswith(".md"):
-                continue
-            # 排除非 requirements 的純文字檔（例如 notes.txt、license.txt）
-            if f.endswith(".txt") and "requirements" not in f.lower():
-                continue
             rel_f = (rel_root / f if str(rel_root) != "." else Path(f)).as_posix()
-            if rel_f.startswith("backend/") or rel_f.startswith("shared/"):
+            if _is_relevant_r7_file(rel_f):
                 files_found.add(rel_f)
     return files_found
 
 
 def detect_affected_r7(old_dir: Path, new_dir: Path) -> List[str]:
-    """比對檔案差異決定是否需重啟後端（涵蓋修改、刪除與 requirements 異動）。"""
+    """比對檔案差異決定是否需重啟後端（涵蓋修改、刪除與 requirements 異動）。
+    
+    舊版比對集合取自 old_dir / MANIFEST.sha256（僅計算前版實際部署之檔案，排除本機未追蹤檔案）；
+    若無 MANIFEST.sha256 則退回預設重啟。
+    """
     if not old_dir.exists():
         return ["desktop-pet-backend"]
 
-    # 聯集舊版與新版之檔案清單，確保新版刪檔與修改皆能比對
-    relevant_files = sorted(_scan_relevant_r7_files(old_dir) | _scan_relevant_r7_files(new_dir))
+    manifest_file = old_dir / "MANIFEST.sha256"
+    if not manifest_file.exists():
+        log.info("舊版目錄缺少 MANIFEST.sha256，退回預設重啟後端")
+        return ["desktop-pet-backend"]
+
+    manifest_entries = load_manifest(manifest_file)
+    if not manifest_entries:
+        log.info("MANIFEST.sha256 為空或讀取失敗，退回預設重啟後端")
+        return ["desktop-pet-backend"]
+
+    old_files = {p for p in manifest_entries if _is_relevant_r7_file(p)}
+    new_files = _scan_relevant_r7_files(new_dir)
+    relevant_files = sorted(old_files | new_files)
 
     old_manifest = calculate_manifest(old_dir, files=relevant_files)
+    # 確保 MANIFEST 中記錄的舊版檔案仍保留其紀錄（用於比對新版已刪除檔案）
+    for p in old_files:
+        if p not in old_manifest and p in manifest_entries:
+            old_manifest[p] = manifest_entries[p]
+
     new_manifest = calculate_manifest(new_dir, files=relevant_files)
 
     changed_files: Set[str] = set()
@@ -208,30 +249,30 @@ def stop_backend_process(port: int = 8090, supervise: bool = False) -> None:
     if os.name == "nt":
         if supervise:
             try:
-                subprocess.run(["schtasks", "/End", "/TN", "DesktopPet Backend"], capture_output=True)
+                subprocess.run(["schtasks", "/End", "/TN", "DesktopPet Backend"], capture_output=True, timeout=15)
             except Exception:
                 pass
         # Windows: 用 netstat 找出 PID 並 taskkill
         try:
-            out = subprocess.check_output(f'netstat -ano | findstr :{port}', shell=True, text=True)
+            out = subprocess.check_output(f'netstat -ano | findstr :{port}', shell=True, text=True, timeout=15)
             for line in out.splitlines():
                 parts = line.strip().split()
                 if len(parts) >= 5 and "LISTENING" in parts:
                     pid = parts[-1]
                     if pid.isdigit() and int(pid) > 0 and int(pid) != os.getpid():
                         log.info("正在結束後端程序 (PID: %s)...", pid)
-                        subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
+                        subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, timeout=15)
         except Exception:
             pass
         if supervise:
             try:
-                subprocess.run(["schtasks", "/Run", "/TN", "DesktopPet Backend"], capture_output=True)
+                subprocess.run(["schtasks", "/Run", "/TN", "DesktopPet Backend"], capture_output=True, timeout=15)
             except Exception:
                 pass
     else:
         # POSIX (CI/Linux 環境)
         try:
-            subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True)
+            subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True, timeout=15)
         except Exception:
             pass
 

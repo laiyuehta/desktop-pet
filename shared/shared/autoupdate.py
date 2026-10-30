@@ -404,12 +404,12 @@ def write_manifest(root_dir: Path, manifest: Dict[str, str]) -> Path:
     return out
 
 
-def verify_manifest(root_dir: Path) -> Tuple[bool, Optional[str]]:
-    """比對現有檔案與 MANIFEST.sha256，若有手動修改則回傳 False 與原因。"""
-    manifest_file = root_dir / "MANIFEST.sha256"
-    if not manifest_file.exists():
-        return True, None
+def load_manifest(manifest_file_or_dir: Path) -> Dict[str, str]:
+    """讀取 MANIFEST.sha256 檔案，回傳 {檔案相對路徑: sha256} 字典。"""
+    manifest_file = manifest_file_or_dir / "MANIFEST.sha256" if manifest_file_or_dir.is_dir() else manifest_file_or_dir
     expected: Dict[str, str] = {}
+    if not manifest_file.exists():
+        return expected
     try:
         for line in manifest_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -418,8 +418,17 @@ def verify_manifest(root_dir: Path) -> Tuple[bool, Optional[str]]:
             parts = line.split(None, 1)
             if len(parts) == 2:
                 expected[parts[1].strip()] = parts[0].strip()
-    except Exception as exc:
-        return False, f"讀取 MANIFEST.sha256 失敗：{exc}"
+    except Exception:
+        pass
+    return expected
+
+
+def verify_manifest(root_dir: Path) -> Tuple[bool, Optional[str]]:
+    """比對現有檔案與 MANIFEST.sha256，若有手動修改則回傳 False 與原因。"""
+    manifest_file = root_dir / "MANIFEST.sha256"
+    if not manifest_file.exists():
+        return True, None
+    expected = load_manifest(manifest_file)
 
     if not expected:
         return True, None
@@ -1098,8 +1107,8 @@ class AutoUpdaterCore:
             st = load_update_state(self.state_dir)
             status = st.get("status")
 
-            # 1. 優先處理中途中斷：無論是否暫停，若處於 in_progress / updating 均必須先回退復原
-            if status in ("in_progress", "updating"):
+            # 1. 優先處理中途中斷：若處於 in_progress / updating 且非 pending_boot_check 均必須先回退復原
+            if (status in ("in_progress", "updating")) and not st.get("pending_boot_check"):
                 log.warning("偵測到前次更新中途中斷（status=%s），執行備份還原...", status)
                 if not self.backup_dir.exists():
                     return False, "前次更新中途中斷，但備份目錄不存在，無法還原！"
@@ -1479,9 +1488,9 @@ class AutoUpdaterCore:
                     if not restart_ok:
                         raise RuntimeError(f"重啟受影響服務失敗: {affected}")
 
-                # 標記狀態為 pending_boot_check
+                # 標記狀態為 restarting 與 pending_boot_check
                 write_update_state(self.state_dir, {
-                    "status": "in_progress",
+                    "status": "restarting",
                     "pending_boot_check": True,
                     "target_commit": target_commit,
                     "affected": affected,

@@ -23,8 +23,11 @@
     - 依平台 sparse 篩選：Pi 僅更新 `frontend/` 與 `shared/`（排除 `backend/` 與 `piwifi/`）；R7 僅更新 `backend/` 與 `shared/`（排除 `frontend/` 與 `piwifi/`）。
     - 依賴變更時在現有 venv 重新執行 pip，絕不刪除或覆蓋 `frontend/.venv` 與 `backend/.venv`。
     - `MANIFEST.sha256` 僅記錄新版覆蓋之檔案，回退時嚴格僅刪除新發布引入之檔案 `(newly_overwritten ∪ failed_manifest) - backup_manifest`，徹底保護非 repo 本機檔案（筆記、存檔、自訂包、`deploy.env`）在更新或回退過程中不被誤刪。
+    - 比對新舊版本（以舊版 `MANIFEST.sha256` 與新版發布掃描聯集比對）精確偵測刪檔與 requirements 變更，僅在實際影響時重啟對應服務，排除本機未追蹤檔案干擾。
+    - `affected` 受影響服務清單持久化記錄於 `update_state.json`，於手動或自動回退時依此紀錄決定是否重啟服務（未影響者維持運行不盲目重啟）。
+    - 外部行程呼叫全面設定 timeout 逾時防護，防止更新程式異常掛起佔用行程鎖。
     - 切換後健康檢查：Pi 驗證 unit active、fps ≥ 18、畫面幀數遞增、piscreen 唯讀檢查，後端離線視為警告不阻擋；R7 公開 `/health` 回應 Header `X-Commit`、`/v1/health` 帶 `commit`，直接向伺服器連線比對真實執行 commit；失敗或覆蓋異常（如磁碟空間耗盡）自動自備份還原並記錄至 `failed.json`，後續週期不再自動嘗試同一 commit。
-    - 開機自檢（boot_check）：偵測覆蓋中途中斷（如斷電）或首度開機異常並自動還原，支援重試容錯。
+    - 開機自檢（boot_check）：偵測覆蓋中途中斷（如斷電）或首度開機異常（pending_boot_check）並自動還原，支援重試容錯。
     - 每輪週期嘗試皆記錄於 `updates.jsonl`；更新器支援 `--status` 狀態查詢與 `--retry` 重新嘗試失敗版本。
   - Pi 服務與排程（`frontend/services/desktop-pet-update/`）：
     - `desktop-pet-update.service`（oneshot）與 `desktop-pet-update.timer`（5 分鐘週期；預設檢查間隔 `PET_AUTOUPDATE_INTERVAL=300`，`--once` 受檢查間隔保護，`--force` 強制執行）。
