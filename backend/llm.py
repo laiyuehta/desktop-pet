@@ -15,8 +15,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-EMOTIONS = ["happy", "normal", "surprised", "sleepy", "bored", "sad", "shy"]
-INTENTS = ["none", "sleep", "wake", "nod", "shake", "play"]
+from shared.protocol import EMOTIONS, INTENTS  # noqa: E402,F401  前後端共用的情緒／意圖清單
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.S | re.I)
 

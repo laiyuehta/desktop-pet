@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs
 
 from . import __version__
+from shared.protocol import PATH_EVENT, PATH_HEALTH, PATH_HEALTH_V1, PATH_PHOTO, PATH_TALK, TOKEN_HEADER
+
 from .keys import hash_key, match_key, resolve_config_path
 from .mood import MoodEngine
 from .photos import MAX_PHOTO_BYTES, PhotoStore, valid_photo_id
@@ -327,7 +329,7 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
                 raise ApiError(503, "後端未設定金鑰")
 
             # 2. 取得傳入的金鑰
-            token = self.headers.get("X-Pet-Token", "").strip()
+            token = self.headers.get(TOKEN_HEADER, "").strip()
             if not token:
                 auth_hdr = self.headers.get("Authorization", "").strip()
                 if auth_hdr.startswith("Bearer "):
@@ -347,7 +349,7 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
                                 guard.record_error(client_ip, "forbidden", self.path, self.command, key_id=matched.get("id"))
                                 raise ApiError(403, "沒有權限")
 
-                        is_photo = (self.path.split("?", 1)[0] == "/v1/pet/photo")
+                        is_photo = (self.path.split("?", 1)[0] == PATH_PHOTO)
                         if not guard.check_rate_limit(matched.get("id", "key"), is_photo=is_photo):
                             guard.record_error(client_ip, "rate_limited", self.path, self.command, key_id=matched.get("id"))
                             raise ApiError(429, "請求過於頻繁")
@@ -368,7 +370,7 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
             # 5. 未被鎖定時，比對舊版 api_token（過渡期相容；易受暴力破解，必須先經鎖定與全域上限檢查）
             if token and legacy_token and hmac.compare_digest(token.encode("utf-8"), legacy_token.encode("utf-8")):
                 log.info("[LegacyToken] 收到舊版 api_token 請求 (來源: %s, 路徑: %s)", client_ip, self.path)
-                is_photo = (self.path.split("?", 1)[0] == "/v1/pet/photo")
+                is_photo = (self.path.split("?", 1)[0] == PATH_PHOTO)
                 if not guard.check_rate_limit("legacy", is_photo=is_photo):
                     guard.record_error(client_ip, "rate_limited", self.path, self.command, key_id="legacy")
                     raise ApiError(429, "請求過於頻繁")
@@ -423,12 +425,12 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
-            if path == "/health":
+            if path == PATH_HEALTH:
                 # 公開健康檢查：不碰任何認證邏輯，固定只回 {"ok": true}，不記錯誤亦不觸發鎖定
                 self._json(200, {"ok": True})
                 return
 
-            if path == "/v1/health":
+            if path == PATH_HEALTH_V1:
                 # 詳細健康檢查：需驗證金鑰
                 try:
                     self._check_auth(pet_id_to_check=None)
@@ -487,11 +489,11 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
-            if path == "/v1/pet/photo":
+            if path == PATH_PHOTO:
                 self._run(self._photo_upload)
                 return
 
-            routes = {"/v1/pet/event": brain.handle_event, "/v1/pet/talk": brain.handle_talk}
+            routes = {PATH_EVENT: brain.handle_event, PATH_TALK: brain.handle_talk}
             fn = routes.get(path)
             if fn is None:
                 self._json(404, {"ok": False, "error": "not found"})

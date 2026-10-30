@@ -1,0 +1,32 @@
+name: piwifi
+
+# 由 ci.yml 依路徑呼叫（piwifi/**、.github/workflows/**）；也可手動執行
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: rust (piwifi)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: piwifi
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Rust toolchain (stable + musl target)
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy --target aarch64-unknown-linux-musl
+          rustup default stable
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test
+      - name: cargo build (aarch64-unknown-linux-musl)
+        run: cargo build --release --target aarch64-unknown-linux-musl

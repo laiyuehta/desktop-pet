@@ -1,0 +1,27 @@
+[Unit]
+Description=desktop-pet frontend (piscreen client, animation pack, web remote)
+# 只排順序、只用 Wants=：桌寵停止／重啟／失敗都不會連帶停止或重啟 piscreen、picam（絕對不要改成 Requires=/BindsTo=）
+Wants=network-online.target piscreen.service picam.service
+After=network-online.target piscreen.service picam.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# @USER@ / @HOME@ 是佔位，install.sh 依環境檔換成實際值；執行期設定由 EnvironmentFile=-/etc/desktop-pet/env 載入（見 deploy.env.example）
+User=@USER@
+Group=@USER@
+WorkingDirectory=@HOME@/desktop-pet/frontend
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/desktop-pet/env
+RuntimeDirectory=desktop-pet
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+# 後端網址、token 檔、動畫包路徑等由環境變數（PET_BACKEND_URL、PET_BACKEND_TOKEN_FILE、PET_PACK_DIR 等）或內建預設決定
+# python 用 frontend/.venv（install.sh 會建立；#38）
+ExecStart=@HOME@/desktop-pet/frontend/.venv/bin/python @HOME@/desktop-pet/frontend/main.py --sink piscreen --input web --fps 20
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

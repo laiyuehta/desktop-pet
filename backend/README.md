@@ -22,8 +22,15 @@
    cd desktop-pet
    ```
    之後更新：`git pull`
-3. 先開 llama-server（你已經會開，監聽 `http://127.0.0.1:8080`，模型別名 `qwen3-14b`）。
-4. 啟動後端：
+3. 建立後端的 venv（#38 起不再借用 ComfyUI 內附 python；後端只用標準函式庫，venv 只裝共用模組 `shared/`）：
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File backend\setup_venv.ps1
+   ```
+   之後 `run_backend.bat`、`start_hidden.cmd`、工作排程器（`autostart\install_task.ps1`）都會自動用 `backend\.venv`。
+   注意：`install_task.ps1` **不再從 PATH 找 pythonw.exe**；優先順序是 `-PythonW` 參數 > `PET_PYTHONW` > `backend\.venv\Scripts\pythonw.exe`，都沒有就報錯。`PET_PY`（`start_hidden.cmd`）／`PET_PYTHONW` 有設時會蓋過 venv（例如暫時退回 ComfyUI 的 python），升級後請把環境檔裡指向 ComfyUI 的值清掉。
+   沒有 venv 時（例如直接 `py -3 -m backend`），程式會自動把 repo 的 `shared/` 加進 sys.path。
+4. 先開 llama-server（你已經會開，監聽 `http://127.0.0.1:8080`，模型別名 `qwen3-14b`）。
+5. 啟動後端：
    ```powershell
    backend\run_backend.bat
    ```
@@ -75,7 +82,7 @@ New-NetFirewallRule -DisplayName "DesktopPet Backend (TCP 8090, LAN only)" -Dire
 ### Pi 端接上後端
 
 ```bash
-python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
+python3 frontend/main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 ```
 
 網頁遙控（`http://192.0.2.43:8080/`）多了「跟寵物說話」輸入框；寵物說的話會以對話框顯示在螢幕上。
@@ -161,8 +168,36 @@ LLM 的 `intent`（`sleep/wake/nod/shake/play`）會轉成對應指令。
 4. 失敗（連不上、HTTP 錯誤、不是合格 JSON）重試一次；如果第一次已經花了超過一半逾時時間就不重試
 5. 還是失敗 → 備用台詞（`source: "fallback"`），對話永遠有回應
 
+## 自動更新（PROPOSAL.md 16、Issue #14）
+
+R7 後端支援拉取式自動更新（以「原地備份＋覆蓋」設計取代 junction 切換）：
+- **`backend\autoupdate.py`**：
+  - 以 Git smart HTTP 查詢遠端 `main` 分支最新 commit。
+  - 雙重檢查 CI check-runs（`tests (Python 3.13)` 與 `secrets & personal-info scan` 必過）。
+  - sparse 篩選：僅更新 `backend/` 與 `shared/`，不拉取 `frontend/` 或 `piwifi/`。
+  - 依賴管理：若 `backend/requirements.txt` 或 `shared/` 變更才重新安裝依賴，絕不刪除或覆蓋 `backend\.venv`。
+  - 保護機制：`config.json`、`data/`（寵物存檔）、`logs/`、`secrets/` 與非 repo 本機檔案全程保護。
+  - 重啟與自檢：結束 8090 連線由 supervisor 重啟，驗證 `/health` 正常且 commit 一致；失敗自動自備份還原並記錄至 `failed.json`。
+- **Windows 工作排程器（Task Scheduler）**：
+  - 安裝背景定時排程（每 5 分鐘執行一次 `--once`）：
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File backend\autostart\install_update_task.ps1
+    ```
+  - 移除定時排程：
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File backend\autostart\uninstall_update_task.ps1
+    ```
+- **手動操作指令**：
+  ```powershell
+  python backend\autoupdate.py --once       # 檢查更新（受間隔保護，預設 300 秒）
+  python backend\autoupdate.py --force      # 忽略間隔強制檢查與更新
+  python backend\autoupdate.py --dry-run    # 模擬測試，不更動檔案與服務
+  python backend\autoupdate.py --rollback   # 手動從備份還原
+  python backend\autoupdate.py --boot-check # 開機自檢
+  ```
+
 ## 測試
 
 ```bash
-python3 -m unittest discover -s tests -v     # 用假 LLM 伺服器，不需要真的模型
+python3 -m unittest discover -s backend/tests -t . -v     # 用假 LLM 伺服器，不需要真的模型
 ```

@@ -16,9 +16,31 @@
 - CI（`.github/workflows/ci.yml`）：Python 3.13 跑全部測試（含 node 檢查遙控頁 script）；gitleaks 掃 PR 差異與全部歷史；個人資訊檢查（`.gitleaks.toml` 的 personal 規則＋`tools/ci/check_personal.py` 雜湊比對）。
 - Antigravity 加入開發：`CONTRIBUTING.md` 新增它的負責範圍、禁止事項、流程、Windows（WSL2）測試方式與 Rust 編譯說明；項目書負責範圍表與 CODEOWNERS 同步。
 - CI 檢查 PNG 有沒有夾帶生成資料（`tools/ci/check_png_metadata.py`）：tEXt／zTXt／iTXt 的 prompt、workflow、parameters 等關鍵字，或任何超過 1 KB 的文字 chunk 都會失敗。
+- **自動部署（Pi 與 R7 自動更新器，#13、#14、PR #37）**：
+  - 共用更新核心模組 `shared/shared/autoupdate.py` 與 `shared/shared/version.py`：以 Git smart HTTP 查詢遠端 main 分支最新 commit、雙重驗證 GitHub Actions CI check-runs（`tests (Python 3.13)` 與 `secrets & personal-info scan` 必過）、安全解壓 codeload tarball。
+  - 原地「備份＋覆蓋」更新設計（依使用者決定全面取代多版本 symlink 與 junction 切換）：
+    - 取得 `autoupdate.lock` 行程鎖並通過 `PAUSE`、`PET_AUTOUPDATE=0`、dry-run 檢查後才動檔案。
+    - 原子建立暫存備份（中途中斷舊備份完整無損）。
+    - 依平台 sparse 篩選：Pi 僅更新 `frontend/` 與 `shared/`（排除 `backend/` 與 `piwifi/`）；R7 僅更新 `backend/` 與 `shared/`（排除 `frontend/` 與 `piwifi/`）。
+    - 依賴變更時在現有 venv 重新執行 pip，絕不刪除或覆蓋 `frontend/.venv` 與 `backend/.venv`。
+    - `MANIFEST.sha256` 僅記錄新版覆蓋之檔案，絕不掃描整個目錄，徹底保護非 repo 本機檔案（筆記、日誌、自訂檔案）不被後續更新誤刪。
+    - 切換後健康檢查：Pi 驗證 unit active、fps ≥ 18、畫面幀數遞增、piscreen 唯讀檢查與後端連線；R7 驗證 `/health` 與目標 commit；失敗自動自備份還原並記錄至 `failed.json`，後續週期不再自動嘗試同一 commit。
+    - 開機自檢（boot_check）：偵測覆蓋中途中斷（如斷電）或首度開機異常並自動還原。
+  - Pi 服務與排程（`frontend/services/desktop-pet-update/`）：
+    - `desktop-pet-update.service`（oneshot）與 `desktop-pet-update.timer`（5 分鐘週期；預設檢查間隔 `PET_AUTOUPDATE_INTERVAL=300`，`--once` 受檢查間隔保護，`--force` 強制執行）。
+    - `desktop-pet-boot-check.service` 開機自檢服務。
+    - `51-desktop-pet-update.rules` polkit 規則：僅允許重啟 desktop-pet、desktop-pet-admin、picam、piwifi，嚴禁 touch piscreen、嚴禁重開機與 daemon-reload。
+  - R7 服務與排程（`backend/autostart/`）：
+    - `backend/autostart/install_update_task.ps1` 與 `uninstall_update_task.ps1`：建立/移除 Windows 工作排程器 `DesktopPet Update` 工作，背景隱藏每 5 分鐘執行一次 `autoupdate.py --once`。
+  - 單元測試完整覆蓋：
+    - `shared/tests/test_autoupdate.py`：測試 smart HTTP pkt-lines、CI check-runs 判定、安全解壓防穿越、保護路徑、連續兩次更新非 repo 檔案留存驗證、備份還原與行程鎖。
+    - `frontend/tests/test_autoupdate.py`：測試 Pi systemd 重啟偵測、切換前檢查、held 條件、Pi 健康檢查、開機自檢與 polkit/systemd 模板。
+    - `backend/tests/test_autoupdate_r7.py`：測試 R7 後端變更偵測、R7 健康檢查與 commit 比對、R7 備份覆蓋週期、失敗回退與 Windows 排程腳本。
 - `.github/CODEOWNERS`、PR 範本、Issue 範本（Bug、任務）、`CONTRIBUTING.md`。
 
 ### 變更
+- #38 第二階段（模組拆分）：新增 `shared/`（`protocol` 協定常數、`apikey` 金鑰格式、`envfile` 環境檔格式，含極簡 `pyproject.toml`），`frontend/requirements.txt`、`backend/requirements.txt` 第一行 `-e ../shared`；Pi 改用 `frontend/.venv`（install／switch／rollback 腳本建立，unit 的 ExecStart 用 venv 的 python）；R7 改用 `backend\.venv`（新增 `backend\setup_venv.ps1`，`install_task.ps1`、`start_hidden.cmd`、`run_backend.bat` 預設用它，不再用 ComfyUI 內附 python）；環境檔新增硬體開關 `PET_ENABLE_PICAM`、`PET_ENABLE_CAMCAST`（picam 安裝與 camcast 啟動照開關）；測試拆成 `frontend/tests`、`backend/tests`、`shared/tests`、`tools/ci/tests`；CI 依路徑分流成 `frontend.yml`、`backend.yml`、`piwifi.yml`（由 `ci.yml` 用 paths-filter 呼叫，必過 check 名稱不變）。動畫包改放 repo 外的 `~/.local/share/desktop-pet/packs/`（`--pack auto` 與 `tools/bake.py` 預設都用這裡，不再找 repo 內的 packs）、`deploy.env` 只放 repo 根目錄（升級時手動搬，見 `frontend/services/desktop-pet/README.md`）；Pi 的 venv 可離線建立（`.pth` 指向 `shared/`），沒有 venv 時前後端都會退回 repo 的 `shared/`；rollback.sh 先備妥 venv／unit 才停 admin；piwifi 共用日誌擷取的測試改成序列執行；R7 的 `install_task.ps1` 不再從 PATH 找 pythonw（優先順序：`-PythonW` 參數 > `PET_PYTHONW` > `backend\.venv`；`start_hidden.cmd` 為 `PET_PY` > venv）；客戶端金鑰規則測試移到 `frontend/tests`；修正 `piwifi/package.sh` 的 repo 根目錄、admin 讀 `deploy.env` 的位置。另外：`--pack auto` 找不到動畫包時印 WARNING（列出找過的路徑；非 systemd 下也印到 stderr）；動畫包預設位置遵循絕對路徑的 `XDG_DATA_HOME`（`$XDG_DATA_HOME/desktop-pet/packs`，main 與 bake 共用）；`ensure_frontend_venv` 把 requirements.txt 雜湊存在 `.venv/.requirements.sha256`，變了就重跑 pip，pip 失敗會讓 install／switch／rollback 中止；行為變更：`backend\setup_venv.ps1 -Python` 只接受單一執行檔路徑（例如 `C:\Python313\python.exe`），不再接受 `"py -3"` 這種含參數的字串。
+- 前後端分資料夾（#38 第一階段，只搬移不拆模組）：Pi 端程式 `main.py`、`pet/`、`config/`、`assets/`、`preview/`、`requirements.txt`、Pi 用工具（`tools/bake.py` 等、`tools/deploy/`、`tools/wifi/`）與 `services/`（desktop-pet、desktop-pet-admin、picam、camcast）搬到 `frontend/`；Rust 守護程式 `services/piwifi/` 搬到頂層 `piwifi/`；`backend/`、`tools/ci/` 留在原處（`tests/` 在第二階段拆成 `frontend/tests`、`backend/tests`、`shared/tests`、`tools/ci/tests`；unittest 需要 `-t`）。systemd unit 的 `WorkingDirectory`／`ExecStart` 改成 `@HOME@/desktop-pet/frontend`，Pi 上要重跑 install.sh 重新安裝 unit。
 - 部署環境檔檢查與測試相容性整理（#35）：`tools/deploy/common.sh` 的 `require_sys_env` 支援 `--warn` 模式，回退時輸出警告而非錯誤；`services/desktop-pet-admin/rollback.sh` 環境檔檢查改用 `require_sys_env --warn || true`，相容自訂 `PET_DEPLOY_ENV` 且無環境檔時僅警示不阻擋回退；`tests/test_env_config.py` 與 `tests/test_autostart.py` 改以 `unittest.TestCase` 實作，以真正腳本與 stub 完整覆蓋 rollback 執行，使無 pytest 之環境（如 Pi 3B 實機）亦能直接以標準庫 `unittest` 執行驗證；更正 CHANGELOG #26 條目誤植之 `deploy.env.example` 描述。
 - 測試穩定性改善與烘焙測試健全（#25）：修復 `tests/test_backend.py` 離線對話回退門檻（< 2.5s）並以請求次數（`len(llm.calls) == 1`）嚴格斷言逾時不再重試；`tests/test_pack.py` 切換延遲邊界門檻微調為 `>= 199` 消除浮點精度抖動；`tests/test_emotion_levels.py` 將動畫包情緒檢查抽為模組函式 `verify_manifest_emotions`，CI 新增輕量真實 `bake()` 覆蓋全 16 狀態 240 組轉移片段；`pet/baker.py` 保留 `transition_pairs()` 作為轉移擴充點。
 - 後端客戶端迴圈測試門檻與清理（#30、#40、#44）：放寬 `tests/test_backend_client.py` 中 `test_hanging_backend_does_not_block_loop` 總耗時門檻為 6.0s（相容 Pi 3B 實測 40 格約 4.41–4.44s），耗時評估改以單一 `elapsed` 變數比較與輸出訊息；單格延遲門檻（預設 8 幀 = 0.4s）上限 clamp 在後端逾時（0.5s）以下（`min(env, timeout*0.9)`），並直接讀取 `app.backend.timeout`；簡化 `FakeBackend.do_POST` 異常捕捉為 `except OSError`；放寬 `test_offline_backend_does_not_block_loop` 平均單格門檻（預設 2 幀 = 0.1s）；支援透過環境變數 `PET_TEST_LOOP_MAX_FRAME_S`、`PET_TEST_LOOP_MAX_TOTAL_S` 與 `PET_TEST_LOOP_PER_FRAME_S` 自訂門檻；`tests/conftest.py` 保留 `PET_TEST_*` 環境變數。
