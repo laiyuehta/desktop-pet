@@ -53,6 +53,7 @@ try:
         load_manifest,
         load_update_state,
         overwrite_release,
+        parse_pip_timeout,
         parse_pkt_lines,
         record_failed_commit,
         restore_from_backup,
@@ -91,6 +92,7 @@ except ImportError:
         load_manifest,
         load_update_state,
         overwrite_release,
+        parse_pip_timeout,
         parse_pkt_lines,
         record_failed_commit,
         restore_from_backup,
@@ -293,7 +295,7 @@ def _scan_relevant_pi_files(base_dir: Path) -> Set[str]:
 
 def detect_affected_units(old_dir: Path, new_dir: Path) -> List[str]:
     """比對新舊版本檔案差異，決定需重啟之 systemd unit（涵蓋修改、刪除與 requirements 異動）。
-    
+
     舊版比對集合取自 old_dir / MANIFEST.sha256（僅計算前版實際部署之檔案，排除本機未追蹤檔案）；
     若無 MANIFEST.sha256 則退回預設重啟。
     """
@@ -592,10 +594,8 @@ class AutoUpdaterPi(AutoUpdaterCore):
         log.info("偵測到前端 requirements.txt 變更，準備更新 frontend/.venv 依賴...")
 
         # 優先呼叫 common.sh 中的 ensure_frontend_venv（過濾 -e ../shared 且兼顧離線 .pth 設定）
-        try:
-            pip_timeout = int(self.env.get("PET_PIP_TIMEOUT", os.environ.get("PET_PIP_TIMEOUT", "600")))
-        except (ValueError, TypeError):
-            pip_timeout = 600
+        raw_timeout = self.env.get("PET_PIP_TIMEOUT", os.environ.get("PET_PIP_TIMEOUT", 600))
+        pip_timeout = parse_pip_timeout(raw_timeout, default=600)
         common_sh = self.install_dir / "frontend" / "tools" / "deploy" / "common.sh"
         if not common_sh.exists():
             common_sh = self.install_dir / "tools" / "deploy" / "common.sh"

@@ -31,6 +31,7 @@ from shared.autoupdate import (
     load_manifest,
     load_update_state,
     overwrite_release,
+    parse_pip_timeout,
     parse_pkt_lines,
     record_failed_commit,
     restore_from_backup,
@@ -340,6 +341,23 @@ class TestAutoUpdaterCoreAffectedPersistence(unittest.TestCase):
             self.assertTrue(res)
             mock_restart.assert_called_once_with(["custom_unit"])
 
+    def test_core_rollback_returns_false_and_marks_failed_when_restart_fails(self):
+        """驗證回退時若 restart_affected 失敗，rollback() 應回傳 False 並標記 rollback_failed。"""
+        write_update_state(self.state, {"status": "in_progress", "affected": ["custom_unit"], "incoming_files": []})
+        (self.backup / "backup_manifest.json").write_text("{}", encoding="utf-8")
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "restart_affected", return_value=False):
+            res = updater.rollback()
+            self.assertFalse(res)
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rollback_failed")
+
 
 class TestAutoUpdaterCoreInterruptedRecovery(unittest.TestCase):
     def setUp(self):
@@ -429,6 +447,175 @@ class TestAutoUpdaterCoreInterruptedRecovery(unittest.TestCase):
         self.assertEqual(st.get("status"), "success")
         jsonl = (self.state / "updates.jsonl").read_text(encoding="utf-8")
         self.assertIn("success", jsonl)
+
+    def test_run_cycle_recovers_interrupted_restarting_rollback_fails_returns_error_and_records_status(self):
+        """驗證 restarting 狀態下健康檢查失敗且 rollback 失敗時，run_cycle 回傳 1 並記錄 rollback_failed。"""
+        write_update_state(self.state, {
+            "status": "restarting",
+            "pending_boot_check": True,
+            "target_commit": "deadbeef1234",
+        })
+        (self.backup / "backup_manifest.json").write_text("{}", encoding="utf-8")
+
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "run_health_check", return_value=(False, "crash on boot")), \
+             mock.patch.object(updater, "rollback", return_value=False):
+            rc = updater.run_cycle()
+            self.assertEqual(rc, 1)
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rollback_failed")
+        jsonl = (self.state / "updates.jsonl").read_text(encoding="utf-8")
+        self.assertIn("rollback_failed", jsonl)
+
+    def test_run_cycle_recovers_interrupted_updating_rollback_fails_returns_error_and_records_status(self):
+        """驗證 in_progress 狀態下中斷且 rollback 失敗時，run_cycle 回傳 1 並記錄 rollback_failed。"""
+        write_update_state(self.state, {
+            "status": "in_progress",
+            "target_commit": "deadbeef1234",
+        })
+        (self.backup / "backup_manifest.json").write_text("{}", encoding="utf-8")
+
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "rollback", return_value=False):
+            rc = updater.run_cycle()
+            self.assertEqual(rc, 1)
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rollback_failed")
+        jsonl = (self.state / "updates.jsonl").read_text(encoding="utf-8")
+        self.assertIn("rollback_failed", jsonl)
+
+    def test_run_cycle_preserves_broken_status_when_rollback_failed(self):
+        """驗證前次回退失敗（rollback_failed）且已是最新版本時，非 force 週期維持 broken 狀態不蓋回 on。"""
+        write_update_state(self.state, {
+            "status": "rollback_failed",
+            "current_commit": "deadbeef1234",
+        })
+        (self.inst / "RELEASE.json").write_text(json.dumps({"commit": "deadbeef1234"}), encoding="utf-8")
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "get_remote_commit", return_value="deadbeef1234"):
+            rc = updater.run_cycle()
+            self.assertEqual(rc, 0)
+
+        status_path = self.state / "status.json"
+        self.assertTrue(status_path.exists())
+        st = json.loads(status_path.read_text(encoding="utf-8"))
+        self.assertEqual(st.get("status"), "broken")
+        self.assertIn("前次回退失敗", st.get("last_check_result", ""))
+
+    def test_run_cycle_retry_resets_rollback_failed_state(self):
+        """驗證 --retry 傳入時，可重設 rollback_failed 狀態。"""
+        write_update_state(self.state, {
+            "status": "rollback_failed",
+            "current_commit": "deadbeef1234",
+        })
+        (self.inst / "RELEASE.json").write_text(json.dumps({"commit": "deadbeef1234"}), encoding="utf-8")
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "get_remote_commit", return_value="deadbeef1234"):
+            rc = updater.run_cycle(retry=True)
+            self.assertEqual(rc, 0)
+
+        st = load_update_state(self.state)
+        self.assertNotEqual(st.get("status"), "rollback_failed")
+
+
+class TestAutoUpdaterCoreBootCheck(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.base = Path(self.temp_dir)
+        self.inst = self.base / "inst"
+        self.backup = self.base / "backup"
+        self.state = self.base / "state"
+        self.inst.mkdir()
+        self.backup.mkdir()
+        self.state.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_boot_check_first_boot_rollback_fails_records_rollback_failed(self):
+        """驗證首度開機自檢健康檢查失敗且 rollback 失敗時，正確標記 rollback_failed。"""
+        write_update_state(self.state, {
+            "status": "restarting",
+            "pending_boot_check": True,
+            "target_commit": "deadbeef1234",
+        })
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "run_health_check", return_value=(False, "health_timeout")), \
+             mock.patch.object(updater, "rollback", return_value=False):
+            ok, msg = updater.boot_check()
+            self.assertFalse(ok)
+            self.assertIn("rollback_failed", msg)
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rollback_failed")
+
+    def test_boot_check_first_boot_rollback_success_records_rolled_back(self):
+        """驗證首度開機自檢健康檢查失敗且 rollback 成功時，正確標記 rolled_back。"""
+        write_update_state(self.state, {
+            "status": "restarting",
+            "pending_boot_check": True,
+            "target_commit": "deadbeef1234",
+        })
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "run_health_check", return_value=(False, "health_timeout")), \
+             mock.patch.object(updater, "rollback", return_value=True):
+            ok, msg = updater.boot_check()
+            self.assertFalse(ok)
+            self.assertIn("rolled_back", msg)
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rolled_back")
+
+
+class TestPipTimeout(unittest.TestCase):
+    def test_parse_pip_timeout_valid(self):
+        self.assertEqual(parse_pip_timeout("300"), 300)
+        self.assertEqual(parse_pip_timeout(120), 120)
+        self.assertEqual(parse_pip_timeout(600), 600)
+
+    def test_parse_pip_timeout_rejects_zero_and_negative(self):
+        self.assertEqual(parse_pip_timeout("0"), 600)
+        self.assertEqual(parse_pip_timeout(0), 600)
+        self.assertEqual(parse_pip_timeout("-10"), 600)
+        self.assertEqual(parse_pip_timeout(-5), 600)
+
+    def test_parse_pip_timeout_rejects_invalid_types_and_strings(self):
+        self.assertEqual(parse_pip_timeout("not-an-int"), 600)
+        self.assertEqual(parse_pip_timeout(None), 600)
+        self.assertEqual(parse_pip_timeout(""), 600)
+        self.assertEqual(parse_pip_timeout([], default=300), 300)
 
 
 if __name__ == "__main__":

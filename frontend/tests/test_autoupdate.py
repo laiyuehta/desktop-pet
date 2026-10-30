@@ -1152,6 +1152,22 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         self.assertTrue((self.install_dir / "notes.txt").exists())
         self.assertTrue((self.install_dir / "piwifi" / "daemon.rs").exists())
 
+    def test_pi_rollback_returns_failure_when_restart_units_fails(self):
+        """驗證 Pi 端回退時若 restart_units 失敗（如 Interactive authentication required），rollback() 應回傳 False 並記錄 rollback_failed。"""
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
+        (self.backup_dir / "main.py").write_text("v1_original", encoding="utf-8")
+        (self.backup_dir / "backup_manifest.json").write_text(json.dumps({
+            "files": ["main.py"],
+            "incoming_files": ["main.py"],
+        }), encoding="utf-8")
+
+        with mock.patch("tools.deploy.autoupdate.restart_units", return_value=False):
+            ok = self.updater.rollback()
+            self.assertFalse(ok)
+
+        st = load_update_state(self.state_dir)
+        self.assertEqual(st.get("status"), "rollback_failed")
+
     def test_pi_requirements_unchanged_skips_pip(self):
         """Must-fix 3 驗證：當新 release 之 requirements.txt 與備份相同時，不呼叫 pip。"""
         (self.backup_dir / "frontend").mkdir(parents=True)

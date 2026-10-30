@@ -139,4 +139,3 @@ def get_autoupdate_status(state_dir: Optional[Path] = None, target: str = "pi") 
             log.debug("讀取 status.json 失敗：%s", exc)
 
     return res
-
