@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-preview/live/
+frontend/preview/live/
 backend/data/
 packs/
 
@@ -26,7 +26,10 @@ backend/config.local.json
 # 虛擬環境
 venv/
 .venv/
+*.egg-info/
+shared/build/
 
 # Rust 編譯與打包產物
-services/*/target/
+piwifi/target/
+frontend/services/*/target/
 dist/

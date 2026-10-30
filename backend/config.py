@@ -17,6 +17,9 @@ import os
 import re
 from typing import Any, Dict, Mapping, Optional
 
+from shared.apikey import read_key_file
+from shared.envfile import parse_env_file as _shared_parse_env_file
+
 log = logging.getLogger("backend.config")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -47,27 +50,8 @@ def parse_env_file(
     environ: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, str]:
     """讀取 KEY=VALUE 環境檔；值留空視為未設。R7 環境檔支援展開 %LOCALAPPDATA% 等變數。"""
-    out: Dict[str, str] = {}
-    if not path or not os.path.isfile(path):
-        return out
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            lines = fh.read().splitlines()
-    except OSError as exc:
-        log.warning("無法讀取環境檔 %s：%s", path, exc)
-        return out
-    for raw in lines:
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        k, v = k.strip(), v.strip()
-        if not k or not v:
-            continue
-        if expand_vars:
-            v = _expand_r7_vars(v, environ=environ)
-        out[k] = v
-    return out
+    expand = (lambda v: _expand_r7_vars(v, environ=environ)) if expand_vars else None
+    return _shared_parse_env_file(path, expand)
 
 
 def load_r7_env(
@@ -119,8 +103,7 @@ def _apply_env_overrides(cfg: Dict[str, Any], env: Mapping[str, str]) -> Dict[st
     if env.get("PET_BACKEND_API_TOKEN_FILE"):
         tok_path = os.path.expanduser(env["PET_BACKEND_API_TOKEN_FILE"])
         try:
-            with open(tok_path, "r", encoding="utf-8") as fh:
-                srv["api_token"] = fh.read().strip()
+            srv["api_token"] = read_key_file(tok_path)
         except OSError as exc:
             log.warning("無法讀取 PET_BACKEND_API_TOKEN_FILE (%s)：%s", tok_path, exc)
     if env.get("PET_BACKEND_KEYS_FILE"):
