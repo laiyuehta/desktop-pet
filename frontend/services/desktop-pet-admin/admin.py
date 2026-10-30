@@ -40,6 +40,9 @@ DEFAULT_FRAMES_SOCKET = "/run/desktop-pet/frames.sock"
 DEFAULT_PI_ENV_FILE = "/etc/desktop-pet/env"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_HTML_PATH = os.path.join(ROOT, "pet", "web", "remote.html")
+# repo 根目錄（frontend/ 的上一層）：deploy.env 只放這裡（與 pet/env.py、common.sh 一致）
+REPO_ROOT = os.path.dirname(ROOT)
+LEGACY_DEPLOY_ENV = os.path.join(REPO_ROOT, "deploy.env")
 MAX_BODY = 64 * 1024
 
 
@@ -70,7 +73,7 @@ def _load_admin_env(env_file: Optional[str] = None, environ: Optional[dict] = No
         if os.path.isfile(DEFAULT_PI_ENV_FILE):
             chosen = DEFAULT_PI_ENV_FILE
         else:
-            legacy = os.path.join(ROOT, "deploy.env")
+            legacy = LEGACY_DEPLOY_ENV
             if os.path.isfile(legacy):
                 chosen = legacy
     merged = _parse_env_file(chosen) if chosen else {}

@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "desktop-pet-shared"
+version = "0.1.0"
+description = "desktop-pet 前後端共用模組（通訊協定、API 金鑰格式、環境檔格式）"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+packages = ["shared"]

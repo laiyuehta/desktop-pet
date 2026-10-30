@@ -22,8 +22,15 @@
    cd desktop-pet
    ```
    之後更新：`git pull`
-3. 先開 llama-server（你已經會開，監聽 `http://127.0.0.1:8080`，模型別名 `qwen3-14b`）。
-4. 啟動後端：
+3. 建立後端的 venv（#38 起不再借用 ComfyUI 內附 python；後端只用標準函式庫，venv 只裝共用模組 `shared/`）：
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File backend\setup_venv.ps1
+   ```
+   之後 `run_backend.bat`、`start_hidden.cmd`、工作排程器（`autostart\install_task.ps1`）都會自動用 `backend\.venv`。
+   注意：`install_task.ps1` **不再從 PATH 找 pythonw.exe**；優先順序是 `-PythonW` 參數 > `PET_PYTHONW` > `backend\.venv\Scripts\pythonw.exe`，都沒有就報錯。`PET_PY`（`start_hidden.cmd`）／`PET_PYTHONW` 有設時會蓋過 venv（例如暫時退回 ComfyUI 的 python），升級後請把環境檔裡指向 ComfyUI 的值清掉。
+   沒有 venv 時（例如直接 `py -3 -m backend`），程式會自動把 repo 的 `shared/` 加進 sys.path。
+4. 先開 llama-server（你已經會開，監聽 `http://127.0.0.1:8080`，模型別名 `qwen3-14b`）。
+5. 啟動後端：
    ```powershell
    backend\run_backend.bat
    ```
@@ -164,5 +171,5 @@ LLM 的 `intent`（`sleep/wake/nod/shake/play`）會轉成對應指令。
 ## 測試
 
 ```bash
-python3 -m unittest discover -s tests -t . -v     # 用假 LLM 伺服器，不需要真的模型
+python3 -m unittest discover -s backend/tests -t . -v     # 用假 LLM 伺服器，不需要真的模型
 ```

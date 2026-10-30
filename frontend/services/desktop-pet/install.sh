@@ -11,6 +11,7 @@ PET_REPO_ROOT="$(cd ../../.. && pwd)"
 load_deploy_env
 require_sys_env
 [ -n "$PET_BACKEND_URL" ] || { echo "環境檔（${PET_SYS_ENV:-/etc/desktop-pet/env} 或 deploy.env）沒設 PET_BACKEND_URL（見 deploy.env.example）" >&2; exit 1; }
+ensure_frontend_venv
 tmp=$(mktemp)
 render_template desktop-pet.service > "$tmp" || { rm -f "$tmp"; exit 1; }
 sudo install -m 644 "$tmp" "$UNIT"
@@ -31,3 +32,7 @@ sudo systemctl start desktop-pet
 sleep 3
 systemctl is-enabled desktop-pet
 systemctl is-active desktop-pet
+# 硬體開關（deploy.env）：picam 要另外裝；這裡只提示，不自動裝／停
+if pet_flag_on "${PET_ENABLE_PICAM:-0}" && [ ! -f /etc/systemd/system/picam.service ]; then
+  echo "PET_ENABLE_PICAM=1 但還沒裝 picam：sh $PET_REPO_ROOT/frontend/services/picam/install.sh"
+fi

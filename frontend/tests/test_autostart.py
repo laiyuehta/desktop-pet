@@ -1,19 +1,19 @@
-"""開機自動啟動的設定檢查：Pi 的 systemd unit、common.sh、R7 的 supervise.py 與 start_hidden.cmd。"""
+"""開機自動啟動的設定檢查（Pi）：systemd unit、common.sh、安裝腳本。R7 的部分在 backend/tests/test_autostart_r7.py。"""
 import configparser
 import importlib.util
 import os
 import re
 import shutil
-import socket
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-UNIT = ROOT / "frontend" / "services" / "desktop-pet" / "desktop-pet.service"
-SPLIT_UNIT = ROOT / "frontend" / "services" / "desktop-pet" / "desktop-pet-split.service"
-ADMIN_UNIT = ROOT / "frontend" / "services" / "desktop-pet-admin" / "desktop-pet-admin.service"
+ROOT = Path(__file__).resolve().parents[1]  # frontend/
+REPO = ROOT.parent
+UNIT = ROOT / "services" / "desktop-pet" / "desktop-pet.service"
+SPLIT_UNIT = ROOT / "services" / "desktop-pet" / "desktop-pet-split.service"
+ADMIN_UNIT = ROOT / "services" / "desktop-pet-admin" / "desktop-pet-admin.service"
 
 
 def _unit(path: Path = UNIT):
@@ -21,19 +21,6 @@ def _unit(path: Path = UNIT):
     cp.optionxform = str
     cp.read_string(path.read_text(encoding="utf-8"))
     return cp
-
-
-def _sup():
-    spec = importlib.util.spec_from_file_location("supervise", ROOT / "backend" / "autostart" / "supervise.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 class _MonkeyPatch:
@@ -78,7 +65,7 @@ class AutostartTest(unittest.TestCase):
         self.assertEqual(s["EnvironmentFile"], "-/etc/desktop-pet/env")
         self.assertEqual(_unit()["Install"]["WantedBy"], "multi-user.target")
         args = s["ExecStart"].split()
-        self.assertEqual(args[:2], ["/usr/bin/python3", "@HOME@/desktop-pet/frontend/main.py"])
+        self.assertEqual(args[:2], ["@HOME@/desktop-pet/frontend/.venv/bin/python", "@HOME@/desktop-pet/frontend/main.py"])
         flags = dict(zip(args[2::2], args[3::2]))
         self.assertEqual(flags, {
             "--sink": "piscreen", "--input": "web", "--fps": "20",
@@ -97,24 +84,24 @@ class AutostartTest(unittest.TestCase):
 
     def test_deploy_files_only_use_placeholders(self):
         files = [
-            "frontend/services/desktop-pet/desktop-pet.service",
-            "frontend/services/desktop-pet/desktop-pet-split.service",
-            "frontend/services/desktop-pet-admin/desktop-pet-admin.service",
-            "frontend/services/picam/picam.service",
-            "frontend/tools/wifi/50-desktop-pet-wifi.rules"
+            "services/desktop-pet/desktop-pet.service",
+            "services/desktop-pet/desktop-pet-split.service",
+            "services/desktop-pet-admin/desktop-pet-admin.service",
+            "services/picam/picam.service",
+            "tools/wifi/50-desktop-pet-wifi.rules"
         ]
         for rel in files:
             text = (ROOT / rel).read_text(encoding="utf-8")
             self.assertIn("@USER@", text, rel)
             self.assertNotIn("/home/", text, rel)
             self.assertNotIn("pi-user", text, rel)
-        pc = (ROOT / "frontend" / "services" / "picam" / "picam.service").read_text(encoding="utf-8")
+        pc = (ROOT / "services" / "picam" / "picam.service").read_text(encoding="utf-8")
         self.assertIn("User=@USER@", pc)
         self.assertIn("ExecStart=/usr/bin/python3 @HOME@/picam/picamd.py", pc)
         self.assertIn("EnvironmentFile=-/etc/desktop-pet/env", pc)
 
     def test_deploy_env_example_and_gitignore(self):
-        ex = (ROOT / "deploy.env.example").read_text(encoding="utf-8")
+        ex = (REPO / "deploy.env.example").read_text(encoding="utf-8")
         lines = [l for l in ex.splitlines() if l and not l.startswith("#")]
         keys = [l.split("=", 1)[0] for l in lines]
         self.assertEqual(len(keys), len(set(keys)))
@@ -136,11 +123,11 @@ class AutostartTest(unittest.TestCase):
         self.assertEqual(kv["PET_BACKEND_PORT"], "8090")
         self.assertIn("#PET_AUTOUPDATE=1", ex)
         self.assertIn("#PET_CONSOLE_LISTEN=", ex)
-        self.assertIn("deploy.env", (ROOT / ".gitignore").read_text(encoding="utf-8").split())
+        self.assertIn("deploy.env", (REPO / ".gitignore").read_text(encoding="utf-8").split())
 
     def _render(self, template, env_text, extra_env=None):
         (self.tmp_path / "deploy.env").write_text(env_text, encoding="utf-8")
-        common_sh = (ROOT / "frontend" / "tools" / "deploy" / "common.sh").as_posix()
+        common_sh = (ROOT / "tools" / "deploy" / "common.sh").as_posix()
         template_path = (ROOT / template).as_posix()
         script = f'. "{common_sh}"; load_deploy_env && render_template "{template_path}"'
         env = {
@@ -156,12 +143,12 @@ class AutostartTest(unittest.TestCase):
     def test_render_substitutes_all_placeholders(self):
         if not shutil.which("sh"):
             raise unittest.SkipTest("sh not available")
-        r = self._render("frontend/services/desktop-pet/desktop-pet.service",
+        r = self._render("services/desktop-pet/desktop-pet.service",
                          "PET_USER=alice\nPET_HOME=/srv/alice\nPET_BACKEND_URL=https://b.example.org\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("@", r.stdout.replace("multi-user", ""))
         self.assertIn("User=alice", r.stdout)
-        self.assertIn("/srv/alice/desktop-pet/frontend/main.py", r.stdout)
+        self.assertIn("/srv/alice/desktop-pet/frontend/.venv/bin/python /srv/alice/desktop-pet/frontend/main.py", r.stdout)
         self.assertIn("EnvironmentFile=-/etc/desktop-pet/env", r.stdout)
         self.assertIn("警告", r.stderr)
 
@@ -176,7 +163,7 @@ class AutostartTest(unittest.TestCase):
         deploy_env.write_text("PET_USER=legacy_user\nPET_HOME=/srv/legacy\n", encoding="utf-8")
         custom_env.write_text("PET_USER=custom_user\nPET_HOME=/srv/custom\n", encoding="utf-8")
 
-        common_sh = (ROOT / "frontend" / "tools" / "deploy" / "common.sh").as_posix()
+        common_sh = (ROOT / "tools" / "deploy" / "common.sh").as_posix()
         script = f'. "{common_sh}"; load_deploy_env && printf "%s|%s" "$PET_USER" "$PET_HOME"'
         base_env = {"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": tmp_path.as_posix()}
 
@@ -213,7 +200,7 @@ class AutostartTest(unittest.TestCase):
         no_env = tmp_path / "no-env"
         legacy_env = tmp_path / "deploy.env"
 
-        common_sh = (ROOT / "frontend" / "tools" / "deploy" / "common.sh").as_posix()
+        common_sh = (ROOT / "tools" / "deploy" / "common.sh").as_posix()
         script = f'. "{common_sh}"; load_deploy_env && require_sys_env'
         base_env = {"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": tmp_path.as_posix(), "PET_SYS_ENV": no_env.as_posix()}
 
@@ -281,7 +268,7 @@ class AutostartTest(unittest.TestCase):
 
         stub_bin = self.tmp_path / "bin"
         stub_bin.mkdir()
-        for name in ["sudo", "systemctl", "systemd-analyze", "sleep"]:
+        for name in ["sudo", "systemctl", "systemd-analyze", "sleep", "python3"]:
             stub = stub_bin / name
             stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             stub.chmod(0o755)
@@ -291,7 +278,20 @@ class AutostartTest(unittest.TestCase):
         custom_env = self.tmp_path / "custom.env"
         no_env = self.tmp_path / "no-env"
         missing_custom = self.tmp_path / "nonexistent.env"
-        rollback_script = (ROOT / "frontend" / "services" / "desktop-pet-admin" / "rollback.sh").as_posix()
+        # 在暫存目錄的 repo 複本裡跑（不在真的 repo 建 frontend/.venv）；venv 用假的 python（import 檢查一律成功）
+        repo_copy = self.tmp_path / "repo"
+        for rel in ["frontend/services/desktop-pet-admin/rollback.sh", "frontend/services/desktop-pet/desktop-pet.service",
+                    "frontend/tools/deploy/common.sh", "frontend/requirements.txt", "shared/shared/__init__.py"]:
+            dst = repo_copy / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO / rel, dst)
+        site = self.tmp_path / "site"
+        site.mkdir()
+        fake_py = repo_copy / "frontend" / ".venv" / "bin" / "python"
+        fake_py.parent.mkdir(parents=True)
+        fake_py.write_text(f'#!/bin/sh\ncase "$*" in *sysconfig*) echo "{site.as_posix()}" ;; esac\nexit 0\n', encoding="utf-8")
+        fake_py.chmod(0o755)
+        rollback_script = (repo_copy / "frontend" / "services" / "desktop-pet-admin" / "rollback.sh").as_posix()
 
         base_env = {
             "PATH": base_path,
@@ -332,57 +332,51 @@ class AutostartTest(unittest.TestCase):
         self.assertNotIn("錯誤", rc.stderr)
 
     def test_install_scripts_never_write_deploy_env(self):
-        for rel in ["frontend/services/desktop-pet/install.sh", "frontend/services/picam/install.sh", "frontend/tools/wifi/install.sh",
-                    "frontend/tools/deploy/common.sh", "frontend/services/camcast/start.sh"]:
+        for rel in ["services/desktop-pet/install.sh", "services/picam/install.sh", "tools/wifi/install.sh",
+                    "tools/deploy/common.sh", "services/camcast/start.sh"]:
             code = "\n".join(l for l in (ROOT / rel).read_text(encoding="utf-8").splitlines()
                              if not l.lstrip().startswith("#"))
             self.assertFalse(re.search(r">\s*\S*deploy\.env", code), rel)
 
-    def test_supervisor_single_instance(self):
-        sup = _sup()
-        self.monkeypatch.setattr(sup, "LOCK_PORT", _free_port())
-        first = sup.take_lock()
-        try:
-            self.assertIsNotNone(first)
-            self.assertIsNone(sup.take_lock())
-        finally:
-            first.close()
+    def test_units_use_frontend_venv(self):
+        for unit in (UNIT, SPLIT_UNIT, ADMIN_UNIT):
+            exe = _unit(unit)["Service"]["ExecStart"].split()[0]
+            self.assertEqual(exe, "@HOME@/desktop-pet/frontend/.venv/bin/python", unit)
+        for rel in ["services/desktop-pet/install.sh", "services/desktop-pet-admin/install.sh",
+                    "services/desktop-pet-admin/switch.sh"]:
+            self.assertIn("ensure_frontend_venv", (ROOT / rel).read_text(encoding="utf-8"), rel)
 
-    def test_supervisor_skips_when_port_busy_and_restarts(self):
-        sup = _sup()
-        log_path = self.tmp_path / "sup.log"
-        self.monkeypatch.setattr(sup, "LOG", str(log_path))
-        busy = iter([True, True, False, False])
-        self.monkeypatch.setattr(sup, "port_in_use", lambda port=None: next(busy))
-        starts, sleeps = [], []
-        sup.run_forever(start=lambda: starts.append(1) or 1, sleep=sleeps.append, max_runs=2)
-        self.assertEqual(len(starts), 2)
-        self.assertEqual(sleeps[:2], [15, 15])
-        self.assertEqual(sleeps[2], 5.0)
-        self.assertEqual(sleeps[3], 10.0)
-        self.assertIn("不重複啟動", log_path.read_text(encoding="utf-8"))
+    def test_hardware_switches(self):
+        ex = (REPO / "deploy.env.example").read_text(encoding="utf-8").splitlines()
+        self.assertIn("PET_ENABLE_PICAM=", ex)
+        self.assertIn("PET_ENABLE_CAMCAST=", ex)
+        self.assertIn('pet_flag_on "${PET_ENABLE_PICAM:-0}"', (ROOT / "services/picam/install.sh").read_text(encoding="utf-8"))
+        self.assertIn('pet_flag_on "${PET_ENABLE_CAMCAST:-0}"', (ROOT / "services/camcast/start.sh").read_text(encoding="utf-8"))
+        if not shutil.which("sh"):
+            raise unittest.SkipTest("sh not available")
+        common_sh = (ROOT / "tools" / "deploy" / "common.sh").as_posix()
+        for val, want in (("1", 0), ("on", 0), ("0", 1), ("", 1), ("no", 1)):
+            r = subprocess.run(["sh", "-c", f'. "{common_sh}"; pet_flag_on "$1"', "sh", val],
+                               env={"PATH": "/usr/bin:/bin", "PET_REPO_ROOT": self.tmp_path.as_posix()})
+            self.assertEqual(r.returncode, want, val)
 
-    def test_supervisor_loads_env_file(self):
-        sup = _sup()
+    def test_picam_install_skips_when_disabled(self):
+        if not shutil.which("sh"):
+            raise unittest.SkipTest("sh not available")
         env_file = self.tmp_path / "env"
-        log_dir = self.tmp_path / "logs"
-        env_file.write_text(
-            f"PET_BACKEND_PORT=8095\nPET_SUPERVISOR_LOCK_PORT=18095\nPET_BACKEND_LOG_DIR={log_dir}\n",
-            encoding="utf-8",
-        )
-        loaded = sup._load_env(env_file=str(env_file), environ={})
-        self.assertEqual(loaded["PET_BACKEND_PORT"], "8095")
-        self.assertEqual(loaded["PET_SUPERVISOR_LOCK_PORT"], "18095")
-        self.assertEqual(loaded["PET_BACKEND_LOG_DIR"], str(log_dir))
-
-    def test_start_hidden_checks_port(self):
-        raw = (ROOT / "backend" / "start_hidden.cmd").read_bytes()
-        raw.decode("ascii")  # cmd.exe 用 cp950 解析，非 ASCII 註解會把行拆壞
-        text = raw.decode("ascii")
-        self.assertIn("PET_BACKEND_PORT=8090", text)
-        self.assertIn(":%PET_BACKEND_PORT% .*LISTENING", text)
-        self.assertIn("exit /b 0", text)
-        self.assertIn("PET_BACKEND_LOG_DIR", text)
+        env_file.write_text("PET_USER=alice\nPET_HOME=/srv/alice\n", encoding="utf-8")
+        # 前面的 python3 -c "import picamera2" 會擋在沒有相機的機器上；只測開關段落
+        script = (ROOT / "services/picam/install.sh").read_text(encoding="utf-8")
+        start = script.index("PET_REPO_ROOT=")
+        end = script.index('install -d -m 755 "$PET_HOME/picam"')
+        snippet = 'cd "' + (ROOT / "services/picam").as_posix() + '"\n' + script[start:end] + "echo WOULD_INSTALL\n"
+        r = subprocess.run(["sh", "-c", snippet], capture_output=True, text=True,
+                           env={"PATH": "/usr/bin:/bin", "PET_DEPLOY_ENV": env_file.as_posix()})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("WOULD_INSTALL", r.stdout)
+        r = subprocess.run(["sh", "-c", snippet], capture_output=True, text=True,
+                           env={"PATH": "/usr/bin:/bin", "PET_DEPLOY_ENV": env_file.as_posix(), "PET_ENABLE_PICAM": "1"})
+        self.assertIn("WOULD_INSTALL", r.stdout, r.stderr)
 
 
 if __name__ == "__main__":

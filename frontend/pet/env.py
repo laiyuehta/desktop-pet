@@ -12,6 +12,8 @@ import logging
 import os
 from typing import Dict, Mapping, Optional
 
+from shared.envfile import parse_env_file as _shared_parse_env_file
+
 log = logging.getLogger("pet.env")
 
 DEFAULT_PI_ENV_FILE = "/etc/desktop-pet/env"
@@ -22,29 +24,8 @@ LEGACY_DEPLOY_ENV = os.path.join(REPO_ROOT, "deploy.env")
 
 def parse_env_file(path: str, expand_vars: bool = False) -> Dict[str, str]:
     """讀取單一 KEY=VALUE 環境檔；檔案不存在時回傳空 dict。"""
-    out: Dict[str, str] = {}
-    if not path or not os.path.isfile(path):
-        return out
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            lines = fh.read().splitlines()
-    except OSError as exc:
-        log.warning("無法讀取環境檔 %s：%s", path, exc)
-        return out
-    for raw in lines:
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        k = k.strip()
-        v = v.strip()
-        if not k or not v:
-            # 值留空視為沒設，用下一層或內建預設
-            continue
-        if expand_vars:
-            v = os.path.expandvars(v)
-        out[k] = v
-    return out
+    # 格式（值留空視為沒設）與後端共用 shared.envfile
+    return _shared_parse_env_file(path, os.path.expandvars if expand_vars else None)
 
 
 def expand_pet_path(val: Optional[str], env: Optional[Mapping[str, str]] = None) -> Optional[str]:

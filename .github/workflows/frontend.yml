@@ -1,0 +1,37 @@
+name: Frontend
+
+# 由 ci.yml 依路徑呼叫（frontend/**、shared/**、.github/workflows/**）；也可手動執行
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: frontend tests (Python 3.13)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          # 跟 Pi（Debian 13）的 Python 3.13 一致
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: frontend/requirements.txt
+      - uses: actions/setup-node@v7
+        with:
+          # frontend/tests/test_remote_page.py 用 node 檢查遙控頁的 script
+          node-version: "22"
+      - name: Install dependencies (frontend/.venv 同樣的 requirements，含 -e ../shared)
+        working-directory: frontend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+      - name: Run frontend tests
+        working-directory: frontend
+        run: python -m pytest -q
+      - name: Run shared tests
+        run: python -m pytest -q shared/tests

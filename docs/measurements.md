@@ -6,7 +6,7 @@
 - 量測 commit：`2b801a7`（main，PR #42 squash）
 - 機器：Linux 開發機（box），8 核 Intel Xeon、15 GB RAM、Python 3.13.5
 
-### 烘焙 `frontend/packs/seed`（`python3 frontend/tools/bake.py`）
+### 烘焙 `packs/seed`（`python3 tools/bake.py`）
 
 同一次烘焙同時作為 #31（Pi 動畫包重烘）與 #45 的數據。
 
@@ -18,7 +18,7 @@
 | 不重複幀數（引用） | 15,143 格（21,638 格） |
 | `frames.bin` | 246,913,525 bytes（工具顯示 246.9 MB） |
 | `manifest.json` | 884,308 bytes |
-| `frontend/packs/seed` 整個目錄（含 preview） | 255,436,767 bytes |
+| `packs/seed` 整個目錄（含 preview） | 255,436,767 bytes |
 | 烘焙耗時 | 130.6 秒（工具輸出） |
 
 驗證輸出：`全部幀都是完整 JPEG`。數字與 PR #42 所列（#18 時的 1,263 段／246.9 MB）一致；仍遠大於 Pi 上舊包的 77.2 MB：`frames.bin` 246.9 MB 約 3.2 倍，整個目錄 255.4 MB 約 3.3 倍。

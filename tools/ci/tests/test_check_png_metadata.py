@@ -9,7 +9,7 @@ import zlib
 from PIL import Image, PngImagePlugin
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-spec = importlib.util.spec_from_file_location("check_png_metadata", os.path.join(HERE, "..", "tools", "ci", "check_png_metadata.py"))
+spec = importlib.util.spec_from_file_location("check_png_metadata", os.path.join(HERE, "..", "check_png_metadata.py"))
 cpm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cpm)
 
@@ -81,13 +81,13 @@ class PngMetadataTest(unittest.TestCase):
             open(good, "wb").write(png())
             open(bad, "wb").write(png(info(("text", "workflow", "{}"))))
             import subprocess, sys
-            script = os.path.join(HERE, "..", "tools", "ci", "check_png_metadata.py")
+            script = os.path.join(HERE, "..", "check_png_metadata.py")
             self.assertEqual(subprocess.run([sys.executable, script, good], capture_output=True).returncode, 0)
             self.assertEqual(subprocess.run([sys.executable, script, good, bad], capture_output=True).returncode, 1)
 
     def test_repo_pngs_are_clean(self):
         import subprocess, sys
-        script = os.path.join(HERE, "..", "tools", "ci", "check_png_metadata.py")
+        script = os.path.join(HERE, "..", "check_png_metadata.py")
         r = subprocess.run([sys.executable, script, "--tree"], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout)
 

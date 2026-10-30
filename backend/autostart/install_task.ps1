@@ -1,16 +1,18 @@
 # Create/update the Task Scheduler task "DesktopPet Backend" (runs at logon of the current user, hidden).
 # Usage (as the user who runs the backend, no admin needed):  powershell -ExecutionPolicy Bypass -File backend\autostart\install_task.ps1
 # Disable/remove:                          powershell -ExecutionPolicy Bypass -File backend\autostart\uninstall_task.ps1
-# -PythonW: pythonw.exe to run supervise.py (e.g. the ComfyUI embedded one). Default: $env:PET_PYTHONW, then pythonw.exe on PATH.
+# Run backend\setup_venv.ps1 first (creates backend\.venv; #38: no longer uses the ComfyUI embedded python).
+# -PythonW: pythonw.exe to run supervise.py. Order: -PythonW, then $env:PET_PYTHONW, then backend\.venv\Scripts\pythonw.exe (PATH is not searched).
 param([string]$PythonW = '',
       [string]$TaskName = 'DesktopPet Backend')
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sup = Join-Path $here 'supervise.py'
 $root = Split-Path -Parent (Split-Path -Parent $here)
+$venvW = Join-Path $root 'backend\.venv\Scripts\pythonw.exe'
 if (-not $PythonW) { $PythonW = $env:PET_PYTHONW }
-if (-not $PythonW) { $c = Get-Command pythonw.exe -ErrorAction SilentlyContinue; if ($c) { $PythonW = $c.Source } }
-if (-not $PythonW -or -not (Test-Path $PythonW)) { throw "pythonw.exe not found: $PythonW" }
+if (-not $PythonW -and (Test-Path $venvW)) { $PythonW = $venvW }
+if (-not $PythonW -or -not (Test-Path $PythonW)) { throw "pythonw.exe not found: $PythonW (run backend\setup_venv.ps1 first to create backend\.venv)" }
 $user = "$env:USERDOMAIN\$env:USERNAME"
 $action = New-ScheduledTaskAction -Execute $PythonW -Argument "`"$sup`"" -WorkingDirectory $root
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user

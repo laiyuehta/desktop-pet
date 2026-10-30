@@ -13,20 +13,18 @@
 - 動態重新載入設定檔
 """
 
-import io
 import json
 import os
 import shutil
-import socket
 import sys
 import tempfile
 import time
 import unittest
-from unittest import mock
 import urllib.error
 import urllib.request
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # repo 根目錄（import backend）
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "shared"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fake_llm import FakeLLM, free_port  # noqa: E402
@@ -42,7 +40,6 @@ from backend.keys import (  # noqa: E402
 )
 from backend.security import SecurityGuard, get_client_ip  # noqa: E402
 from backend.server import Brain, serve_in_thread  # noqa: E402
-from pet.backend_client import BackendClient, is_safe_for_insecure_token  # noqa: E402
 
 
 class SecurityHelpersTest(unittest.TestCase):
@@ -98,33 +95,6 @@ class SecurityHelpersTest(unittest.TestCase):
         # 2. 來自信任代理：採最右側 IP
         ip_trusted = get_client_ip("127.0.0.1", headers, trusted_proxies=["127.0.0.1"])
         self.assertEqual(ip_trusted, "198.51.100.2")
-
-    def test_is_safe_for_insecure_token(self):
-        # https 總是安全
-        self.assertTrue(is_safe_for_insecure_token("https://example.com:8090"))
-        # localhost 總是安全
-        self.assertTrue(is_safe_for_insecure_token("http://127.0.0.1:8090"))
-        self.assertTrue(is_safe_for_insecure_token("http://localhost:8090"))
-        # 私有 IP 總是安全（以動態組裝避免觸發靜態掃描之私有 IP 規則）
-        ip_10 = ".".join(["10", "0", "1", "5"])
-        ip_172 = ".".join(["172", "20", "0", "5"])
-        ip_192 = ".".join(["192", "168", "1", "100"])
-        self.assertTrue(is_safe_for_insecure_token(f"http://{ip_10}:8090"))
-        self.assertTrue(is_safe_for_insecure_token(f"http://{ip_172}:8090"))
-        self.assertTrue(is_safe_for_insecure_token(f"http://{ip_192}:8090"))
-        # 公開 IP 若非 HTTPS 且未放行則不安全
-        self.assertFalse(is_safe_for_insecure_token("http://203.0.113.5:8090", allow_insecure_lan=False))
-        # 顯式指定 allow_insecure_lan 放行
-        self.assertTrue(is_safe_for_insecure_token("http://203.0.113.5:8090", allow_insecure_lan=True))
-
-    def test_is_safe_for_insecure_token_dns_retry(self):
-        # 測試 DNS 失敗時不會永久快取 False
-        with mock.patch("socket.gethostbyname", side_effect=socket.gaierror("DNS lookup failed")):
-            self.assertFalse(is_safe_for_insecure_token("http://my-pet-r7.local:8090"))
-        # 隨後 DNS 恢復正常時，能成功解析為私有 IP 並回傳 True
-        ip_192 = ".".join(["192", "168", "1", "50"])
-        with mock.patch("socket.gethostbyname", return_value=ip_192):
-            self.assertTrue(is_safe_for_insecure_token("http://my-pet-r7.local:8090"))
 
 
 class BackendKeysCliTest(unittest.TestCase):
@@ -464,46 +434,6 @@ class BackendSecurityHttpTest(unittest.TestCase):
         status, body, _ = self._req(port, "/v1/health", headers={"X-Pet-Token": token})
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
-
-
-class ClientTokenRotationTest(unittest.TestCase):
-    def test_backend_client_reloads_on_401(self):
-        with tempfile.TemporaryDirectory() as td:
-            token_file = os.path.join(td, "client.token")
-            save_key_file(token_file, "old-token")
-
-            # 建立假伺服器測試 401 輪換重試
-            req_tokens = []
-
-            class DummyHandler(urllib.request.BaseHandler):
-                def http_response(self, request, response):
-                    return response
-
-            client = BackendClient(
-                base_url="http://127.0.0.1:8090",
-                pet_id="seed-001",
-                publish=lambda ev: None,
-                token="old-token",
-                token_file=token_file,
-                allow_insecure_lan=True,
-            )
-
-            # 測試當檔案內容變更時，_post_request 會以新金鑰重送
-            save_key_file(token_file, "new-token-rotated")
-
-            # 模擬 401 觸發重試機制
-            calls = []
-            def mock_post_req(path, body, timeout, tok):
-                calls.append(tok)
-                if tok == "old-token":
-                    raise urllib.error.HTTPError("http://127.0.0.1", 401, "Unauthorized", {}, io.BytesIO(b'{"ok":false}'))
-                return {"ok": True, "say": "輪換成功"}
-
-            client._post_request = mock_post_req
-            reply = client._post("/v1/pet/talk", {"text": "hi"}, 2.0)
-            self.assertEqual(reply["say"], "輪換成功")
-            self.assertEqual(calls, ["old-token", "new-token-rotated"])
-            self.assertEqual(client.token, "new-token-rotated")
 
 
 class SecurityGuardTest(unittest.TestCase):

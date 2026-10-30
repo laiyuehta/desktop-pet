@@ -12,6 +12,7 @@ load_deploy_env
 require_sys_env
 
 [ -n "$PET_BACKEND_URL" ] || { echo "環境檔（${PET_SYS_ENV:-/etc/desktop-pet/env} 或 deploy.env）沒設 PET_BACKEND_URL（見 deploy.env.example）" >&2; exit 1; }
+ensure_frontend_venv
 
 PET_UNIT=/etc/systemd/system/desktop-pet.service
 ADMIN_UNIT=/etc/systemd/system/desktop-pet-admin.service

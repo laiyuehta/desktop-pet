@@ -9,7 +9,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "frontend"))
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT.parent / "shared"))
 
 import main as pet_main  # noqa: E402
 from pet.env import expand_pet_path, load_pi_env, parse_env_file  # noqa: E402
@@ -17,7 +18,7 @@ from pet.env import expand_pet_path, load_pi_env, parse_env_file  # noqa: E402
 
 def _load_admin_mod():
     spec = importlib.util.spec_from_file_location(
-        "admin", ROOT / "frontend" / "services" / "desktop-pet-admin" / "admin.py"
+        "admin", ROOT / "services" / "desktop-pet-admin" / "admin.py"
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

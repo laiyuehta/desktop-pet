@@ -109,3 +109,59 @@ render_template() {
     fi
     printf '%s\n' "$out"
 }
+
+# pet_flag_on <值>：1/true/yes/on 視為開（硬體開關 PET_ENABLE_* 用）
+pet_flag_on() {
+    case "$1" in
+        1|true|TRUE|True|yes|YES|Yes|on|ON|On) return 0 ;;
+    esac
+    return 1
+}
+
+# ensure_frontend_venv：建立／檢查 frontend/.venv（systemd unit 的 ExecStart 用這個 venv 的 python）。
+# 設計成可離線（Pi 在熱點模式時沒網路）：
+#   - venv 用 --system-site-packages：直接用 apt 裝的 python3-pil，不用下載 Pillow
+#   - shared/ 用 .pth 檔指到 repo 裡的 shared/（等同 editable，不用 pip、不用下載 setuptools）
+#   - 只有 import 檢查失敗時才跑 pip（--no-build-isolation，不另外下載建置工具）；失敗會回傳非 0
+ensure_frontend_venv() {
+    _fe="$PET_REPO_ROOT/frontend"
+    _venv="$_fe/.venv"
+    if [ ! -f "$PET_REPO_ROOT/shared/shared/__init__.py" ]; then
+        echo "找不到 $PET_REPO_ROOT/shared/（前端需要它；部署時要連同 shared/ 一起放）" >&2
+        return 1
+    fi
+    if [ ! -x "$_venv/bin/python" ]; then
+        echo "== 建立 $_venv"
+        python3 -m venv --system-site-packages "$_venv" || {
+            echo "建立 venv 失敗（Pi 上先 sudo apt install python3-venv）" >&2
+            rm -rf "$_venv"
+            return 1
+        }
+    fi
+    _site="$("$_venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" || return 1
+    printf '%s\n' "$PET_REPO_ROOT/shared" > "$_site/desktop-pet-shared.pth" || return 1
+    # requirements.txt 有變（例如新增依賴）就重跑 pip；雜湊記在 venv 裡
+    _req_hash="$(sha256sum "$_fe/requirements.txt" | cut -d' ' -f1)"
+    _stamp="$_venv/.requirements.sha256"
+    if [ "$(cat "$_stamp" 2>/dev/null)" = "$_req_hash" ] \
+        && "$_venv/bin/python" -c 'import PIL, shared.apikey, shared.envfile, shared.protocol' 2>/dev/null; then
+        echo "== frontend/.venv 已就緒（requirements 沒變；shared 經 .pth 指到 repo）"
+        return 0
+    fi
+    # shared 已經用 .pth 接上，pip 只裝其餘依賴（去掉 -e ../shared，免得離線時要下載 setuptools）；
+    # 依賴已由 apt 滿足（python3-pil）時 pip 不需要網路
+    _req_tmp="$(mktemp)"
+    grep -v -E '^[[:space:]]*-e[[:space:]]+\.\./shared' "$_fe/requirements.txt" > "$_req_tmp"
+    echo "== 安裝前端依賴（frontend/requirements.txt）"
+    if ! (cd "$_fe" && "$_venv/bin/python" -m pip install --disable-pip-version-check -q --no-build-isolation -r "$_req_tmp"); then
+        rm -f "$_req_tmp"
+        echo "pip install 失敗（缺的套件需要網路；Pillow 可用 sudo apt install python3-pil 離線滿足）" >&2
+        return 1
+    fi
+    rm -f "$_req_tmp"
+    "$_venv/bin/python" -c 'import PIL, shared.apikey, shared.envfile, shared.protocol' || {
+        echo "frontend/.venv 無法 import PIL 或 shared" >&2
+        return 1
+    }
+    printf '%s\n' "$_req_hash" > "$_stamp"
+}

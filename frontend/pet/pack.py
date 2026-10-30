@@ -4,7 +4,7 @@
 依狀態機目前狀態挑片段，把事先編好的 800×480 baseline JPEG 直接送給 piscreen，
 不繪圖、不重新編碼；只有對話框出現時才解碼該格、畫上對話框、重新編碼。
 
-目錄結構（packs/<外觀>/）：
+目錄結構（~/.local/share/desktop-pet/packs/<外觀>/，在 repo 外）：
     manifest.json   片段、狀態對照、過渡片段、每格在 frames.bin 的位置
     frames.bin      所有 JPEG 幀串在一起（重複的幀只存一次）
     preview/        預覽 GIF / PNG（給人看的，Pi 用不到）
@@ -18,6 +18,16 @@ manifest.json（format 1）重點欄位：
 """
 
 from __future__ import annotations
+
+import os as _os
+
+
+def default_packs_dir() -> str:
+    """動畫包的唯一預設位置：$XDG_DATA_HOME/desktop-pet/packs（XDG_DATA_HOME 未設或不是絕對路徑時用
+    ~/.local/share/desktop-pet/packs；依 XDG 規範忽略相對路徑）。main.py 的 --pack auto 與 tools/bake.py 共用。"""
+    xdg = _os.environ.get("XDG_DATA_HOME", "")
+    base = xdg if _os.path.isabs(xdg) else _os.path.expanduser("~/.local/share")
+    return _os.path.join(base, "desktop-pet", "packs")
 
 import io
 import json

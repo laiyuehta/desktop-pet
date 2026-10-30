@@ -3,7 +3,7 @@ import os
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-spec = importlib.util.spec_from_file_location("check_personal", os.path.join(HERE, "..", "tools", "ci", "check_personal.py"))
+spec = importlib.util.spec_from_file_location("check_personal", os.path.join(HERE, "..", "check_personal.py"))
 cp = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cp)
 

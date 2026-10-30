@@ -2,9 +2,9 @@
 """產生動畫包：把骨架動畫預先算成 JPEG 片段，給 Pi 播放器用。
 
 用法（在電腦或伺服器上跑，Pi 也能跑但比較慢）：
-    python3 tools/bake.py                      # 依 config/bake.json 產生 packs/seed/
-    python3 tools/bake.py --out packs/seed --no-transitions --states idle,happy
-    python3 tools/bake.py --check packs/seed    # 檢查動畫包內容
+    python3 tools/bake.py                      # 依 config/bake.json 產生 ~/.local/share/desktop-pet/packs/seed/
+    python3 tools/bake.py --out /tmp/test-pack --no-transitions --states idle,happy
+    python3 tools/bake.py --check ~/.local/share/desktop-pet/packs/seed    # 檢查動畫包內容
 
 設定：config/bake.json（外觀、骨架、fps、JPEG 品質、每個狀態的變化版、切換點間隔）
 狀態：config/states.json（狀態 → 動畫、眼睛表情、特效）
@@ -15,10 +15,12 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 動畫包放在 repo 外（#38）：換程式碼／重建 venv 都不會動到它
+DEFAULT_PACKS_DIR = "~/.local/share/desktop-pet/packs"
 sys.path.insert(0, ROOT)
 
 from pet.baker import bake  # noqa: E402
-from pet.pack import AnimationPack  # noqa: E402
+from pet.pack import AnimationPack, default_packs_dir  # noqa: E402
 
 
 def check(path: str) -> int:
@@ -41,7 +43,7 @@ def check(path: str) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="產生桌寵動畫包")
-    ap.add_argument("--out", default=None, help="輸出資料夾（預設 packs/<look>）")
+    ap.add_argument("--out", default=None, help="輸出資料夾（預設 ~/.local/share/desktop-pet/packs/<look>，即桌寵 --pack auto 讀的位置）")
     ap.add_argument("--config", default=None, help="產生設定（預設 config/bake.json）")
     ap.add_argument("--states-config", default=None, help="狀態表（預設 config/states.json）")
     ap.add_argument("--states", default=None, help="只產生這些狀態（逗號分隔）")
@@ -58,7 +60,7 @@ def main() -> int:
     cfg = a.config or os.path.join(ROOT, "config", "bake.json")
     with open(cfg, encoding="utf-8") as fh:
         look = json.load(fh).get("look", "seed")
-    out = a.out or os.path.join(ROOT, "packs", look)
+    out = os.path.expanduser(a.out) if a.out else os.path.join(default_packs_dir(), look)
     print(f"產生動畫包 {look} → {out}")
     bake(out, bake_cfg=cfg, states_cfg=a.states_config,
          only_states=a.states.split(",") if a.states else None, fps=a.fps, quality=a.quality,

@@ -11,7 +11,7 @@ PET_REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 . "$PET_REPO_ROOT/frontend/tools/deploy/common.sh"
 load_deploy_env
 USER_NAME="$PET_USER"
-[ "$USER_NAME" != root ] || { echo "用法：sudo sh tools/wifi/install.sh <執行桌寵的使用者>（或在 deploy.env 設 PET_USER）"; exit 1; }
+[ "$USER_NAME" != root ] || { echo "用法：sudo sh frontend/tools/wifi/install.sh <執行桌寵的使用者>（或在 deploy.env 設 PET_USER）"; exit 1; }
 render_template "$HERE/50-desktop-pet-wifi.rules" > /etc/polkit-1/rules.d/50-desktop-pet-wifi.rules
 chmod 0644 /etc/polkit-1/rules.d/50-desktop-pet-wifi.rules
 install -d -m 0750 -o root -g "$USER_NAME" /etc/desktop-pet

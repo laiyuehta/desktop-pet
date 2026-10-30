@@ -26,6 +26,8 @@ backend/config.local.json
 # 虛擬環境
 venv/
 .venv/
+*.egg-info/
+shared/build/
 
 # Rust 編譯與打包產物
 piwifi/target/

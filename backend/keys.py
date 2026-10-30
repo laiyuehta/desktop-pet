@@ -10,12 +10,10 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import hmac
 import json
 import logging
 import os
-import secrets
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,14 +21,8 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger("backend.keys")
 
 
-def generate_key() -> str:
-    """產生 32 bytes 隨機安全的 base64url 金鑰字串。"""
-    return secrets.token_urlsafe(32)
-
-
-def hash_key(key: str) -> str:
-    """計算金鑰的 SHA-256 雜湊（小寫十六進位字串，64 字元）。"""
-    return hashlib.sha256(key.encode("utf-8")).hexdigest().lower()
+# 金鑰格式（產生、雜湊、金鑰檔）放在 shared/，前端讀金鑰檔用同一份
+from shared.apikey import generate_key, hash_key, read_key_file  # noqa: E402,F401
 
 
 def match_key(
@@ -93,13 +85,6 @@ def save_key_file(path: str, token: str) -> str:
         pass  # Windows 上 chmod 0600 可能受限，由 ACL / O_CREAT 控管
 
     return abs_path
-
-
-def read_key_file(path: str) -> str:
-    """讀取金鑰檔內容並去除首尾空白。"""
-    abs_path = os.path.abspath(os.path.expanduser(path))
-    with open(abs_path, "r", encoding="utf-8") as fh:
-        return fh.read().strip()
 
 
 def resolve_config_path(cli_path: Optional[str] = None) -> str:

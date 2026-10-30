@@ -1,5 +1,10 @@
 name: CI
 
+# #38：依路徑分流。這個入口 workflow 每次都跑：
+#   - changes：用 dorny/paths-filter 判斷改了哪一端
+#   - frontend / backend / piwifi：呼叫各自的 workflow（沒改到就 skip）
+#   - "tests (Python 3.13)"：彙總（必過 check 名稱不變；被 skip 的子 job 視為通過，失敗／取消才算失敗）
+#   - "secrets & personal-info scan"：整個 repo，每次都跑
 on:
   pull_request:
   push:
@@ -9,36 +14,81 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  tests:
-    name: tests (Python 3.13)
+  changes:
+    name: changes
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
+    outputs:
+      frontend: ${{ steps.f.outputs.frontend }}
+      backend: ${{ steps.f.outputs.backend }}
+      piwifi: ${{ steps.f.outputs.piwifi }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - id: f
+        uses: dorny/paths-filter@v3
         with:
-          # 跟 Pi（Debian 13）與 R7（ComfyUI 內附）的 Python 3.13 一致
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: |
-            frontend/requirements.txt
-            backend/requirements.txt
-      - uses: actions/setup-node@v7
-        with:
-          # tests/test_remote_page.py 用 node 檢查遙控頁的 script
-          node-version: "22"
-      - name: Install dependencies
+          filters: |
+            workflows: &workflows
+              - '.github/workflows/**'
+            shared: &shared
+              - 'shared/**'
+            frontend:
+              - 'frontend/**'
+              - 'deploy.env.example'
+              - '.gitignore'
+              - *shared
+              - *workflows
+            backend:
+              - 'backend/**'
+              - '.gitignore'
+              - *shared
+              - *workflows
+            piwifi:
+              - 'piwifi/**'
+              - *workflows
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || (github.event_name != 'pull_request' && github.event_name != 'push') || startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/frontend.yml
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || (github.event_name != 'pull_request' && github.event_name != 'push') || startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/backend.yml
+
+  piwifi:
+    needs: changes
+    if: needs.changes.outputs.piwifi == 'true' || (github.event_name != 'pull_request' && github.event_name != 'push') || startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/piwifi.yml
+
+  tests:
+    name: tests (Python 3.13)
+    needs: [changes, frontend, backend, piwifi]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Summarize
+        env:
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r frontend/requirements.txt -r backend/requirements.txt pytest
-      - name: Run tests
-        run: python -m pytest -q
+          echo "$RESULTS"
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["RESULTS"])
+          bad = {k: v["result"] for k, v in needs.items() if v["result"] not in ("success", "skipped")}
+          for k, v in needs.items():
+              print(f"{k}: {v['result']}")
+          sys.exit(1 if bad else 0)
+          PY
 
   secrets-scan:
     name: secrets & personal-info scan
@@ -54,6 +104,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
+      - name: CI tool tests (tools/ci/tests)
+        run: |
+          python -m pip install "Pillow==13.0.0"   # 鎖版本； test_check_png_metadata 用 Pillow 產生測試 PNG
+          python -m unittest discover -s tools/ci/tests -v
       - name: Install gitleaks (pinned + checksum)
         run: |
           curl -sSfL -o /tmp/gitleaks.tgz \
@@ -82,25 +136,3 @@ jobs:
           else
             python tools/ci/check_png_metadata.py --tree
           fi
-
-  rust:
-    name: rust (piwifi)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: piwifi
-    steps:
-      - uses: actions/checkout@v7
-      - name: Setup Rust toolchain (stable + musl target)
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy --target aarch64-unknown-linux-musl
-          rustup default stable
-      - name: cargo fmt --check
-        run: cargo fmt --check
-      - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
-      - name: cargo test
-        run: cargo test
-      - name: cargo build (aarch64-unknown-linux-musl)
-        run: cargo build --release --target aarch64-unknown-linux-musl

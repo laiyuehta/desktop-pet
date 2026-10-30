@@ -17,7 +17,8 @@ RuntimeDirectory=desktop-pet
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes
 # 切換至後台模式：關閉主程式內建 web 與 wifi，改由 Unix sockets (/run/desktop-pet) 提供給 desktop-pet-admin
-ExecStart=/usr/bin/python3 @HOME@/desktop-pet/frontend/main.py --sink piscreen --input web --web off --wifi off --fps 20
+# python 用 frontend/.venv（install.sh 會建立；#38）
+ExecStart=@HOME@/desktop-pet/frontend/.venv/bin/python @HOME@/desktop-pet/frontend/main.py --sink piscreen --input web --web off --wifi off --fps 20
 Restart=always
 RestartSec=3
 TimeoutStopSec=15

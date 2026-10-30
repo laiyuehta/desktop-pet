@@ -3,8 +3,8 @@
 
 電腦上預覽：
     python3 main.py --sink preview --input keyboard,web
-樹莓派（piscreen 服務已在跑；有 packs/seed 動畫包時自動播放預錄動畫）：
-    python3 main.py --sink piscreen --input web --web 0.0.0.0:8080 --pack packs/seed
+樹莓派（piscreen 服務已在跑；~/.local/share/desktop-pet/packs/seed 有動畫包時自動播放預錄動畫）：
+    python3 main.py --sink piscreen --input web --web 0.0.0.0:8080 --pack ~/.local/share/desktop-pet/packs/seed
 接後端（大腦，跑在 R7）：
     python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 """
@@ -19,6 +19,7 @@ import signal
 import sys
 import time
 
+import pet  # noqa: F401  先載入 pet：沒裝 shared 時會把 repo 的 shared/ 加進 sys.path
 from pet.app import PetApp
 from pet.env import expand_pet_path, load_pi_env
 from pet.events import make_event
@@ -32,6 +33,7 @@ from pet.outputs import FileSink, NullSink, PiscreenSink
 from pet.outputs.mirror import ScreenMirror, ScreenWebAPI
 from pet.outputs.piscreen import DEFAULT_SOCKET
 from pet.wifi import DEFAULT_HOTSPOT_CONF, HOTSPOT_SSID, WifiManager, WifiWebAPI
+from shared.apikey import read_key_file  # noqa: E402
 
 
 DEFAULT_TOKEN_FILE = "~/.config/desktop-pet/backend-token"
@@ -66,7 +68,7 @@ def parse_args(argv=None, env=None, env_file=None):
     p.add_argument("--fps", type=float, default=None,
                    help="目標 fps（預設：動畫包的 fps；即時繪圖 20）")
     p.add_argument("--pack", default=pack_default,
-                   help="預錄動畫包資料夾；預設讀 PET_PACK_DIR，未設為 auto（先找 ~/.local/share/desktop-pet/packs/<骨架>，再找 packs/<骨架>）；none = 只用即時繪圖")
+                   help="預錄動畫包資料夾；預設讀 PET_PACK_DIR，未設為 auto（$XDG_DATA_HOME 或 ~/.local/share 下的 desktop-pet/packs/<骨架>）；none = 只用即時繪圖")
     p.add_argument("--input", default="keyboard",
                    help="輸入轉接器，逗號分隔：keyboard、web、none（預設 keyboard）")
     p.add_argument("--web", default=web_default, help="網頁遙控監聽位址（預設讀 PET_WEB_LISTEN 或 0.0.0.0:8080；off 關閉）")
@@ -115,6 +117,36 @@ def parse_args(argv=None, env=None, env_file=None):
     return args
 
 
+
+
+def default_packs_dir() -> str:
+    from pet.pack import default_packs_dir as _d
+    return _d()
+
+
+def warn_no_auto_pack(skel_name: str, log: logging.Logger) -> None:
+    """--pack auto 找不到動畫包：大聲警告（log＋stderr），說明找過哪裡、會退回較慢的即時繪圖。"""
+    searched = "、".join(auto_pack_candidates(skel_name))
+    msg = (f"警告：--pack auto 找不到動畫包（找過：{searched}），改用較慢的即時骨架繪圖（Pi 3B 約 10–14 fps）。"
+           "請把動畫包放到上述位置，或用 PET_PACK_DIR／--pack 指定（#38 起不再讀 repo 內的 packs/）")
+    log.warning(msg)
+    if not os.environ.get("JOURNAL_STREAM"):   # systemd 下 log 已進 journald，不重複印
+        print(msg, file=sys.stderr, flush=True)
+
+
+def auto_pack_candidates(skel_name: str) -> list:
+    """--pack auto 找的位置：只有 ~/.local/share/desktop-pet/packs/<骨架>（#38 起動畫包放在 repo 外；PET_PACK_DIR／--pack 可指定別處）。"""
+    return [os.path.join(default_packs_dir(), skel_name)]
+
+
+def find_auto_pack(skel_name: str):
+    for path in auto_pack_candidates(skel_name):
+        pack = AnimationPack.try_load(path)
+        if pack is not None:
+            return pack
+    return None
+
+
 def make_sink(args, mirror=None, frames_server=None):
     if args.sink == "piscreen":
         sink = PiscreenSink(args.socket, quality=args.jpeg_quality)
@@ -140,8 +172,7 @@ def main(argv=None) -> int:
     token = args.backend_token
     if args.backend_token_file:
         try:
-            with open(os.path.expanduser(args.backend_token_file), "r", encoding="utf-8") as fh:
-                token = fh.read().strip()
+            token = read_key_file(args.backend_token_file)
         except OSError as exc:
             log.error("讀不到後端 token 檔 %s：%s", args.backend_token_file, exc.strerror)
             return 2
@@ -165,10 +196,9 @@ def main(argv=None) -> int:
     sink = make_sink(args, mirror=mirror, frames_server=frames_server)
     pack_dir = args.pack
     if pack_dir == "auto":
-        skel_name = app.renderer.skeleton.name
-        ext_pack = os.path.join(os.path.expanduser(DEFAULT_EXTERNAL_PACKS_DIR), skel_name)
-        repo_pack = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs", skel_name)
-        pack = AnimationPack.try_load(ext_pack) or AnimationPack.try_load(repo_pack)
+        pack = find_auto_pack(app.renderer.skeleton.name)
+        if pack is None:
+            warn_no_auto_pack(app.renderer.skeleton.name, log)
     elif pack_dir and pack_dir != "none":
         pack = AnimationPack.try_load(os.path.expanduser(pack_dir))
     else:
