@@ -20,26 +20,28 @@ from tools.deploy.autoupdate import (
     AutoUpdater,
     ProcessLock,
     append_updates_jsonl,
+    boot_check,
     calculate_manifest,
     check_ci_runs,
     check_held_criteria,
     check_manual_steps,
+    create_backup,
     detect_affected_units,
     get_remote_commit,
-    link_shared_resources,
     load_env,
     load_failed_json,
-    migrate_legacy_directory,
+    load_update_state,
+    overwrite_release,
     parse_pkt_lines,
     pre_switch_check,
-    prune_old_releases,
     record_failed_commit,
+    restore_from_backup,
     run_health_check,
     safe_extract_tarball,
-    switch_symlink,
     verify_manifest,
     write_manifest,
     write_status_json,
+    write_update_state,
 )
 from pet.version import get_autoupdate_status, get_release_info
 
@@ -330,202 +332,283 @@ class TestSelectiveRestart(unittest.TestCase):
         self.assertNotIn("desktop-pet.service", units)
 
 
-class TestSymlinkSwitchAndPruning(unittest.TestCase):
+class TestBackupAndOverwriteUpdate(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = Path(tempfile.mkdtemp())
-        self.releases_dir = self.tmp_dir / "releases"
-        self.releases_dir.mkdir()
-        self.link = self.tmp_dir / "current"
+        self.install_dir = self.tmp_dir / "desktop-pet"
+        self.state_dir = self.tmp_dir / "state"
+        self.backup_dir = self.tmp_dir / "backup"
+        self.install_dir.mkdir(parents=True)
+        self.state_dir.mkdir(parents=True)
+
+        self.env_file = self.tmp_dir / "env"
+        self.env_file.write_text(
+            f"PET_INSTALL_DIR={self.install_dir}\n"
+            f"PET_STATE_DIR={self.state_dir}\n"
+            f"PET_BACKUP_DIR={self.backup_dir}\n"
+            "PET_AUTOUPDATE_REQUIRE_CI=0\n",
+            encoding="utf-8",
+        )
+        self.updater = AutoUpdater(env_path=self.env_file)
 
     def tearDown(self):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
-    def test_switch_symlink(self):
-        rel_a = self.releases_dir / "20261029T000000Z-aaaa"
-        rel_b = self.releases_dir / "20261029T010000Z-bbbb"
-        rel_a.mkdir()
-        rel_b.mkdir()
-        (rel_a / "ver.txt").write_text("A", encoding="utf-8")
-        (rel_b / "ver.txt").write_text("B", encoding="utf-8")
+    def _make_tarball(self, files: Dict[str, str]) -> bytes:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for rel_path, content in files.items():
+                data = content.encode("utf-8")
+                ti = tarfile.TarInfo(name=f"repo/{rel_path}")
+                ti.size = len(data)
+                ti.mtime = 1700000000
+                tar.addfile(ti, io.BytesIO(data))
+        return buf.getvalue()
 
-        switch_symlink(rel_a, self.link)
-        self.assertEqual((self.link / "ver.txt").read_text(encoding="utf-8"), "A")
+    def test_pause_and_dry_run_touches_no_files(self):
+        # 建立初始版本檔案
+        (self.install_dir / "main.py").write_text("print('v1')", encoding="utf-8")
+        packs_cat = self.install_dir / "packs" / "cat"
+        packs_cat.mkdir(parents=True)
+        (packs_cat / "sprite.png").write_text("cat_bytes", encoding="utf-8")
+        (self.install_dir / "deploy.env").write_text("URL=https://pet.example.com", encoding="utf-8")
 
-        switch_symlink(rel_b, self.link)
-        self.assertEqual((self.link / "ver.txt").read_text(encoding="utf-8"), "B")
+        # 1. 測試 PAUSE 暫停檔
+        (self.state_dir / "PAUSE").write_text("1", encoding="utf-8")
+        res = self.updater.run_cycle(force=True)
+        self.assertEqual(res, 0)
+        self.assertFalse(self.backup_dir.exists())
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1')")
+        (self.state_dir / "PAUSE").unlink()
 
-    def test_switch_symlink_from_ordinary_directory(self):
-        # 模擬 Pi 首次切換：當前的 desktop-pet 是一般目錄而非 symlink
-        cur_dir = self.tmp_dir / "desktop-pet"
-        cur_dir.mkdir()
-        (cur_dir / "main.py").write_text("initial", encoding="utf-8")
+        # 2. 測試 PET_AUTOUPDATE=0
+        self.updater.conf["PET_AUTOUPDATE"] = "0"
+        res = self.updater.run_cycle(force=True)
+        self.assertEqual(res, 0)
+        self.assertFalse(self.backup_dir.exists())
+        self.updater.conf["PET_AUTOUPDATE"] = "1"
 
-        new_rel = self.tmp_dir / "releases" / "20261030T000000Z-rel1"
-        new_rel.mkdir(parents=True)
-        (new_rel / "main.py").write_text("new_code", encoding="utf-8")
+        # 3. 測試 dry_run
+        self.updater.dry_run = True
+        with mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value="1111111111111111111111111111111111111111"):
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 0)
+            self.assertFalse(self.backup_dir.exists())
+            self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1')")
 
-        # 呼叫 switch_symlink 不可丟出 IsADirectoryError
-        switch_symlink(new_rel, cur_dir)
+    def test_successful_update_cycle_and_packs_deploy_env_unchanged(self):
+        # 初始狀態：v1 包含 main.py、old_feature.py，以及 packs/、deploy.env
+        (self.install_dir / "main.py").write_text("print('v1')", encoding="utf-8")
+        (self.install_dir / "old_feature.py").write_text("def old(): pass", encoding="utf-8")
+        packs_cat = self.install_dir / "packs" / "cat"
+        packs_cat.mkdir(parents=True)
+        (packs_cat / "sprite.png").write_text("cat_sprite_bytes", encoding="utf-8")
+        (self.install_dir / "deploy.env").write_text("URL=https://pet.example.com", encoding="utf-8")
 
-        # cur_dir 應轉為 symlink 並指向 new_rel
-        self.assertTrue(cur_dir.is_symlink())
-        self.assertEqual(cur_dir.resolve(), new_rel.resolve())
-        self.assertEqual((cur_dir / "main.py").read_text(encoding="utf-8"), "new_code")
+        # 新版本：main.py 更新，新增 new_feature.py，移除 old_feature.py
+        new_commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        tar_bytes = self._make_tarball({
+            "main.py": "print('v2')",
+            "new_feature.py": "def new(): pass",
+        })
 
-        # 原目錄應被遷移至 desktop-pet-releases 下的 legacy release
-        legacy_dirs = list((self.tmp_dir / "desktop-pet-releases").glob("*-legacy"))
-        self.assertEqual(len(legacy_dirs), 1)
-        self.assertTrue((legacy_dirs[0] / "main.py").exists())
-        self.assertEqual((legacy_dirs[0] / "main.py").read_text(encoding="utf-8"), "initial")
+        with mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value=new_commit), \
+             mock.patch("tools.deploy.autoupdate.pre_switch_check", return_value=(True, None)), \
+             mock.patch("tools.deploy.autoupdate.run_health_check", return_value=(True, "all ok")), \
+             mock.patch("tools.deploy.autoupdate.restart_units") as mock_restart, \
+             mock.patch("urllib.request.urlopen") as mock_url:
 
-    def test_link_shared_resources(self):
-        old_rel = self.tmp_dir / "old_rel"
-        old_rel.mkdir()
-        (old_rel / "deploy.env").write_text("PET_BACKEND_URL=https://pet.example.com\n", encoding="utf-8")
-        (old_rel / "packs" / "seed").mkdir(parents=True)
-        (old_rel / "packs" / "seed" / "idle.png").write_text("img", encoding="utf-8")
+            mock_url.return_value = io.BytesIO(tar_bytes)
 
-        new_rel = self.tmp_dir / "new_rel"
-        new_rel.mkdir()
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 0)
 
-        link_shared_resources(new_rel, old_rel, home_dir=self.tmp_dir)
+        # 驗證新版檔案已覆蓋
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v2')")
+        self.assertTrue((self.install_dir / "new_feature.py").exists())
 
-        # 斷言 packs 與 deploy.env 成功帶入新 release
-        self.assertTrue((new_rel / "deploy.env").exists())
-        self.assertEqual((new_rel / "deploy.env").read_text(encoding="utf-8"), "PET_BACKEND_URL=https://pet.example.com\n")
-        self.assertTrue((new_rel / "packs" / "seed" / "idle.png").exists())
+        # 驗證新版中刪除的舊檔案已被移除
+        self.assertFalse((self.install_dir / "old_feature.py").exists())
 
-    def test_full_update_and_rollback_from_ordinary_directory(self):
-        # 整合測試：從一般目錄開始完整執行遷移、資源帶入、切換與回退
-        desktop_pet = self.tmp_dir / "desktop-pet"
-        desktop_pet.mkdir()
-        (desktop_pet / "main.py").write_text("version 1", encoding="utf-8")
-        (desktop_pet / "deploy.env").write_text("KEY=val1\n", encoding="utf-8")
-        (desktop_pet / "packs" / "seed").mkdir(parents=True)
-        (desktop_pet / "packs" / "seed" / "frame.png").write_text("frame1", encoding="utf-8")
+        # 驗證 packs/ 與 deploy.env 全程未被改動
+        self.assertTrue((packs_cat / "sprite.png").exists())
+        self.assertEqual((packs_cat / "sprite.png").read_text(encoding="utf-8"), "cat_sprite_bytes")
+        self.assertTrue((self.install_dir / "deploy.env").exists())
+        self.assertEqual((self.install_dir / "deploy.env").read_text(encoding="utf-8"), "URL=https://pet.example.com")
 
-        new_rel = self.tmp_dir / "desktop-pet-releases" / "20261030T100000Z-rel2"
-        new_rel.mkdir(parents=True)
-        (new_rel / "main.py").write_text("version 2", encoding="utf-8")
+        # 驗證備份目錄中保存有完整的舊檔案（含 old_feature.py）
+        self.assertTrue(self.backup_dir.exists())
+        self.assertTrue((self.backup_dir / "old_feature.py").exists())
+        self.assertEqual((self.backup_dir / "main.py").read_text(encoding="utf-8"), "print('v1')")
 
-        # 1. 帶入資源
-        link_shared_resources(new_rel, desktop_pet, home_dir=self.tmp_dir)
-        self.assertTrue((new_rel / "deploy.env").exists())
-        self.assertTrue((new_rel / "packs" / "seed" / "frame.png").exists())
+        # 驗證 update_state.json 標記為 success
+        st = load_update_state(self.state_dir)
+        self.assertEqual(st.get("status"), "success")
+        self.assertEqual(st.get("current_commit"), new_commit)
 
-        # 2. 首次切換（自動遷移一般目錄）
-        switch_symlink(new_rel, desktop_pet)
-        self.assertTrue(desktop_pet.is_symlink())
-        self.assertEqual((desktop_pet / "main.py").read_text(encoding="utf-8"), "version 2")
-        self.assertEqual((desktop_pet / "deploy.env").read_text(encoding="utf-8"), "KEY=val1\n")
-        self.assertTrue((desktop_pet / "packs" / "seed" / "frame.png").exists())
+    def test_backup_failure_midway_leaves_old_backup_intact(self):
+        # 既有舊備份存在（例如前一版的完整備份）
+        self.backup_dir.mkdir(parents=True)
+        (self.backup_dir / "main.py").write_text("print('v0_backup')", encoding="utf-8")
+        (self.backup_dir / "backup_manifest.json").write_text(json.dumps({"files": ["main.py"]}), encoding="utf-8")
 
-        # 3. 執行回退至 legacy release
-        legacy_dirs = list((self.tmp_dir / "desktop-pet-releases").glob("*-legacy"))
-        self.assertEqual(len(legacy_dirs), 1)
-        legacy_rel = legacy_dirs[0]
+        # install_dir 目前有 v1 檔案
+        (self.install_dir / "main.py").write_text("print('v1_current')", encoding="utf-8")
+        (self.install_dir / "sub.py").write_text("print('sub')", encoding="utf-8")
 
-        switch_symlink(legacy_rel, desktop_pet)
-        self.assertEqual((desktop_pet / "main.py").read_text(encoding="utf-8"), "version 1")
-        self.assertEqual((desktop_pet / "deploy.env").read_text(encoding="utf-8"), "KEY=val1\n")
-        self.assertTrue((desktop_pet / "packs" / "seed" / "frame.png").exists())
+        # 模擬在 create_backup 複製檔案途中發生例外（例如硬碟空間不足或寫入錯誤）
+        orig_copy2 = shutil.copy2
 
-    def test_prune_old_releases(self):
-        dirs = []
-        for i in range(6):
-            d = self.releases_dir / f"20261029T0{i}0000Z-commit{i}"
-            d.mkdir()
-            dirs.append(d)
+        def failing_copy2(src, dst):
+            if "sub.py" in str(src):
+                raise OSError("Disk write error")
+            return orig_copy2(src, dst)
 
-        current = dirs[-1]
-        prev = dirs[-2]
+        with mock.patch("shutil.copy2", side_effect=failing_copy2):
+            with self.assertRaises(OSError):
+                create_backup(self.install_dir, self.backup_dir)
 
-        prune_old_releases(self.releases_dir, current_release=current, previous_release=prev, keep_count=2)
-        remaining = [d.name for d in self.releases_dir.iterdir() if d.is_dir()]
+        # 斷言：舊備份完全不受影響，依然是 v0 內容，且暫存備份已被清理
+        self.assertTrue(self.backup_dir.exists())
+        self.assertEqual((self.backup_dir / "main.py").read_text(encoding="utf-8"), "print('v0_backup')")
+        self.assertFalse((self.backup_dir / "sub.py").exists())
+        tmp_dirs = list(self.backup_dir.parent.glob(f"{self.backup_dir.name}.tmp_*"))
+        self.assertEqual(tmp_dirs, [])
 
-        # current 與 prev 必留
-        self.assertIn(current.name, remaining)
-        self.assertIn(prev.name, remaining)
-        # 加上 2 個舊版本，總共應為 4 個
-        self.assertEqual(len(remaining), 4)
+    def test_new_version_startup_failure_triggers_automatic_rollback(self):
+        # 初始狀態：良好 v1
+        (self.install_dir / "main.py").write_text("print('v1')", encoding="utf-8")
+        (self.install_dir / "old_feature.py").write_text("def old(): pass", encoding="utf-8")
+        packs_cat = self.install_dir / "packs" / "cat"
+        packs_cat.mkdir(parents=True)
+        (packs_cat / "sprite.png").write_text("cat_sprite_bytes", encoding="utf-8")
+        (self.install_dir / "deploy.env").write_text("URL=https://pet.example.com", encoding="utf-8")
 
-    def test_no_migration_on_pause_or_dry_run(self):
-        # 驗證 PAUSE 存在或 dry-run 時，不得遷移一般目錄
-        home_dir = self.tmp_dir / "home_test"
-        home_dir.mkdir()
-        pet_dir = home_dir / "desktop-pet"
-        pet_dir.mkdir()
-        (pet_dir / "main.py").write_text("print('hi')", encoding="utf-8")
+        bad_commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        tar_bytes = self._make_tarball({
+            "main.py": "raise RuntimeError('broken v2')",
+            "bad_feature.py": "def bad(): pass",
+        })
 
-        state_dir = home_dir / ".local" / "state" / "desktop-pet" / "update"
-        state_dir.mkdir(parents=True)
-        pause_file = state_dir / "PAUSE"
-        pause_file.touch()
+        # 模擬新版本健康檢查失敗，但還原後舊版健康檢查通過
+        health_calls = []
+        def fake_health(conf, units, timeout_sec=120, **kwargs):
+            if not health_calls:
+                health_calls.append("new_failed")
+                return False, "新版本服務崩潰"
+            health_calls.append("restored_ok")
+            return True, "舊版本恢復正常"
 
-        env_path = self.tmp_dir / "test.env"
-        env_path.write_text(
-            f"PET_HOME={home_dir}\n"
-            f"PET_STATE_DIR={state_dir}\n"
-            f"PET_RELEASES_DIR={home_dir / 'desktop-pet-releases'}\n",
-            encoding="utf-8",
-        )
+        with mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value=bad_commit), \
+             mock.patch("tools.deploy.autoupdate.pre_switch_check", return_value=(True, None)), \
+             mock.patch("tools.deploy.autoupdate.run_health_check", side_effect=fake_health), \
+             mock.patch("tools.deploy.autoupdate.restart_units"), \
+             mock.patch("urllib.request.urlopen") as mock_url:
 
-        # 1. PAUSE 存在時，執行 run_cycle 不應搬移目錄
-        updater = AutoUpdater(env_path=env_path, dry_run=False, home_dir=home_dir)
-        code = updater.run_cycle(force=True)
-        self.assertEqual(code, 0)
-        self.assertTrue(pet_dir.is_dir())
-        self.assertFalse(pet_dir.is_symlink())
+            mock_url.return_value = io.BytesIO(tar_bytes)
 
-        pause_file.unlink()
+            res = self.updater.run_cycle(force=True)
+            self.assertEqual(res, 1)
 
-        # 2. dry_run=True 時，執行 run_cycle 亦不應搬移目錄
-        updater_dry = AutoUpdater(env_path=env_path, dry_run=True, home_dir=home_dir)
-        with unittest.mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value="f" * 40):
-            code = updater_dry.run_cycle(force=True)
-            self.assertEqual(code, 0)
-            self.assertTrue(pet_dir.is_dir())
-            self.assertFalse(pet_dir.is_symlink())
+        # 驗證自動回退：舊檔案完整還原，新版加入之檔案被刪除
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1')")
+        self.assertTrue((self.install_dir / "old_feature.py").exists())
+        self.assertFalse((self.install_dir / "bad_feature.py").exists())
 
-    def test_prune_retains_packs_after_many_releases(self):
-        # 驗證在經歷多次更新與舊版本 prune 後，動畫包依然可讀且保留在 shared_packs
-        home_dir = self.tmp_dir / "home2"
-        home_dir.mkdir()
-        pet_dir = home_dir / "desktop-pet"
-        pet_dir.mkdir()
-        (pet_dir / "main.py").write_text("v0", encoding="utf-8")
-        (pet_dir / "deploy.env").write_text("URL=https://pet.example.com\n", encoding="utf-8")
-        (pet_dir / "packs" / "cat").mkdir(parents=True)
-        (pet_dir / "packs" / "cat" / "a.png").write_text("cat_img", encoding="utf-8")
+        # packs/ 與 deploy.env 依然完好
+        self.assertTrue((packs_cat / "sprite.png").exists())
+        self.assertTrue((self.install_dir / "deploy.env").exists())
 
-        releases_dir = home_dir / "desktop-pet-releases"
-        releases_dir.mkdir()
+        # failed.json 記錄該 commit 失敗
+        failed = load_failed_json(self.state_dir)
+        self.assertTrue(any(f.get("commit") == bad_commit for f in failed))
 
-        # 首次遷移
-        legacy_dir = migrate_legacy_directory(pet_dir, releases_dir=releases_dir, home_dir=home_dir)
-        self.assertTrue(pet_dir.is_symlink())
-        self.assertEqual(pet_dir.resolve(), legacy_dir.resolve())
-        self.assertTrue((pet_dir / "packs" / "cat" / "a.png").exists())
+        # 下一輪不再自動重試該失敗 commit
+        with mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value=bad_commit):
+            res2 = self.updater.run_cycle(force=True)
+            self.assertEqual(res2, 0)
+            st_data = json.loads((self.state_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(st_data.get("last_check_result"), "commit_failed_previously")
 
-        # 連續進行 6 次發布與切換（使用未來時間戳以確保新版本時間晚於 legacy 遷移時間）
-        cur_rel = legacy_dir
-        for i in range(1, 7):
-            new_rel = releases_dir / f"20991030T00000{i}Z-rel{i}"
-            new_rel.mkdir()
-            (new_rel / "main.py").write_text(f"v{i}", encoding="utf-8")
-            link_shared_resources(new_rel, cur_rel, home_dir=home_dir)
-            switch_symlink(new_rel, pet_dir, releases_dir=releases_dir, home_dir=home_dir)
-            prune_old_releases(releases_dir, current_release=new_rel, previous_release=cur_rel, keep_count=2)
-            cur_rel = new_rel
+    def test_interrupted_overwrite_detected_and_restored_by_boot_check(self):
+        # 模擬覆蓋中途斷電：
+        # 1. 備份目錄完整存在
+        self.backup_dir.mkdir(parents=True)
+        (self.backup_dir / "main.py").write_text("print('v1_intact')", encoding="utf-8")
+        (self.backup_dir / "backup_manifest.json").write_text(json.dumps({"files": ["main.py"]}), encoding="utf-8")
 
-        # 斷言 legacy 目錄已因超過 keep_count 而被 prune
-        self.assertFalse(legacy_dir.exists())
+        # 2. install_dir 處於毀損狀態（被半途覆蓋）
+        (self.install_dir / "main.py").write_text("incomplete_half_written_bytes", encoding="utf-8")
+        (self.install_dir / "deploy.env").write_text("URL=https://pet.example.com", encoding="utf-8")
+        (self.install_dir / "packs" / "cat").mkdir(parents=True)
+        (self.install_dir / "packs" / "cat" / "sprite.png").write_text("cat_sprite", encoding="utf-8")
 
-        # 斷言目前活躍的 desktop-pet/packs/cat/a.png 仍完好可讀
-        self.assertTrue((pet_dir / "packs" / "cat" / "a.png").exists())
-        self.assertEqual((pet_dir / "packs" / "cat" / "a.png").read_text(encoding="utf-8"), "cat_img")
-        self.assertTrue((pet_dir / "deploy.env").exists())
-        self.assertEqual((pet_dir / "deploy.env").read_text(encoding="utf-8"), "URL=https://pet.example.com\n")
+        # 3. update_state.json 標記為 updating
+        write_update_state(self.state_dir, {
+            "status": "updating",
+            "target_commit": "cccccccccccccccccccccccccccccccccccccccc",
+            "previous_commit": "1111111111111111111111111111111111111111",
+        })
+
+        with mock.patch("tools.deploy.autoupdate.restart_units"):
+            ok, msg = self.updater.boot_check()
+            self.assertTrue(ok)
+            self.assertEqual(msg, "power_cut_recovered")
+
+        # 斷言檔案已自備份還原
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1_intact')")
+        # 斷言 packs 與 deploy.env 未受影響
+        self.assertTrue((self.install_dir / "deploy.env").exists())
+        self.assertTrue((self.install_dir / "packs" / "cat" / "sprite.png").exists())
+
+        # 斷言 failed.json 已記錄該 commit
+        failed = load_failed_json(self.state_dir)
+        self.assertTrue(any(f.get("commit") == "cccccccccccccccccccccccccccccccccccccccc" for f in failed))
+
+    def test_first_boot_after_update_failure_triggers_rollback(self):
+        # 模擬更新後第一次開機（狀態為 restarting）但驗證失敗
+        self.backup_dir.mkdir(parents=True)
+        (self.backup_dir / "main.py").write_text("print('v1_good')", encoding="utf-8")
+        (self.backup_dir / "backup_manifest.json").write_text(json.dumps({"files": ["main.py"]}), encoding="utf-8")
+
+        (self.install_dir / "main.py").write_text("print('v2_crashes')", encoding="utf-8")
+        (self.install_dir / "new_bad.py").write_text("bad", encoding="utf-8")
+
+        write_update_state(self.state_dir, {
+            "status": "restarting",
+            "target_commit": "dddddddddddddddddddddddddddddddddddddddd",
+            "previous_commit": "1111111111111111111111111111111111111111",
+        })
+
+        with mock.patch("tools.deploy.autoupdate.run_health_check", return_value=(False, "啟動失敗")), \
+             mock.patch("tools.deploy.autoupdate.restart_units"):
+            ok, msg = self.updater.boot_check()
+            self.assertFalse(ok)
+            self.assertIn("first_boot_failed_rolled_back", msg)
+
+        # 斷言已從備份還原
+        self.assertEqual((self.install_dir / "main.py").read_text(encoding="utf-8"), "print('v1_good')")
+        self.assertFalse((self.install_dir / "new_bad.py").exists())
+
+    def test_normal_boot_check_only_logs_and_touches_no_files(self):
+        # 正常運作開機：狀態為 success 或無狀態檔
+        (self.install_dir / "main.py").write_text("print('v1')", encoding="utf-8")
+        (self.install_dir / "packs").mkdir()
+        (self.install_dir / "deploy.env").write_text("URL=ok", encoding="utf-8")
+
+        write_update_state(self.state_dir, {"status": "success"})
+
+        ok, msg = self.updater.boot_check()
+        self.assertTrue(ok)
+        self.assertEqual(msg, "ok")
+
+        # 若舊版本檔案有缺失（例如缺少 main.py），僅記錄錯誤、不動任何檔案
+        (self.install_dir / "main.py").unlink()
+        ok, msg = self.updater.boot_check()
+        self.assertFalse(ok)
+        self.assertIn("main.py 不存在", msg)
+        # 確保不會去刪除或建立備份
+        self.assertFalse(self.backup_dir.exists())
 
 
 class TestPolkitRuleAndSystemdTemplates(unittest.TestCase):
@@ -561,6 +644,11 @@ class TestPolkitRuleAndSystemdTemplates(unittest.TestCase):
         self.assertIn("OnBootSec=5min", tmr)
         self.assertIn("OnUnitActiveSec=5min", tmr)
         self.assertIn("RandomizedDelaySec=60", tmr)
+
+        boot_svc = (base / "desktop-pet-boot-check.service").read_text(encoding="utf-8")
+        self.assertIn("Type=oneshot", boot_svc)
+        self.assertIn("User=@USER@", boot_svc)
+        self.assertIn("--boot-check", boot_svc)
 
 
 class TestStatusAndUpdatesJson(unittest.TestCase):

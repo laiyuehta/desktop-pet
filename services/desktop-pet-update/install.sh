@@ -10,6 +10,7 @@ load_deploy_env
 
 SVC=/etc/systemd/system/desktop-pet-update.service
 TMR=/etc/systemd/system/desktop-pet-update.timer
+BOOT_SVC=/etc/systemd/system/desktop-pet-boot-check.service
 RULE=/etc/polkit-1/rules.d/51-desktop-pet-update.rules
 
 if [ "${1:-}" = "--uninstall" ]; then
@@ -18,9 +19,10 @@ if [ "${1:-}" = "--uninstall" ]; then
         sudo systemctl stop desktop-pet-update.timer
     fi
     sudo systemctl disable desktop-pet-update.timer 2>/dev/null || true
-    sudo rm -f "$SVC" "$TMR" "$RULE"
+    sudo systemctl disable desktop-pet-boot-check.service 2>/dev/null || true
+    sudo rm -f "$SVC" "$TMR" "$BOOT_SVC" "$RULE"
     sudo systemctl daemon-reload
-    echo "已成功移除自動更新服務與計時器。"
+    echo "已成功移除自動更新服務、開機自檢服務與計時器。"
     exit 0
 fi
 
@@ -29,38 +31,32 @@ require_sys_env
 USER_NAME="$PET_USER"
 [ "$USER_NAME" != root ] || { echo "警告：PET_USER 為 root；建議以非 root 使用者執行以符合 polkit 安全限制。" >&2; }
 
-# 首次安裝遷移（PROPOSAL.md 16.9）：
-# 若 $PET_HOME/desktop-pet 是一般目錄而非 symlink，調用 autoupdate.py --migrate 執行安全遷移
-CURRENT_PET="$PET_HOME/desktop-pet"
-if [ -d "$CURRENT_PET" ] && [ ! -L "$CURRENT_PET" ]; then
-    echo "== 偵測到 $CURRENT_PET 為一般目錄，執行首次安裝遷移至 release 目錄"
-    PYTHON="${PET_VENV:-$CURRENT_PET/.venv}/bin/python"
-    [ -x "$PYTHON" ] || PYTHON="python3"
-    sudo -u "$USER_NAME" "$PYTHON" "$CURRENT_PET/tools/deploy/autoupdate.py" --migrate
-fi
-
 tmp_svc=$(mktemp)
 tmp_tmr=$(mktemp)
+tmp_boot_svc=$(mktemp)
 tmp_rule=$(mktemp)
-trap 'rm -f "$tmp_svc" "$tmp_tmr" "$tmp_rule"' EXIT INT TERM
+trap 'rm -f "$tmp_svc" "$tmp_tmr" "$tmp_boot_svc" "$tmp_rule"' EXIT INT TERM
 
 render_template desktop-pet-update.service > "$tmp_svc"
 render_template desktop-pet-update.timer > "$tmp_tmr"
+render_template desktop-pet-boot-check.service > "$tmp_boot_svc"
 render_template 51-desktop-pet-update.rules > "$tmp_rule"
 
 echo "== 安裝 systemd service 與 timer"
 sudo install -m 644 "$tmp_svc" "$SVC"
 sudo install -m 644 "$tmp_tmr" "$TMR"
+sudo install -m 644 "$tmp_boot_svc" "$BOOT_SVC"
 
 echo "== 安裝 polkit 規則"
 sudo install -d -m 755 /etc/polkit-1/rules.d
 sudo install -m 644 "$tmp_rule" "$RULE"
 
 echo "== systemd-analyze verify"
-sudo systemd-analyze verify "$SVC" "$TMR" && echo "verify OK"
+sudo systemd-analyze verify "$SVC" "$TMR" "$BOOT_SVC" && echo "verify OK"
 
 echo "== daemon-reload 與啟動 timer"
 sudo systemctl daemon-reload
+sudo systemctl enable desktop-pet-boot-check.service
 sudo systemctl enable desktop-pet-update.timer
 sudo systemctl start desktop-pet-update.timer
 
