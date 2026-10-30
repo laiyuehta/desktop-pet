@@ -60,7 +60,8 @@ def main() -> int:
     cfg = a.config or os.path.join(ROOT, "config", "bake.json")
     with open(cfg, encoding="utf-8") as fh:
         look = json.load(fh).get("look", "seed")
-    out = os.path.expanduser(a.out) if a.out else os.path.join(os.path.expanduser(DEFAULT_PACKS_DIR), look)
+    default_dir = os.path.join(os.environ["XDG_DATA_HOME"], "desktop-pet", "packs") if os.environ.get("XDG_DATA_HOME") else os.path.expanduser(DEFAULT_PACKS_DIR)
+    out = os.path.expanduser(a.out) if a.out else os.path.join(default_dir, look)
     print(f"產生動畫包 {look} → {out}")
     bake(out, bake_cfg=cfg, states_cfg=a.states_config,
          only_states=a.states.split(",") if a.states else None, fps=a.fps, quality=a.quality,

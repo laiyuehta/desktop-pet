@@ -1,4 +1,5 @@
 """#38 搬家後的路徑：動畫包只在 repo 外的 ~/.local/share/desktop-pet/packs、deploy.env 只在 repo 根目錄（所有讀取端一致）、piwifi 打包輸出在 repo 內。"""
+import logging
 import os
 import shutil
 import subprocess
@@ -23,9 +24,26 @@ def _admin():
 
 
 class AutoPackTest(unittest.TestCase):
+    def test_xdg_data_home_respected(self):
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/srv/xdg"}):
+            self.assertEqual(pet_main.auto_pack_candidates("seed"), ["/srv/xdg/desktop-pet/packs/seed"])
+
+    def test_missing_pack_warns_loudly(self):
+        import io
+        import contextlib
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/srv/none"}), contextlib.redirect_stderr(err):
+            with self.assertLogs("t38w", level="WARNING") as cm:
+                pet_main.warn_no_auto_pack("seed", logging.getLogger("t38w"))
+        for text in ("\n".join(cm.output), err.getvalue()):
+            self.assertIn("/srv/none/desktop-pet/packs/seed", text)
+            self.assertIn("即時骨架繪圖", text)
+
     def test_auto_pack_only_outside_repo(self):
-        c = pet_main.auto_pack_candidates("seed")
-        self.assertEqual(c, [os.path.join(os.path.expanduser("~/.local/share/desktop-pet/packs"), "seed")])
+        env = {k: v for k, v in os.environ.items() if k != "XDG_DATA_HOME"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            c = pet_main.auto_pack_candidates("seed")
+            self.assertEqual(c, [os.path.join(os.path.expanduser("~/.local/share/desktop-pet/packs"), "seed")])
         for path in c:
             self.assertFalse(Path(path).resolve().is_relative_to(REPO.resolve()), path)
 

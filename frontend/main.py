@@ -68,7 +68,7 @@ def parse_args(argv=None, env=None, env_file=None):
     p.add_argument("--fps", type=float, default=None,
                    help="目標 fps（預設：動畫包的 fps；即時繪圖 20）")
     p.add_argument("--pack", default=pack_default,
-                   help="預錄動畫包資料夾；預設讀 PET_PACK_DIR，未設為 auto（先找 ~/.local/share/desktop-pet/packs/<骨架>，再找 packs/<骨架>）；none = 只用即時繪圖")
+                   help="預錄動畫包資料夾；預設讀 PET_PACK_DIR，未設為 auto（$XDG_DATA_HOME 或 ~/.local/share 下的 desktop-pet/packs/<骨架>）；none = 只用即時繪圖")
     p.add_argument("--input", default="keyboard",
                    help="輸入轉接器，逗號分隔：keyboard、web、none（預設 keyboard）")
     p.add_argument("--web", default=web_default, help="網頁遙控監聽位址（預設讀 PET_WEB_LISTEN 或 0.0.0.0:8080；off 關閉）")
@@ -119,9 +119,26 @@ def parse_args(argv=None, env=None, env_file=None):
 
 
 
+def default_packs_dir() -> str:
+    """動畫包的唯一預設位置：$XDG_DATA_HOME/desktop-pet/packs（未設 XDG_DATA_HOME 時 ~/.local/share/desktop-pet/packs）。"""
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return os.path.join(xdg, "desktop-pet", "packs")
+    return os.path.expanduser(DEFAULT_EXTERNAL_PACKS_DIR)
+
+
+def warn_no_auto_pack(skel_name: str, log: logging.Logger) -> None:
+    """--pack auto 找不到動畫包：大聲警告（log＋stderr），說明找過哪裡、會退回較慢的即時繪圖。"""
+    searched = "、".join(auto_pack_candidates(skel_name))
+    msg = (f"警告：--pack auto 找不到動畫包（找過：{searched}），改用較慢的即時骨架繪圖（Pi 3B 約 10–14 fps）。"
+           "請把動畫包放到上述位置，或用 PET_PACK_DIR／--pack 指定（#38 起不再讀 repo 內的 packs/）")
+    log.warning(msg)
+    print(msg, file=sys.stderr, flush=True)
+
+
 def auto_pack_candidates(skel_name: str) -> list:
     """--pack auto 找的位置：只有 ~/.local/share/desktop-pet/packs/<骨架>（#38 起動畫包放在 repo 外；PET_PACK_DIR／--pack 可指定別處）。"""
-    return [os.path.join(os.path.expanduser(DEFAULT_EXTERNAL_PACKS_DIR), skel_name)]
+    return [os.path.join(default_packs_dir(), skel_name)]
 
 
 def find_auto_pack(skel_name: str):
@@ -182,6 +199,8 @@ def main(argv=None) -> int:
     pack_dir = args.pack
     if pack_dir == "auto":
         pack = find_auto_pack(app.renderer.skeleton.name)
+        if pack is None:
+            warn_no_auto_pack(app.renderer.skeleton.name, log)
     elif pack_dir and pack_dir != "none":
         pack = AnimationPack.try_load(os.path.expanduser(pack_dir))
     else:

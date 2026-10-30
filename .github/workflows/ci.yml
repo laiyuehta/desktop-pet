@@ -41,10 +41,13 @@ jobs:
               - 'shared/**'
             frontend:
               - 'frontend/**'
+              - 'deploy.env.example'
+              - '.gitignore'
               - *shared
               - *workflows
             backend:
               - 'backend/**'
+              - '.gitignore'
               - *shared
               - *workflows
             piwifi:

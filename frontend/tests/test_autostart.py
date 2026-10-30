@@ -268,7 +268,7 @@ class AutostartTest(unittest.TestCase):
 
         stub_bin = self.tmp_path / "bin"
         stub_bin.mkdir()
-        for name in ["sudo", "systemctl", "systemd-analyze", "sleep"]:
+        for name in ["sudo", "systemctl", "systemd-analyze", "sleep", "python3"]:
             stub = stub_bin / name
             stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             stub.chmod(0o755)
@@ -278,7 +278,20 @@ class AutostartTest(unittest.TestCase):
         custom_env = self.tmp_path / "custom.env"
         no_env = self.tmp_path / "no-env"
         missing_custom = self.tmp_path / "nonexistent.env"
-        rollback_script = (ROOT / "services" / "desktop-pet-admin" / "rollback.sh").as_posix()
+        # 在暫存目錄的 repo 複本裡跑（不在真的 repo 建 frontend/.venv）；venv 用假的 python（import 檢查一律成功）
+        repo_copy = self.tmp_path / "repo"
+        for rel in ["frontend/services/desktop-pet-admin/rollback.sh", "frontend/services/desktop-pet/desktop-pet.service",
+                    "frontend/tools/deploy/common.sh", "frontend/requirements.txt", "shared/shared/__init__.py"]:
+            dst = repo_copy / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO / rel, dst)
+        site = self.tmp_path / "site"
+        site.mkdir()
+        fake_py = repo_copy / "frontend" / ".venv" / "bin" / "python"
+        fake_py.parent.mkdir(parents=True)
+        fake_py.write_text(f'#!/bin/sh\ncase "$*" in *sysconfig*) echo "{site.as_posix()}" ;; esac\nexit 0\n', encoding="utf-8")
+        fake_py.chmod(0o755)
+        rollback_script = (repo_copy / "frontend" / "services" / "desktop-pet-admin" / "rollback.sh").as_posix()
 
         base_env = {
             "PATH": base_path,

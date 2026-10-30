@@ -14,7 +14,7 @@ ensure_frontend_venv
 
 # 檢查桌寵主程式是否仍在執行內建網頁或 Wi-Fi（若有，提示改用 switch.sh）
 if systemctl is-active --quiet desktop-pet 2>/dev/null; then
-    CMD=$(ps -o args= -C python3 2>/dev/null | grep "desktop-pet/frontend/main.py" | grep -v grep || true)
+    CMD=$(pgrep -af "desktop-pet/frontend/main.py" 2>/dev/null | grep -v pgrep || true)  # venv 的程序名稱是 python，不是 python3
     if [ -z "$CMD" ]; then
         CMD=$(systemctl show -p ExecStart --value desktop-pet 2>/dev/null || true)
     fi

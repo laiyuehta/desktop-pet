@@ -113,7 +113,7 @@ render_template() {
 # pet_flag_on <值>：1/true/yes/on 視為開（硬體開關 PET_ENABLE_* 用）
 pet_flag_on() {
     case "$1" in
-        1|true|TRUE|True|yes|on) return 0 ;;
+        1|true|TRUE|True|yes|YES|Yes|on|ON|On) return 0 ;;
     esac
     return 1
 }
@@ -140,14 +140,28 @@ ensure_frontend_venv() {
     fi
     _site="$("$_venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" || return 1
     printf '%s\n' "$PET_REPO_ROOT/shared" > "$_site/desktop-pet-shared.pth" || return 1
-    if "$_venv/bin/python" -c 'import PIL, shared.apikey, shared.envfile, shared.protocol' 2>/dev/null; then
-        echo "== frontend/.venv 已就緒（shared 經 .pth 指到 repo；Pillow 可用）"
+    # requirements.txt 有變（例如新增依賴）就重跑 pip；雜湊記在 venv 裡
+    _req_hash="$(sha256sum "$_fe/requirements.txt" | cut -d' ' -f1)"
+    _stamp="$_venv/.requirements.sha256"
+    if [ "$(cat "$_stamp" 2>/dev/null)" = "$_req_hash" ] \
+        && "$_venv/bin/python" -c 'import PIL, shared.apikey, shared.envfile, shared.protocol' 2>/dev/null; then
+        echo "== frontend/.venv 已就緒（requirements 沒變；shared 經 .pth 指到 repo）"
         return 0
     fi
-    echo "== 安裝前端依賴（frontend/requirements.txt；需要網路，除非 Pillow 已由 apt 安裝）"
-    (cd "$_fe" && "$_venv/bin/python" -m pip install --disable-pip-version-check -q --no-build-isolation -r requirements.txt) || true
+    # shared 已經用 .pth 接上，pip 只裝其餘依賴（去掉 -e ../shared，免得離線時要下載 setuptools）；
+    # 依賴已由 apt 滿足（python3-pil）時 pip 不需要網路
+    _req_tmp="$(mktemp)"
+    grep -v -E '^[[:space:]]*-e[[:space:]]+\.\./shared' "$_fe/requirements.txt" > "$_req_tmp"
+    echo "== 安裝前端依賴（frontend/requirements.txt）"
+    if ! (cd "$_fe" && "$_venv/bin/python" -m pip install --disable-pip-version-check -q --no-build-isolation -r "$_req_tmp"); then
+        rm -f "$_req_tmp"
+        echo "pip install 失敗（缺的套件需要網路；Pillow 可用 sudo apt install python3-pil 離線滿足）" >&2
+        return 1
+    fi
+    rm -f "$_req_tmp"
     "$_venv/bin/python" -c 'import PIL, shared.apikey, shared.envfile, shared.protocol' || {
-        echo "frontend/.venv 無法 import PIL 或 shared（Pi 上 sudo apt install python3-pil，或連上網路後重跑）" >&2
+        echo "frontend/.venv 無法 import PIL 或 shared" >&2
         return 1
     }
+    printf '%s\n' "$_req_hash" > "$_stamp"
 }

@@ -58,11 +58,13 @@ python3 main.py --sink preview --input keyboard,web --web 127.0.0.1:8080 --idle-
 
 ```bash
 cd frontend                            # #38 起 Pi 端程式在 frontend/（以下路徑相對於它）
-# 在電腦上先產生動畫包（Pi 也能跑，只是慢很多），再連同程式一起複製到 Pi
-python3 tools/bake.py                                  # → ~/.local/share/desktop-pet/packs/seed/（約 77 MB，在 repo 外）
+# 在電腦上先產生動畫包（Pi 也能跑，只是慢很多）：輸出到 repo 外的 ~/.local/share/desktop-pet/packs/seed/（約 77 MB）
+python3 tools/bake.py
+# 複製到 Pi 的同一個位置（Pi 的 ~/.local/share/desktop-pet/packs/seed/）
+rsync -a ~/.local/share/desktop-pet/packs/seed/ pi:.local/share/desktop-pet/packs/seed/
 # Pi 上：
 python3 tools/bench.py --pack ~/.local/share/desktop-pet/packs/seed   # 量播放成本
-python3 main.py --sink piscreen --input web --web 0.0.0.0:8080            # --pack auto 會讀 ~/.local/share/desktop-pet/packs/<骨架>
+python3 main.py --sink piscreen --input web --web 0.0.0.0:8080            # --pack auto：讀上面那個位置
 ```
 
 - `--pack auto`（預設，或由 `PET_PACK_DIR` 指定）：先找 `~/.local/share/desktop-pet/packs/<骨架名稱>/`，再找 `~/.local/share/desktop-pet/packs/<骨架名稱>/`，存在就播動畫包，沒有就即時繪圖；`--pack none` 強制即時繪圖。
@@ -189,7 +191,7 @@ python3 tools/bake.py --check ~/.local/share/desktop-pet/packs/seed      # 檢�
 2. **狀態表加狀態**：在 `frontend/config/states.json` 的 `states` 加狀態（`animation`、`eyes`、`effects`、`timers`），在 `transitions` 加 `(狀態, 事件) → 下一個狀態`。
 3. **（選用）設定變化版**：在 `frontend/config/bake.json` 的 `states` 加這個狀態的 `variants`（`blinks: [秒]`、`looks: [[秒, x, y], …]`）和 `cut_every`。沒寫的話自動產生 `base`（圓眼的再加一個 `blink`）。眨眼／看的時間不要放在片段頭尾。
 4. **先在電腦上預覽**：`python3 frontend/main.py --sink preview --pack none --input keyboard,web` 看即時版；`python3 frontend/tools/bake.py` 後看 `~/.local/share/desktop-pet/packs/seed/preview/*.gif`。
-5. **產生並推到 Pi**：`python3 frontend/tools/bake.py`，把 `~/.local/share/desktop-pet/packs/seed/`（`manifest.json`＋`frames.bin`）連同程式複製到 Pi，重啟桌寵。Pi 播放器只看動畫包裡的「狀態 → 片段」對照，**不用改程式**。還沒重新產生動畫包之前，新狀態會自動用即時繪圖顯示。
+5. **產生並推到 Pi**：`python3 frontend/tools/bake.py`，把 `~/.local/share/desktop-pet/packs/seed/`（`manifest.json`＋`frames.bin`）複製到 Pi 的 `~/.local/share/desktop-pet/packs/seed/`（不是 repo 裡），重啟桌寵。Pi 播放器只看動畫包裡的「狀態 → 片段」對照，**不用改程式**。還沒重新產生動畫包之前，新狀態會自動用即時繪圖顯示。
 6. 新的成長外觀（例如兔耳）：做新的骨架 JSON 與零件、另寫一份 bake 設定（`look`、`skeleton`），`python3 frontend/tools/bake.py --config frontend/config/bake-ears.json` 產生 `~/.local/share/desktop-pet/packs/<骨架名稱>/`。
 
 > 動畫包大小：種子約 77 MB（5 千多格，每格約 15 KB；過渡片段佔最多）。想縮小可以加大 `cut_every`、減少表情或變化版、或調低 `quality`。

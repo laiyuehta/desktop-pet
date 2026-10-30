@@ -146,10 +146,11 @@ def verify_manifest_emotions(tc: unittest.TestCase, m: dict) -> None:
                 tc.assertIn(f"{a}>{b}", m["transitions"])
 
 
-PACK = os.path.join(os.path.expanduser("~/.local/share/desktop-pet/packs"), "seed")
+# 只在明確指定時才檢查真的動畫包（PET_TEST_PACK_DIR），避免結果取決於這台機器 ~/.local/share 裡有沒有舊包
+PACK = os.environ.get("PET_TEST_PACK_DIR", "")
 
 
-@unittest.skipUnless(os.path.exists(os.path.join(PACK, "manifest.json")), "沒有 packs/seed（先跑 tools/bake.py）")
+@unittest.skipUnless(os.path.exists(os.path.join(PACK, "manifest.json")), "沒設 PET_TEST_PACK_DIR（指向 tools/bake.py 產生的 seed 動畫包）")
 class EmotionFullPackTest(unittest.TestCase):
     """tools/bake.py 產生的完整動畫包：新狀態都在、16 個狀態的 240 組過渡配對皆有片段。"""
 

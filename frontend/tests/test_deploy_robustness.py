@@ -9,6 +9,7 @@ from pathlib import Path
 
 FRONTEND = Path(__file__).resolve().parents[1]
 REPO = FRONTEND.parent
+_had_venv = (FRONTEND / ".venv").exists()
 
 
 def _copy_tree(dst: Path) -> None:
@@ -46,7 +47,7 @@ class RollbackSafetyTest(unittest.TestCase):
                                env={"PATH": f"{fake}:/usr/bin:/bin", "CALLS": str(log),
                                     "PET_DEPLOY_ENV": str(env_file)})
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("未做任何變更", r.stderr)
+            self.assertIn("服務未變更", r.stderr)
             calls = log.read_text(encoding="utf-8") if log.exists() else ""
             self.assertNotIn("stop", calls)
             self.assertNotIn("disable", calls)
@@ -54,46 +55,80 @@ class RollbackSafetyTest(unittest.TestCase):
 
 
 class OfflineVenvTest(unittest.TestCase):
+    """在暫存目錄的 repo 複本裡建 venv（不碰真的 repo）。只依賴 PATH 上的 python3：
+    它沒有 venv 模組或沒有（系統層級的）Pillow 時直接 skip，結果不看目前執行測試的 python。"""
+
     def test_ensure_frontend_venv_works_offline(self):
-        if not shutil.which("sh"):
-            raise unittest.SkipTest("sh not available")
-        try:
-            import PIL  # noqa: F401
-        except ImportError:
-            raise unittest.SkipTest("system Pillow not available")
+        if not shutil.which("sh") or not shutil.which("python3"):
+            raise unittest.SkipTest("sh/python3 not available")
         with tempfile.TemporaryDirectory() as d:
+            env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PIP_NO_INDEX": "1", "HOME": d}
+            # ensure_frontend_venv 用的是 PATH 上的 python3：先用同樣的條件探測
+            probe = Path(d) / "probe"
+            r = subprocess.run(["python3", "-m", "venv", "--system-site-packages", str(probe)],
+                               capture_output=True, env=env)
+            if r.returncode != 0:
+                raise unittest.SkipTest("python3 venv module not available")
+            r = subprocess.run([str(probe / "bin" / "python"), "-s", "-c", "import PIL"], capture_output=True, env=env)
+            if r.returncode != 0:
+                raise unittest.SkipTest("python3 has no system-level Pillow (apt python3-pil); offline venv not possible here")
             root = Path(d) / "repo"
             _copy_tree(root)
-            probe = subprocess.run([sys.executable, "-m", "venv", "--system-site-packages", str(Path(d) / "probe")],
-                                   capture_output=True)
-            if probe.returncode != 0:
-                raise unittest.SkipTest("python venv module not available")
-            env = {"PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin", "PIP_NO_INDEX": "1",
-                   "PET_REPO_ROOT": str(root)}
+            env["PET_REPO_ROOT"] = str(root)
             for _ in range(2):  # 第二次（已有 venv）也要能離線成功
                 r = subprocess.run(["sh", "-c", '. "$PET_REPO_ROOT/frontend/tools/deploy/common.sh"; ensure_frontend_venv'],
                                    capture_output=True, text=True, env=env)
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             py = root / "frontend/.venv/bin/python"
             out = subprocess.run([str(py), "-c", "import shared; print(shared.__file__)"],
-                                 capture_output=True, text=True, check=True).stdout
+                                 capture_output=True, text=True, check=True, env=env).stdout
             self.assertTrue(out.strip().startswith(str(root / "shared")), out)
+            # requirements.txt 新增依賴 → 會重跑 pip（離線裝不到就失敗，不會假裝成功）
+            req = root / "frontend/requirements.txt"
+            req.write_text(req.read_text(encoding="utf-8") + "desktop-pet-no-such-package==0.0.1\n", encoding="utf-8")
+            r = subprocess.run(["sh", "-c", '. "$PET_REPO_ROOT/frontend/tools/deploy/common.sh"; ensure_frontend_venv'],
+                               capture_output=True, text=True, env=env)
+            self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((FRONTEND / ".venv").exists() and not _had_venv, "測試不可在 repo 裡建立 frontend/.venv")
 
 
 class SharedFallbackTest(unittest.TestCase):
-    def _run(self, args, cwd):
-        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-        return subprocess.run([sys.executable, "-s", *args], cwd=cwd, capture_output=True, text=True, env=env)
+    """真的測到 fallback：用 python -S -E（不載入 site-packages、不看 PYTHONPATH），裝好的 shared 套件就看不到；
+    只有 pet/__init__.py、backend/__init__.py 的 _ensure_shared_importable() 會把 repo 的 shared/ 加進 sys.path。
+    拿掉 fallback 這兩個測試就會失敗。"""
 
-    def test_frontend_main_without_installed_shared(self):
+    def _run(self, code):
         with tempfile.TemporaryDirectory() as d:
-            r = self._run([str(FRONTEND / "main.py"), "--help"], d)
-        self.assertEqual(r.returncode, 0, r.stderr)
+            return subprocess.run([sys.executable, "-S", "-E", "-c", code], cwd=d, capture_output=True, text=True,
+                                  env={"PATH": os.environ.get("PATH", "")})
 
-    def test_backend_without_installed_shared(self):
-        r = self._run(["-m", "backend.keys", "--help"], str(REPO))
+    def _check(self, r):
         self.assertEqual(r.returncode, 0, r.stderr)
+        lines = r.stdout.strip().splitlines()
+        self.assertEqual(lines[0], "not-installed", "shared 不應該在 -S 環境中直接可用（測試前提）")
+        self.assertTrue(lines[1].startswith(str(REPO / "shared" / "shared")), lines[1])
 
+    def test_frontend_pet_falls_back_to_repo_shared(self):
+        r = self._run(
+            "import sys, importlib.util\n"
+            f"sys.path.insert(0, {str(FRONTEND)!r})\n"
+            "s = importlib.util.find_spec('shared')\n"
+            "print('not-installed' if s is None or not s.origin else 'installed')\n"
+            "import pet\n"
+            "import shared.apikey, shared.protocol, shared.envfile\n"
+            "print(shared.__file__)\n")
+        self._check(r)
+
+    def test_backend_falls_back_to_repo_shared(self):
+        r = self._run(
+            "import sys, importlib.util\n"
+            f"sys.path.insert(0, {str(REPO)!r})\n"
+            "s = importlib.util.find_spec('shared')\n"
+            "print('not-installed' if s is None or not s.origin else 'installed')\n"
+            "import backend.keys\n"
+            "import shared\n"
+            "print(shared.__file__)\n")
+        self._check(r)
 
 if __name__ == "__main__":
     unittest.main()

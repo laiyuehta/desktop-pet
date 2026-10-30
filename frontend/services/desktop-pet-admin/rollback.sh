@@ -19,11 +19,11 @@ ADMIN_UNIT=/etc/systemd/system/desktop-pet-admin.service
 echo "== 正在回退至單體模式 =="
 
 # 先準備好、驗證完再動服務：venv 或 unit 有問題就中止，desktop-pet-admin 與目前的 desktop-pet 都維持原狀
-ensure_frontend_venv || { echo "錯誤：frontend/.venv 無法就緒，未做任何變更（desktop-pet-admin 仍在執行）" >&2; exit 1; }
+ensure_frontend_venv || { echo "錯誤：frontend/.venv 無法就緒，服務未變更（desktop-pet-admin 仍在執行）" >&2; exit 1; }
 tmp_pet=$(mktemp --suffix=.service)
-render_template "$PET_REPO_ROOT/frontend/services/desktop-pet/desktop-pet.service" > "$tmp_pet" || { rm -f "$tmp_pet"; echo "錯誤：unit 範本產生失敗，未做任何變更" >&2; exit 1; }
+render_template "$PET_REPO_ROOT/frontend/services/desktop-pet/desktop-pet.service" > "$tmp_pet" || { rm -f "$tmp_pet"; echo "錯誤：unit 範本產生失敗，服務未變更（desktop-pet-admin 仍在執行；frontend/.venv 可能已建立，不影響現況）" >&2; exit 1; }
 echo "== 驗證 systemd unit"
-sudo systemd-analyze verify "$tmp_pet" || { rm -f "$tmp_pet"; echo "錯誤：unit 驗證失敗，未做任何變更" >&2; exit 1; }
+sudo systemd-analyze verify "$tmp_pet" || { rm -f "$tmp_pet"; echo "錯誤：unit 驗證失敗，服務未變更（desktop-pet-admin 仍在執行；frontend/.venv 可能已建立，不影響現況）" >&2; exit 1; }
 
 if systemctl is-active --quiet desktop-pet-admin; then
     sudo systemctl stop desktop-pet-admin

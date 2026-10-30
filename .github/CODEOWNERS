@@ -43,7 +43,6 @@
 /tools/ci/                @laiyueda12-star
 
 # 美術與動畫：桌寵專案機器人2（包含素材工具與動畫規格）
-/frontend/packs/          @laiyuehta
 /frontend/assets/         @laiyuehta
 /frontend/preview/        @laiyuehta
 /frontend/config/bake.json         @laiyuehta
