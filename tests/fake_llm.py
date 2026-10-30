@@ -33,7 +33,7 @@ class FakeLLM:
                 try:
                     self.end_headers()
                     self.wfile.write(data)
-                except (BrokenPipeError, ConnectionResetError):
+                except OSError:
                     pass   # 客戶端已逾時離開
 
             def do_GET(self):
