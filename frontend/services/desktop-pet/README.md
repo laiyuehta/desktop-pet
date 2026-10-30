@@ -99,9 +99,15 @@ EOF
 - **git clone 部署**：`git pull` 即可（`shared/` 跟著來，舊檔案會被 git 移除）。
 - **複製／覆蓋檔案部署（Pi 目前的方式）**：要**連 `frontend/` 和 `shared/` 一起放**（sparse-checkout 也要包含 `shared/`），並刪掉根目錄的舊結構，避免誤用舊程式：
   ```bash
-  cd ~/desktop-pet && rm -rf main.py pet services tools/bake.py tools/bench.py tools/gen_seed_parts.py tools/render_demo.py tools/deploy tools/wifi config assets preview requirements.txt tests
+  bash -eu <<'EOF'
+  trap 'echo "!!! 整理舊檔案失敗，請手動檢查" >&2' ERR
+  sudo systemctl stop desktop-pet desktop-pet-admin 2>/dev/null || true
+  cd ~/desktop-pet
+  rm -rf main.py pet backend services tools/bake.py tools/bench.py tools/gen_seed_parts.py tools/render_demo.py tools/deploy tools/wifi config assets preview requirements.txt tests
   [ -d packs ] && rmdir packs 2>/dev/null || true       # 第 2 步搬完後應該是空的；不是空的就先人工檢查
   ls frontend/main.py shared/shared/__init__.py         # 兩個都要在
+  echo "=== 第 3 步完成"
+  EOF
   ```
   （`deploy.env` 留在根目錄。）
 

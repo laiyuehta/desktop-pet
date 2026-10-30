@@ -380,6 +380,7 @@ class StateChangeTimestampTest(unittest.TestCase):
         self.assertEqual(app.state_changed_ts, 2000.0)
 
 
+@unittest.skipUnless(hasattr(socket, "AF_UNIX"), "AF_UNIX required")
 class PiscreenJpegPassthroughTest(unittest.TestCase):
     def test_send_jpeg_forwards_bytes(self):
         d = tempfile.mkdtemp()
@@ -422,8 +423,10 @@ class MainSmokeTest(unittest.TestCase):
         try:
             make_fake_pack(d, {}).close()       # 空的動畫包 → 全部退回即時繪圖也不會當
             self.assertEqual(main.main(["--sink", "null", "--input", "none", "--duration", "0.3",
+                                        "--control-socket", "off", "--frames-socket", "off", "--wifi", "off",
                                         "--pack", d]), 0)
             self.assertEqual(main.main(["--sink", "null", "--input", "none", "--duration", "0.3",
+                                        "--control-socket", "off", "--frames-socket", "off", "--wifi", "off",
                                         "--pack", "none"]), 0)
         finally:
             shutil.rmtree(d, ignore_errors=True)
