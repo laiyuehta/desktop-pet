@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -41,6 +43,7 @@ from tools.deploy.autoupdate import (
     record_failed_commit,
     restore_from_backup,
     run_health_check,
+    run_subprocess_killpg,
     safe_extract_tarball,
     verify_manifest,
     write_manifest,
@@ -685,6 +688,77 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
         failed = load_failed_json(self.state_dir)
         self.assertFalse(any(f.get("commit") == "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" for f in failed))
 
+    def test_boot_check_with_in_progress_and_pending_boot_check_runs_health_check_not_power_cut(self):
+        """Minor 3 驗證：boot_check 遇 status=in_progress 且 pending_boot_check=True 時，執行健康檢查而非觸發斷電還原。"""
+        target_commit = "ffffffffffffffffffffffffffffffffffffffff"
+        write_update_state(self.state_dir, {
+            "status": "in_progress",
+            "pending_boot_check": True,
+            "target_commit": target_commit,
+            "previous_commit": "1111111111111111111111111111111111111111",
+        })
+
+        with mock.patch.object(self.updater, "run_health_check", return_value=(True, None)) as mock_hc:
+            ok, msg = self.updater.boot_check()
+            self.assertTrue(ok)
+            self.assertEqual(msg, "first_boot_success")
+            mock_hc.assert_called_once_with(target_commit)
+
+        st = load_update_state(self.state_dir)
+        self.assertFalse(st.get("pending_boot_check"))
+        self.assertIn(st.get("status"), ("success", "idle"))
+
+    def test_run_cycle_recovers_interrupted_restarting_failure(self):
+        """Must-fix 1 驗證：run_cycle 遇 status=restarting 且健康檢查失敗時，立即回退並記錄至 failed.json。"""
+        bad_commit = "b" * 40
+        good_commit = "a" * 40
+        (self.install_dir / "frontend").mkdir(parents=True, exist_ok=True)
+        (self.install_dir / "frontend" / "main.py").write_text("print('v2_bad')", encoding="utf-8")
+        (self.backup_dir / "frontend").mkdir(parents=True, exist_ok=True)
+        (self.backup_dir / "frontend" / "main.py").write_text("print('v1_good')", encoding="utf-8")
+        (self.backup_dir / "backup_manifest.json").write_text(json.dumps({"files": ["frontend/main.py"]}), encoding="utf-8")
+
+        write_update_state(self.state_dir, {
+            "status": "restarting",
+            "pending_boot_check": True,
+            "target_commit": bad_commit,
+            "previous_commit": good_commit,
+        })
+
+        with mock.patch.object(self.updater, "run_health_check", return_value=(False, "啟動失敗")), \
+             mock.patch.object(self.updater, "restart_after_rollback", return_value=True):
+            rc = self.updater.run_cycle(force=True)
+            self.assertEqual(rc, 0)
+
+        # 斷言已回退至好版本
+        self.assertEqual((self.install_dir / "frontend" / "main.py").read_text(encoding="utf-8"), "print('v1_good')")
+        st = load_update_state(self.state_dir)
+        self.assertEqual(st.get("status"), "rolled_back")
+        self.assertFalse(st.get("pending_boot_check"))
+        failed = load_failed_json(self.state_dir)
+        self.assertTrue(any(f.get("commit") == bad_commit for f in failed))
+
+    def test_run_cycle_recovers_interrupted_restarting_success(self):
+        """Must-fix 1 驗證：run_cycle 遇 status=restarting 且健康檢查通過時，標記為 success。"""
+        target_commit = "c" * 40
+        write_update_state(self.state_dir, {
+            "status": "restarting",
+            "pending_boot_check": True,
+            "target_commit": target_commit,
+            "previous_commit": "a" * 40,
+        })
+
+        with mock.patch.object(self.updater, "run_health_check", return_value=(True, None)):
+            rc = self.updater.run_cycle(force=True)
+            self.assertEqual(rc, 0)
+
+        st = load_update_state(self.state_dir)
+        self.assertEqual(st.get("status"), "success")
+        self.assertEqual(st.get("current_commit"), target_commit)
+        self.assertFalse(st.get("pending_boot_check"))
+        failed = load_failed_json(self.state_dir)
+        self.assertFalse(any(f.get("commit") == target_commit for f in failed))
+
     def test_pre_switch_check_fails_when_frontend_venv_missing(self):
         # 模擬 frontend/.venv 不存在時，拒絕退回 sys.executable 並報錯
         shutil.rmtree(self.install_dir / "frontend" / ".venv", ignore_errors=True)
@@ -1113,7 +1187,7 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
                     passed_req_content.append(req_path.read_text(encoding="utf-8"))
             return mock.Mock(returncode=0, stdout="", stderr="")
 
-        with mock.patch("subprocess.run", side_effect=spy_run) as mock_run:
+        with mock.patch("tools.deploy.autoupdate.run_subprocess_killpg", side_effect=spy_run) as mock_run:
             ok, err = self.updater.ensure_dependencies(staged_dir)
             self.assertTrue(ok)
             self.assertIsNone(err)
@@ -1139,7 +1213,7 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
 
         with mock.patch("tools.deploy.autoupdate.os.name", "posix"), \
              mock.patch("shutil.which", return_value="/bin/bash"), \
-             mock.patch("subprocess.run") as mock_run:
+             mock.patch("tools.deploy.autoupdate.run_subprocess_killpg") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0, stdout="ok", stderr="")
 
             ok, err = self.updater.ensure_dependencies(staged_dir)
@@ -1180,7 +1254,7 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
              mock.patch("tools.deploy.autoupdate.pre_switch_check", return_value=(True, None)), \
              mock.patch("tools.deploy.autoupdate.run_health_check", return_value=(True, "all ok")), \
              mock.patch("tools.deploy.autoupdate.restart_units"), \
-             mock.patch("subprocess.run", side_effect=spy_run), \
+             mock.patch("tools.deploy.autoupdate.run_subprocess_killpg", side_effect=spy_run), \
              mock.patch("urllib.request.urlopen", return_value=io.BytesIO(tar_bytes)):
 
             res = self.updater.run_cycle(force=True)
@@ -1188,6 +1262,37 @@ class TestBackupAndOverwriteUpdate(unittest.TestCase):
 
         # 斷言：覆蓋後依然成功偵測到 requirements.txt 變更並執行依賴更新！
         self.assertTrue(len(pip_called) > 0, "requirements.txt 變更必須觸發依賴更新")
+
+    def test_run_subprocess_killpg_posix_creates_new_session_and_kills_pg_on_timeout(self):
+        """Minor 2 驗證：在 POSIX 下 run_subprocess_killpg 使用 start_new_session=True，逾時時以 SIGKILL 殺死整個行程群組。"""
+        sig = getattr(signal, "SIGKILL", 9)
+        with mock.patch("tools.deploy.autoupdate.os.name", "posix"), \
+             mock.patch("subprocess.Popen") as mock_popen, \
+             mock.patch("os.getpgid", create=True, return_value=12345), \
+             mock.patch("os.killpg", create=True) as mock_killpg:
+
+            mock_proc = mock.MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd=["test"], timeout=2.0)
+            mock_popen.return_value = mock_proc
+
+            with self.assertRaises(subprocess.TimeoutExpired):
+                run_subprocess_killpg(["test"], timeout=2.0)
+
+            # 斷言使用 start_new_session=True 建立 process group
+            self.assertTrue(mock_popen.call_args[1].get("start_new_session"))
+            # 斷言逾時時殺死整個行程群組 (PGID 12345)
+            mock_killpg.assert_called_once_with(12345, sig)
+
+    def test_run_subprocess_killpg_nt_uses_subprocess_run(self):
+        """Minor 2 驗證：在 Windows (nt) 下 run_subprocess_killpg 呼叫 subprocess.run。"""
+        with mock.patch("tools.deploy.autoupdate.os.name", "nt"), \
+             mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="win_ok", stderr="")
+            res = run_subprocess_killpg(["echo", "hi"], timeout=10.0)
+            self.assertEqual(res.returncode, 0)
+            self.assertEqual(res.stdout, "win_ok")
+            mock_run.assert_called_once()
 
 
 class TestPolkitRuleAndSystemdTemplates(unittest.TestCase):

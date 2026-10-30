@@ -19,10 +19,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 import urllib.error
 import urllib.request
 
@@ -102,6 +103,63 @@ except ImportError:
     from shared.version import get_autoupdate_status, get_release_info  # type: ignore
 
 log = logging.getLogger("pet.autoupdate")
+
+
+def run_subprocess_killpg(
+    cmd: List[str],
+    timeout: float,
+    cwd: Optional[Union[str, Path]] = None,
+    env: Optional[Dict[str, str]] = None,
+) -> subprocess.CompletedProcess:
+    """執行子行程，並在 POSIX 上使用獨立 process group (start_new_session=True) 確保逾時時殺死所有孫行程。"""
+    cwd_str = str(cwd) if cwd is not None else None
+    if os.name == "nt":
+        return subprocess.run(
+            cmd,
+            cwd=cwd_str,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    # POSIX 環境：使用 start_new_session=True 建立獨立行程群組
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd_str,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=proc.returncode if proc.returncode is not None else 0,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    except subprocess.TimeoutExpired as exc:
+        try:
+            getpgid = getattr(os, "getpgid", None)
+            killpg = getattr(os, "killpg", None)
+            sig = getattr(signal, "SIGKILL", 9)
+            if getpgid and killpg:
+                killpg(getpgid(proc.pid), sig)
+            else:
+                proc.kill()
+        except (ProcessLookupError, OSError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        try:
+            proc.communicate(timeout=2.0)
+        except Exception:
+            pass
+        raise subprocess.TimeoutExpired(cmd, timeout=timeout, output=exc.output, stderr=exc.stderr)
 
 
 def check_held_criteria(
@@ -534,6 +592,7 @@ class AutoUpdaterPi(AutoUpdaterCore):
         log.info("偵測到前端 requirements.txt 變更，準備更新 frontend/.venv 依賴...")
 
         # 優先呼叫 common.sh 中的 ensure_frontend_venv（過濾 -e ../shared 且兼顧離線 .pth 設定）
+        pip_timeout = int(os.environ.get("PET_PIP_TIMEOUT", "600"))
         common_sh = self.install_dir / "frontend" / "tools" / "deploy" / "common.sh"
         if not common_sh.exists():
             common_sh = self.install_dir / "tools" / "deploy" / "common.sh"
@@ -546,13 +605,11 @@ class AutoUpdaterPi(AutoUpdaterCore):
             env_copy["PET_REPO_ROOT"] = str(self.install_dir)
             log.info("呼叫 common.sh ensure_frontend_venv 更新前端虛擬環境與依賴...")
             try:
-                res = subprocess.run(
+                res = run_subprocess_killpg(
                     [sh_bin, "-c", '. "$1" && ensure_frontend_venv', "sh", str(common_sh)],
                     cwd=str(self.install_dir / "frontend" if (self.install_dir / "frontend").exists() else self.install_dir),
-                    capture_output=True,
-                    text=True,
                     env=env_copy,
-                    timeout=300,
+                    timeout=pip_timeout,
                 )
                 if res.returncode != 0:
                     err_msg = res.stderr.strip() or res.stdout.strip()
@@ -599,7 +656,7 @@ class AutoUpdaterPi(AutoUpdaterCore):
                 str(tmp_req),
             ]
             cwd = self.install_dir / "frontend" if (self.install_dir / "frontend").exists() else self.install_dir
-            res = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=300)
+            res = run_subprocess_killpg(cmd, cwd=str(cwd), timeout=pip_timeout)
             if res.returncode != 0:
                 err_msg = res.stderr.strip() or res.stdout.strip()
                 log.error("pip 安裝依賴失敗：%s", err_msg)

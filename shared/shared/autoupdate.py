@@ -405,7 +405,7 @@ def write_manifest(root_dir: Path, manifest: Dict[str, str]) -> Path:
 
 
 def load_manifest(manifest_file_or_dir: Path) -> Dict[str, str]:
-    """讀取 MANIFEST.sha256 檔案，回傳 {檔案相對路徑: sha256} 字典。"""
+    """讀取 MANIFEST.sha256 檔案，回傳 {檔案相對路徑: sha256} 字典（排除路徑穿越與絕對路徑）。"""
     manifest_file = manifest_file_or_dir / "MANIFEST.sha256" if manifest_file_or_dir.is_dir() else manifest_file_or_dir
     expected: Dict[str, str] = {}
     if not manifest_file.exists():
@@ -417,7 +417,18 @@ def load_manifest(manifest_file_or_dir: Path) -> Dict[str, str]:
                 continue
             parts = line.split(None, 1)
             if len(parts) == 2:
-                expected[parts[1].strip()] = parts[0].strip()
+                rel_path = parts[1].strip()
+                p_obj = Path(rel_path)
+                if (
+                    p_obj.is_absolute()
+                    or bool(p_obj.root)
+                    or bool(p_obj.drive)
+                    or rel_path.startswith(("/", "\\"))
+                    or any(part == ".." for part in p_obj.parts)
+                ):
+                    log.warning("MANIFEST 包含不合規路徑，已忽略：%s", rel_path)
+                    continue
+                expected[rel_path] = parts[0].strip()
     except Exception:
         pass
     return expected
@@ -602,22 +613,31 @@ def overwrite_release(
     if previous_manifest_files is None:
         m_file = install_dir / "MANIFEST.sha256"
         if m_file.exists():
-            previous_manifest_files = set()
-            try:
-                for line in m_file.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        parts = line.split(None, 1)
-                        if len(parts) == 2:
-                            previous_manifest_files.add(parts[1].strip())
-            except Exception as exc:
-                log.warning("讀取現有 MANIFEST.sha256 失敗：%s", exc)
+            previous_manifest_files = set(load_manifest(m_file).keys())
 
     if previous_manifest_files:
+        resolved_install = install_dir.resolve()
         for old_rel in sorted(previous_manifest_files):
+            p_obj = Path(old_rel)
+            if (
+                p_obj.is_absolute()
+                or bool(p_obj.root)
+                or bool(p_obj.drive)
+                or old_rel.startswith(("/", "\\"))
+                or any(part == ".." for part in p_obj.parts)
+            ):
+                log.warning("拒絕刪除不合規路徑：%s", old_rel)
+                continue
             if old_rel not in new_files:
-                target = install_dir / old_rel
-                if target.exists() and not is_protected_path(Path(old_rel)):
+                target = (install_dir / old_rel).resolve()
+                try:
+                    rel = target.relative_to(resolved_install)
+                    if str(rel) in (".", ""):
+                        continue
+                except ValueError:
+                    log.warning("拒絕刪除 install_dir 外部路徑：%s", old_rel)
+                    continue
+                if target.is_file() and not is_protected_path(Path(old_rel)):
                     try:
                         target.unlink()
                         deleted.append(old_rel)
@@ -1179,10 +1199,41 @@ class AutoUpdaterCore:
                 log.info("[Dry Run] 僅執行檢查，不動任何檔案與服務。")
                 return 0
 
-            # 0. 檢查前次更新是否曾中途中斷（如斷電、kill、crash 導致留在 in_progress / updating）
+            # 0. 檢查前次更新是否曾中途中斷（如斷電、kill、crash 導致留在 in_progress / updating / restarting）
             st_pre = load_update_state(self.state_dir)
+            if st_pre.get("pending_boot_check") or st_pre.get("status") == "restarting":
+                target_commit = st_pre.get("target_commit", "")
+                log.info("偵測到前次更新於重啟或健康檢查期間中斷（status=%s, target_commit=%s），先執行健康檢查...", st_pre.get("status"), target_commit)
+                health_ok, fail_reason = self.run_health_check(target_commit)
+                if not health_ok:
+                    log.error("前次更新之版本健康檢查失敗：%s，優先執行回退還原...", fail_reason)
+                    if self.backup_dir.exists():
+                        self.rollback()
+                    record_failed_commit(self.state_dir, target_commit, "interrupted", f"更新重啟後中斷且健康檢查失敗: {fail_reason}")
+                    st_pre["pending_boot_check"] = False
+                    st_pre["status"] = "rolled_back"
+                    write_update_state(self.state_dir, st_pre)
+                    self._record_status("broken", check_result=f"前次中斷之版本驗證失敗已回退: {fail_reason}")
+                else:
+                    log.info("前次中斷之版本健康檢查通過，完成更新並標記為 success")
+                    clear_failed_records(self.state_dir)
+                    st_pre["pending_boot_check"] = False
+                    st_pre["status"] = "success"
+                    st_pre["current_commit"] = target_commit
+                    write_update_state(self.state_dir, st_pre)
+                    self._record_status("on", current_commit=target_commit, check_result=f"更新成功至 {target_commit[:12]}")
+                pause_f = self.state_dir / "PAUSE"
+                if pause_f.exists():
+                    try:
+                        if "本地檔案遭手動修改" in pause_f.read_text(encoding="utf-8"):
+                            pause_f.unlink()
+                            log.info("已清理因中途中斷產生的自動 PAUSE 標記")
+                    except Exception:
+                        pass
+                return 0
+
             if st_pre.get("status") in ("in_progress", "updating"):
-                log.warning("偵測到前次更新程序異常中斷（status=%s），優先執行回退還原...", st_pre.get("status"))
+                log.warning("偵測到前次更新程序覆蓋中途中斷（status=%s），優先執行回退還原...", st_pre.get("status"))
                 if self.backup_dir.exists():
                     self.rollback()
                 record_failed_commit(self.state_dir, st_pre.get("target_commit", "unknown"), "interrupted", "更新中途中斷，run_cycle 自動復原")

@@ -98,7 +98,8 @@ def pre_switch_check_r7(
             if py:
                 break
     if not py:
-        py = sys.executable
+        expected = (install_dir / "backend" / ".venv") if install_dir else (candidate_dir / "backend" / ".venv")
+        return False, f"未找到 backend/.venv 虛擬環境直譯器（預期路徑：{expected}），無法執行切換前檢查"
 
     # 1. compileall backend 與 shared
     for sub in ("backend", "shared"):
@@ -471,16 +472,17 @@ class AutoUpdaterR7(AutoUpdaterCore):
         ]
         pip_bin = next((p for p in pip_candidates if p.is_file()), None)
         if not pip_bin:
-            log.warning("未找到 backend/.venv pip，使用目前直譯器之 pip")
-            pip_cmd = [sys.executable, "-m", "pip"]
-        else:
-            pip_cmd = [str(pip_bin)]
+            expected = self.install_dir / "backend" / ".venv"
+            log.error("未找到 backend/.venv pip（預期路徑：%s），無法更新依賴", expected)
+            return False, f"未找到 backend/.venv pip（預期路徑：{expected}），無法更新依賴"
+        pip_cmd = [str(pip_bin)]
 
         be_dir = self.install_dir / "backend"
         req_file = be_dir / "requirements.txt"
         if not req_file.exists():
             return True, None
 
+        pip_timeout = int(os.environ.get("PET_PIP_TIMEOUT", "600"))
         log.info("偵測到 requirements.txt 或 shared/ 變更，在 %s 執行 pip install ...", be_dir)
         try:
             res = subprocess.run(
@@ -488,7 +490,7 @@ class AutoUpdaterR7(AutoUpdaterCore):
                 cwd=str(be_dir),
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=pip_timeout,
             )
             if res.returncode != 0:
                 err_msg = res.stderr.strip() or res.stdout.strip()

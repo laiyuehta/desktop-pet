@@ -335,6 +335,12 @@ class TestR7AutoUpdaterCycle(unittest.TestCase):
 
         # 2. requirements.txt 變更 -> 呼叫 pip，且 cwd 必須為 backend 目錄
         (staged_be / "requirements.txt").write_text("pytest==8.1.0\n", encoding="utf-8")
+        dummy_pip = (
+            self.inst / "backend" / ".venv" / ("Scripts" if os.name == "nt" else "bin") / ("pip.exe" if os.name == "nt" else "pip")
+        )
+        dummy_pip.parent.mkdir(parents=True, exist_ok=True)
+        dummy_pip.write_text("# dummy pip", encoding="utf-8")
+
         with mock.patch("subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
             ok, err = self.updater.ensure_dependencies(staged)
@@ -342,6 +348,97 @@ class TestR7AutoUpdaterCycle(unittest.TestCase):
             self.assertTrue(mock_run.called)
             kwargs = mock_run.call_args[1]
             self.assertEqual(Path(kwargs.get("cwd")).resolve(), (self.inst / "backend").resolve())
+
+    def test_ensure_dependencies_fails_when_pip_missing(self):
+        """Minor 5 驗證：backend/.venv pip 缺失時拒絕退回 sys.executable，直接回傳錯誤。"""
+        (self.inst / "backend").mkdir(parents=True, exist_ok=True)
+        (self.backup / "backend").mkdir(parents=True, exist_ok=True)
+        (self.inst / "backend" / "requirements.txt").write_text("pytest==8.0.0\n", encoding="utf-8")
+        (self.backup / "backend" / "requirements.txt").write_text("pytest==8.0.0\n", encoding="utf-8")
+
+        staged = self.base / "staged"
+        staged_be = staged / "backend"
+        staged_be.mkdir(parents=True, exist_ok=True)
+        (staged_be / "requirements.txt").write_text("pytest==8.1.0\n", encoding="utf-8")
+
+        ok, err = self.updater.ensure_dependencies(staged)
+        self.assertFalse(ok)
+        self.assertIn("未找到 backend/.venv pip", err or "")
+
+    def test_pre_switch_check_r7_fails_when_venv_missing(self):
+        """Minor 5 驗證：pre_switch_check_r7 找不到 venv 直譯器時拒絕退回 sys.executable。"""
+        staged = self.base / "staged_check"
+        (staged / "backend").mkdir(parents=True, exist_ok=True)
+        ok, err = pre_switch_check_r7(staged, install_dir=self.inst)
+        self.assertFalse(ok)
+        self.assertIn("未找到 backend/.venv 虛擬環境直譯器", err or "")
+
+    def test_pre_switch_check_r7_succeeds_with_venv(self):
+        """Minor 5 驗證：pre_switch_check_r7 找到 venv 直譯器時執行檢查。"""
+        dummy_py = (
+            self.inst / "backend" / ".venv" / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
+        )
+        dummy_py.parent.mkdir(parents=True, exist_ok=True)
+        dummy_py.write_text("# dummy python", encoding="utf-8")
+
+        staged = self.base / "staged_check_ok"
+        (staged / "backend").mkdir(parents=True, exist_ok=True)
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            ok, err = pre_switch_check_r7(staged, install_dir=self.inst)
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+
+    def test_r7_run_cycle_recovers_interrupted_restarting_failure(self):
+        """Must-fix 1 驗證：R7 run_cycle 遇 restarting / pending_boot_check 且健康檢查失敗時，執行回退並寫入 failed.json。"""
+        bad_commit = "b" * 40
+        good_commit = "a" * 40
+        (self.inst / "backend").mkdir(parents=True, exist_ok=True)
+        (self.inst / "backend" / "server.py").write_text("v2_bad", encoding="utf-8")
+        (self.backup / "backend").mkdir(parents=True, exist_ok=True)
+        (self.backup / "backend" / "server.py").write_text("v1_good", encoding="utf-8")
+        (self.backup / "backup_manifest.json").write_text(json.dumps({"files": ["backend/server.py"]}), encoding="utf-8")
+
+        write_update_state(self.state, {
+            "status": "restarting",
+            "pending_boot_check": True,
+            "target_commit": bad_commit,
+            "previous_commit": good_commit,
+        })
+
+        with mock.patch.object(self.updater, "run_health_check", return_value=(False, "500 Internal Error")), \
+             mock.patch.object(self.updater, "restart_after_rollback", return_value=True):
+            rc = self.updater.run_cycle(force=True)
+            self.assertEqual(rc, 0)
+
+        # 斷言已回退
+        self.assertEqual((self.inst / "backend" / "server.py").read_text(encoding="utf-8"), "v1_good")
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rolled_back")
+        self.assertFalse(st.get("pending_boot_check"))
+        failed = load_failed_json(self.state)
+        self.assertTrue(any(f.get("commit") == bad_commit for f in failed))
+
+    def test_r7_run_cycle_recovers_interrupted_restarting_success(self):
+        """Must-fix 1 驗證：R7 run_cycle 遇 restarting / pending_boot_check 且健康檢查成功時，標記為 success。"""
+        target_commit = "c" * 40
+        write_update_state(self.state, {
+            "status": "restarting",
+            "pending_boot_check": True,
+            "target_commit": target_commit,
+            "previous_commit": "a" * 40,
+        })
+
+        with mock.patch.object(self.updater, "run_health_check", return_value=(True, None)):
+            rc = self.updater.run_cycle(force=True)
+            self.assertEqual(rc, 0)
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "success")
+        self.assertEqual(st.get("current_commit"), target_commit)
+        self.assertFalse(st.get("pending_boot_check"))
+        failed = load_failed_json(self.state)
+        self.assertFalse(any(f.get("commit") == target_commit for f in failed))
 
     def test_two_cycles_with_second_cycle_rollback_preserves_local_and_c1_files(self):
         """完整兩週期測試：第一週期成功升級至 C1，第二週期升級至 C2 失敗回退，驗證 C1 與本機檔案完整保留。"""

@@ -28,6 +28,7 @@ from shared.autoupdate import (
     get_remote_commit,
     is_protected_path,
     load_failed_json,
+    load_manifest,
     load_update_state,
     overwrite_release,
     parse_pkt_lines,
@@ -215,6 +216,36 @@ class TestManifestAndPreservation(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual((self.inst / "app.py").read_text(encoding="utf-8"), "old")
         self.assertFalse((self.inst / "bad.py").exists(), "還原時應清除新版帶入的多餘檔案")
+
+    def test_overwrite_release_and_load_manifest_reject_path_traversal(self):
+        """Minor 4 驗證：load_manifest 與 overwrite_release 拒絕 .. 與絕對路徑，防止目錄穿越刪檔。"""
+        victim_outside = self.base / "victim.txt"
+        victim_outside.write_text("critical outside data", encoding="utf-8")
+
+        # 1. 驗證 load_manifest 拒絕包含 .. 與絕對路徑
+        manifest_f = self.inst / "MANIFEST.sha256"
+        manifest_content = (
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  valid.txt\n"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  frontend/../../victim.txt\n"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  /etc/shadow\n"
+        )
+        manifest_f.write_text(manifest_content, encoding="utf-8")
+        parsed = load_manifest(manifest_f)
+        self.assertIn("valid.txt", parsed)
+        self.assertNotIn("frontend/../../victim.txt", parsed)
+        self.assertNotIn("/etc/shadow", parsed)
+
+        # 2. 驗證 overwrite_release 若收到包含路徑穿越之 previous_manifest_files，絕不刪除外部檔案
+        empty_unpacked = self.base / "empty_unpacked"
+        empty_unpacked.mkdir()
+        overwritten, deleted = overwrite_release(
+            self.inst,
+            empty_unpacked,
+            previous_manifest_files={"frontend/../../victim.txt", "/etc/passwd"},
+        )
+        self.assertTrue(victim_outside.exists(), "外部檔案 victim.txt 絕不可被 overwrite_release 刪除！")
+        self.assertEqual(victim_outside.read_text(encoding="utf-8"), "critical outside data")
+        self.assertNotIn("frontend/../../victim.txt", deleted)
 
 
 class TestProcessLock(unittest.TestCase):
