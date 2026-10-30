@@ -4,7 +4,7 @@
 用法：
     python3 tools/bench.py [秒數]                 # 即時骨架繪圖：純繪圖 fps、繪圖 + JPEG fps
     python3 tools/bench.py --stages [秒數]        # 即時繪圖分段毫秒：step / 姿勢 / 繪圖 / 編碼
-    python3 tools/bench.py --pack packs/seed [秒數]   # 動畫包播放：每格取幀成本、對話框合成成本
+    python3 tools/bench.py --pack ~/.local/share/desktop-pet/packs/seed [秒數]   # 動畫包播放：每格取幀成本、對話框合成成本
 在 Pi 3B 上跑一次就知道實際能到多少 fps。
 """
 

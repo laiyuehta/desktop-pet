@@ -4,7 +4,7 @@
 依狀態機目前狀態挑片段，把事先編好的 800×480 baseline JPEG 直接送給 piscreen，
 不繪圖、不重新編碼；只有對話框出現時才解碼該格、畫上對話框、重新編碼。
 
-目錄結構（packs/<外觀>/）：
+目錄結構（~/.local/share/desktop-pet/packs/<外觀>/，在 repo 外）：
     manifest.json   片段、狀態對照、過渡片段、每格在 frames.bin 的位置
     frames.bin      所有 JPEG 幀串在一起（重複的幀只存一次）
     preview/        預覽 GIF / PNG（給人看的，Pi 用不到）

@@ -3,8 +3,8 @@
 
 電腦上預覽：
     python3 main.py --sink preview --input keyboard,web
-樹莓派（piscreen 服務已在跑；有 packs/seed 動畫包時自動播放預錄動畫）：
-    python3 main.py --sink piscreen --input web --web 0.0.0.0:8080 --pack packs/seed
+樹莓派（piscreen 服務已在跑；~/.local/share/desktop-pet/packs/seed 有動畫包時自動播放預錄動畫）：
+    python3 main.py --sink piscreen --input web --web 0.0.0.0:8080 --pack ~/.local/share/desktop-pet/packs/seed
 接後端（大腦，跑在 R7）：
     python3 main.py --sink piscreen --input web --backend http://192.0.2.100:8090
 """
@@ -117,15 +117,11 @@ def parse_args(argv=None, env=None, env_file=None):
     return args
 
 
-FRONTEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def auto_pack_candidates(skel_name: str) -> list:
-    """--pack auto 依序找的位置：~/.local/share/desktop-pet/packs/<骨架>，再來是 frontend/packs/<骨架>（#38 起 repo 內唯一位置）。"""
-    return [
-        os.path.join(os.path.expanduser(DEFAULT_EXTERNAL_PACKS_DIR), skel_name),
-        os.path.join(FRONTEND_DIR, "packs", skel_name),
-    ]
+    """--pack auto 找的位置：只有 ~/.local/share/desktop-pet/packs/<骨架>（#38 起動畫包放在 repo 外；PET_PACK_DIR／--pack 可指定別處）。"""
+    return [os.path.join(os.path.expanduser(DEFAULT_EXTERNAL_PACKS_DIR), skel_name)]
 
 
 def find_auto_pack(skel_name: str):

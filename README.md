@@ -59,13 +59,13 @@ python3 main.py --sink preview --input keyboard,web --web 127.0.0.1:8080 --idle-
 ```bash
 cd frontend                            # #38 起 Pi 端程式在 frontend/（以下路徑相對於它）
 # 在電腦上先產生動畫包（Pi 也能跑，只是慢很多），再連同程式一起複製到 Pi
-python3 tools/bake.py                                  # → packs/seed/（約 77 MB）
+python3 tools/bake.py                                  # → ~/.local/share/desktop-pet/packs/seed/（約 77 MB，在 repo 外）
 # Pi 上：
-python3 tools/bench.py --pack packs/seed               # 量播放成本
-python3 main.py --sink piscreen --input web --web 0.0.0.0:8080 --pack packs/seed
+python3 tools/bench.py --pack ~/.local/share/desktop-pet/packs/seed   # 量播放成本
+python3 main.py --sink piscreen --input web --web 0.0.0.0:8080            # --pack auto 會讀 ~/.local/share/desktop-pet/packs/<骨架>
 ```
 
-- `--pack auto`（預設，或由 `PET_PACK_DIR` 指定）：先找 `~/.local/share/desktop-pet/packs/<骨架名稱>/`，再找 `frontend/packs/<骨架名稱>/`，存在就播動畫包，沒有就即時繪圖；`--pack none` 強制即時繪圖。
+- `--pack auto`（預設，或由 `PET_PACK_DIR` 指定）：先找 `~/.local/share/desktop-pet/packs/<骨架名稱>/`，再找 `~/.local/share/desktop-pet/packs/<骨架名稱>/`，存在就播動畫包，沒有就即時繪圖；`--pack none` 強制即時繪圖。
 - fps 預設跟動畫包一樣（20）；即時繪圖模式在 Pi 3B 只有 10~14 fps（`python3 frontend/tools/bench.py --stages` 可看各段毫秒）。
 
 - 手機或電腦開 `http://192.0.2.43:8080/` 就是網頁遙控。
@@ -157,18 +157,18 @@ curl -X POST localhost:8080/wifi/hotspot  -d '{"on":true}'                      
 ## 動畫包（預錄動畫）
 
 Pi 3B 即時繪圖只有 10~14 fps，所以改成**在電腦上把動畫先算好、Pi 只播放**（項目書「裝置端：預錄動畫播放」）。
-骨架、零件、狀態表、眼嘴程式都還在，它們是動畫的「原始檔」；動畫包是產物，隨時可以重新產生，**不進 git**（`frontend/packs/` 在 `.gitignore`）。
+骨架、零件、狀態表、眼嘴程式都還在，它們是動畫的「原始檔」；動畫包是產物，隨時可以重新產生，**不進 git**，預設放在 repo 外的 `~/.local/share/desktop-pet/packs/`（換程式碼、重建 venv 都不會動到；`PET_PACK_DIR`／`--pack` 可指定別處）。
 
 ### 產生與檢查
 
 ```bash
 cd frontend                            # #38 起 Pi 端程式在 frontend/（以下路徑相對於它）
-python3 tools/bake.py                         # 依 config/bake.json 產生 packs/seed/，最後自動檢查
+python3 tools/bake.py                         # 依 config/bake.json 產生 ~/.local/share/desktop-pet/packs/seed/，最後自動檢查
 python3 tools/bake.py --states idle,happy --no-transitions --out /tmp/test-pack   # 只做一部分（快速試）
-python3 tools/bake.py --check packs/seed      # 檢查既有動畫包（每格都是完整 JPEG）
+python3 tools/bake.py --check ~/.local/share/desktop-pet/packs/seed      # 檢查既有動畫包（每格都是完整 JPEG）
 ```
 
-產生後先看 `frontend/packs/seed/preview/`：每個狀態一個 GIF（半尺寸）和 `states.png`（各狀態第一格），不用上 Pi 也能檢查動畫。
+產生後先看 `~/.local/share/desktop-pet/packs/seed/preview/`：每個狀態一個 GIF（半尺寸）和 `states.png`（各狀態第一格），不用上 Pi 也能檢查動畫。
 
 ### 動畫包裡有什麼
 
@@ -188,9 +188,9 @@ python3 tools/bake.py --check packs/seed      # 檢查既有動畫包（每格�
 1. **骨架 JSON 加動作**：在 `frontend/assets/skeletons/seed.json` 的 `animations` 加一段（格式見下方「骨架格式」）。長度最好是 1/fps 的整數倍（20 fps → 0.05 秒的倍數），循環才不會跳。
 2. **狀態表加狀態**：在 `frontend/config/states.json` 的 `states` 加狀態（`animation`、`eyes`、`effects`、`timers`），在 `transitions` 加 `(狀態, 事件) → 下一個狀態`。
 3. **（選用）設定變化版**：在 `frontend/config/bake.json` 的 `states` 加這個狀態的 `variants`（`blinks: [秒]`、`looks: [[秒, x, y], …]`）和 `cut_every`。沒寫的話自動產生 `base`（圓眼的再加一個 `blink`）。眨眼／看的時間不要放在片段頭尾。
-4. **先在電腦上預覽**：`python3 frontend/main.py --sink preview --pack none --input keyboard,web` 看即時版；`python3 frontend/tools/bake.py` 後看 `frontend/packs/seed/preview/*.gif`。
-5. **產生並推到 Pi**：`python3 frontend/tools/bake.py`，把 `frontend/packs/seed/`（`manifest.json`＋`frames.bin`）連同程式複製到 Pi，重啟桌寵。Pi 播放器只看動畫包裡的「狀態 → 片段」對照，**不用改程式**。還沒重新產生動畫包之前，新狀態會自動用即時繪圖顯示。
-6. 新的成長外觀（例如兔耳）：做新的骨架 JSON 與零件、另寫一份 bake 設定（`look`、`skeleton`），`python3 frontend/tools/bake.py --config frontend/config/bake-ears.json` 產生 `frontend/packs/<骨架名稱>/`。
+4. **先在電腦上預覽**：`python3 frontend/main.py --sink preview --pack none --input keyboard,web` 看即時版；`python3 frontend/tools/bake.py` 後看 `~/.local/share/desktop-pet/packs/seed/preview/*.gif`。
+5. **產生並推到 Pi**：`python3 frontend/tools/bake.py`，把 `~/.local/share/desktop-pet/packs/seed/`（`manifest.json`＋`frames.bin`）連同程式複製到 Pi，重啟桌寵。Pi 播放器只看動畫包裡的「狀態 → 片段」對照，**不用改程式**。還沒重新產生動畫包之前，新狀態會自動用即時繪圖顯示。
+6. 新的成長外觀（例如兔耳）：做新的骨架 JSON 與零件、另寫一份 bake 設定（`look`、`skeleton`），`python3 frontend/tools/bake.py --config frontend/config/bake-ears.json` 產生 `~/.local/share/desktop-pet/packs/<骨架名稱>/`。
 
 > 動畫包大小：種子約 77 MB（5 千多格，每格約 15 KB；過渡片段佔最多）。想縮小可以加大 `cut_every`、減少表情或變化版、或調低 `quality`。
 
@@ -221,7 +221,7 @@ frontend/pet/actuators/             ActuatorController、Wheels、PanTilt、Actu
 frontend/pet/extensions/            EventBus、Extension、ExtensionManager、ExampleExtension
 frontend/tools/gen_seed_parts.py    產生零件圖
 frontend/tools/render_demo.py       產生預覽 GIF / PNG
-frontend/tools/bake.py              產生／檢查動畫包（packs/<外觀>/，不進 git）
+frontend/tools/bake.py              產生／檢查動畫包（~/.local/share/desktop-pet/packs/<外觀>/，在 repo 外）
 frontend/tools/bench.py             量 fps（即時繪圖、分段毫秒 --stages、動畫包播放 --pack）
 frontend/tests/            前端 unittest；backend/tests/ 後端（含假 LLM 伺服器 fake_llm.py）；shared/tests/ 共用模組
 shared/                    前後端共用模組（protocol 協定常數、apikey 金鑰格式、envfile 環境檔格式），兩端 requirements 第一行 -e ../shared
@@ -308,13 +308,13 @@ python3 -m unittest discover -s shared/tests -v                # 共用模組
 
 **Pi 3B 實測（2026-10-28）**
 - 即時骨架繪圖（`frontend/tools/bench.py --stages`）：每格繪圖 40~47 ms（滾動 77 ms，其中零件變形佔大部分）＋ JPEG 編碼約 11 ms → 待機 13~14 fps、滾動 10~11 fps，吃滿 1 顆核心。
-- 動畫包播放（`frontend/tools/bench.py --pack frontend/packs/seed`）：每格約 0.17 ms；實際跑 20.0 fps、CPU 約 1 核的 2.3%；有對話框時每格約 20 ms（解碼＋畫框＋編碼），20.0 fps、約 41%。
+- 動畫包播放（`frontend/tools/bench.py --pack ~/.local/share/desktop-pet/packs/seed`）：每格約 0.17 ms；實際跑 20.0 fps、CPU 約 1 核的 2.3%；有對話框時每格約 20 ms（解碼＋畫框＋編碼），20.0 fps、約 41%。
 - 連跑 30 分鐘：平均 20.0 fps，記憶體沒有增加，piscreen 錯誤／救援都是 0。
 
 ## 授權
 
 - **程式碼、工具、設定與預覽圖**（含 `frontend/tools/gen_seed_parts.py`、`frontend/config/bake.json`、`frontend/config/states.json`、`frontend/preview/` 的 `demo.gif` 與各狀態 PNG）：MIT，見 [LICENSE](LICENSE)。
 - **美術素材 `frontend/assets/`**（含 `frontend/assets/skeletons/`、`frontend/assets/parts/`）：[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)（姓名標示－非商業性），見 [frontend/assets/LICENSE](frontend/assets/LICENSE)。署名：laiyuehta（https://github.com/laiyuehta/desktop-pet）。
-- 由素材烘焙出的動畫包 `frontend/packs/`（不進 repo）屬衍生作品，同樣適用 CC BY-NC 4.0。
+- 由素材烘焙出的動畫包 `~/.local/share/desktop-pet/packs/`（不進 repo）屬衍生作品，同樣適用 CC BY-NC 4.0。
 
 English: code, tools, `frontend/config/` and `frontend/preview/` are MIT; everything under `frontend/assets/` (and packs baked from it) is CC BY-NC 4.0 — see [frontend/assets/LICENSE](frontend/assets/LICENSE).

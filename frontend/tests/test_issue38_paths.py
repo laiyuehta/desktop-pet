@@ -1,4 +1,4 @@
-"""#38 搬家後的路徑：動畫包只在 frontend/packs、deploy.env 只在 repo 根目錄（所有讀取端一致）、piwifi 打包輸出在 repo 內。"""
+"""#38 搬家後的路徑：動畫包只在 repo 外的 ~/.local/share/desktop-pet/packs、deploy.env 只在 repo 根目錄（所有讀取端一致）、piwifi 打包輸出在 repo 內。"""
 import os
 import shutil
 import subprocess
@@ -23,15 +23,23 @@ def _admin():
 
 
 class AutoPackTest(unittest.TestCase):
-    def test_candidates_are_external_then_frontend_packs_only(self):
+    def test_auto_pack_only_outside_repo(self):
         c = pet_main.auto_pack_candidates("seed")
-        self.assertEqual(c[1:], [str(FRONTEND / "packs" / "seed")])
-        self.assertNotIn(str(REPO / "packs" / "seed"), c)  # 舊的 repo 根目錄 packs/ 不再找（部署時手動搬）
+        self.assertEqual(c, [os.path.join(os.path.expanduser("~/.local/share/desktop-pet/packs"), "seed")])
+        for path in c:
+            self.assertFalse(Path(path).resolve().is_relative_to(REPO.resolve()), path)
 
-    def test_frontend_pack_found(self):
-        new = str(FRONTEND / "packs" / "seed")
-        with mock.patch.object(pet_main.AnimationPack, "try_load", side_effect=lambda p: p if p == new else None):
-            self.assertEqual(pet_main.find_auto_pack("seed"), new)
+    def test_bake_default_output_outside_repo(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("bake38", FRONTEND / "tools" / "bake.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertEqual(mod.DEFAULT_PACKS_DIR, "~/.local/share/desktop-pet/packs")
+
+    def test_pack_found(self):
+        want = pet_main.auto_pack_candidates("seed")[0]
+        with mock.patch.object(pet_main.AnimationPack, "try_load", side_effect=lambda p: p if p == want else None):
+            self.assertEqual(pet_main.find_auto_pack("seed"), want)
 
 
 class DeployEnvLocationTest(unittest.TestCase):

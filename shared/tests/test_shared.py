@@ -27,6 +27,11 @@ class ApiKeyTest(unittest.TestCase):
         self.assertEqual(len(h), 64)
         self.assertEqual(h, h.lower())
 
+    def test_hash_known_vector(self):
+        # 與 #36 的後端 hash_key 相同：小寫十六進位 SHA-256
+        self.assertEqual(apikey.hash_key("abc"),
+                         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+
     def test_read_key_file_strips(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "tok")

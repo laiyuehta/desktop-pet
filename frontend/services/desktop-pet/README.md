@@ -35,15 +35,26 @@ Wi‑Fi 管理用 polkit 規則 `/etc/polkit-1/rules.d/50-desktop-pet-wifi.rules
 
 ## #38 升級（前後端分資料夾，一次性手動步驟）
 
-程式搬到 `frontend/` 之後，**沒有進 git 的檔案不會自動搬**，部署時手動做一次：
+程式搬到 `frontend/`、共用模組放在 `shared/` 之後，**沒有進 git 的檔案不會自動搬**，部署時手動做一次。
+
+**位置（每樣只有一個）**
+- 動畫包：`~/.local/share/desktop-pet/packs/<骨架>/`（**在 repo 外**；換程式碼、重建 venv、整包換掉 `frontend/` 都不會動到）。`PET_PACK_DIR`／`--pack` 可以指定別處；程式不再找 repo 裡的 `packs/` 或 `frontend/packs/`。
+- 部署環境檔：`/etc/desktop-pet/env`（建議）；過渡期相容的 `deploy.env` 只放 repo 根目錄 `~/desktop-pet/deploy.env`（位置不變）。
+- `shared/`：**前端需要它**。用 git clone 部署時它本來就在 repo 裡；如果是複製檔案、sparse-checkout 或其他方式部署，一定要連 `shared/`（和 `frontend/`）一起放，否則 install.sh 會中止。
+- `frontend/.venv`：install.sh 建立（`--system-site-packages`，直接用 apt 的 python3-pil；shared 用 `.pth` 指到 repo 的 `shared/`）。Pillow 已經由 apt 安裝時**完全不用網路**；否則第一次要有網路讓 pip 安裝 Pillow。
 
 ```bash
-sudo apt install python3-venv                     # install.sh 要建 frontend/.venv
+sudo apt install python3-venv python3-pil         # 先裝好，之後建 venv 不需要網路
 cd ~/desktop-pet
-# 動畫包：repo 內唯一位置是 frontend/packs/（--pack auto 先找 ~/.local/share/desktop-pet/packs/，再找 frontend/packs/；不再找根目錄 packs/）
-[ -d packs ] && [ ! -e frontend/packs ] && mv packs frontend/packs
-# deploy.env：位置不變，唯一位置是 repo 根目錄 ~/desktop-pet/deploy.env（建議改用 /etc/desktop-pet/env）
-# 硬體開關（環境檔）：有相機的 Pi 加 PET_ENABLE_PICAM=1；要用 camcast 加 PET_ENABLE_CAMCAST=1
-sh frontend/services/desktop-pet/install.sh       # 建 venv、裝依賴（含 shared/）、重裝 unit（ExecStart 改用 frontend/.venv/bin/python）
+# 1) 備份動畫包（沒進 git，丟了救不回來）
+[ -d packs ] && tar -cf ~/packs-backup-$(date +%Y%m%d).tar packs
+# 2) 搬到 repo 外的唯一位置（目的地已存在就不搬，先人工確認）
+mkdir -p ~/.local/share/desktop-pet/packs
+for d in packs/*/; do n=$(basename "$d"); [ -e ~/.local/share/desktop-pet/packs/"$n" ] || mv "$d" ~/.local/share/desktop-pet/packs/"$n"; done
+# 3) deploy.env 位置不變（repo 根目錄）；硬體開關寫在環境檔：有相機加 PET_ENABLE_PICAM=1、要用 camcast 加 PET_ENABLE_CAMCAST=1
+# 4) 建 venv＋重裝 unit（ExecStart 改用 frontend/.venv/bin/python）
+sh frontend/services/desktop-pet/install.sh
 # split 模式（有 desktop-pet-admin）改跑：sh frontend/services/desktop-pet-admin/switch.sh
 ```
+
+以後的自動更新（#37）如果會整理檔案，要排除 `frontend/.venv`；動畫包已經在 repo 外，不受影響。

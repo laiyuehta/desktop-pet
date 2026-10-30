@@ -28,7 +28,7 @@ Antigravity 是使用者在自己的 Windows 電腦上跑的 AI 開發 agent，�
 - 測試（`frontend/tests/`、`backend/tests/`、`shared/tests/`）與 CI 修正（`.github/workflows/`、`tools/ci/`）。
 
 **不碰**
-- 美術與動畫：`frontend/packs/`、`frontend/assets/`、`frontend/preview/`、動畫規格（桌寵專案機器人2 負責）。
+- 美術與動畫：`~/.local/share/desktop-pet/packs/`、`frontend/assets/`、`frontend/preview/`、動畫規格（桌寵專案機器人2 負責）。
 - 機器上的設定：`deploy.env`、`/etc/desktop-pet/env`、R7 的環境檔、`backend/config.json`。新增的設定值要做成環境變數（見項目書 16.2），在 PR 寫變數名稱，不寫值。
 - Pi 與 R7 上的任何東西，包括 piscreen。不改 piscreen 的程式，也不改 `piscreen.service`。
 - **不用 ssh 連 Pi 或 R7，不部署，不需要任何密碼、token 或金鑰。**

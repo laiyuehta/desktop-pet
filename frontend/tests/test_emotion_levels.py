@@ -146,7 +146,7 @@ def verify_manifest_emotions(tc: unittest.TestCase, m: dict) -> None:
                 tc.assertIn(f"{a}>{b}", m["transitions"])
 
 
-PACK = os.path.join(ROOT, "packs", "seed")
+PACK = os.path.join(os.path.expanduser("~/.local/share/desktop-pet/packs"), "seed")
 
 
 @unittest.skipUnless(os.path.exists(os.path.join(PACK, "manifest.json")), "沒有 packs/seed（先跑 tools/bake.py）")
