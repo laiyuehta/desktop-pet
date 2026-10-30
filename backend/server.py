@@ -183,10 +183,6 @@ class Brain:
             raise ApiError(400, "pet_id 不合法")
         return {"ok": True, "pet_id": pid, "count": self.photos.count(pid), "photos": self.photos.list(pid, limit)}
 
-    def health_public(self) -> Dict[str, Any]:
-        """公開健康檢查：不對外透露版本、服務或細節。"""
-        return {"ok": True}
-
     def health(self) -> Dict[str, Any]:
         """完整健康檢查（需金鑰）：回傳詳細系統指標。"""
         ttl = float(self.cfg["llm"].get("health_cache_s", 10))
@@ -339,9 +335,9 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
                 elif auth_hdr.startswith("PetToken "):
                     token = auth_hdr[9:].strip()
 
-            # 3. 比對有效金鑰（持有有效金鑰之合法裝置不受 IP 鎖定影響）
+            # 3. 比對有效裝置金鑰（持有 server.keys 合法高熵金鑰之裝置不受 IP 鎖定影響）
             matched_disabled: Optional[Dict[str, Any]] = None
-            if token:
+            if token and keys:
                 matched, is_enabled = match_key(token, keys)
                 if matched is not None:
                     if is_enabled:
@@ -361,16 +357,7 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
                     else:
                         matched_disabled = matched
 
-                # 比對舊版 api_token（過渡期相容）
-                if legacy_token and hmac.compare_digest(token.encode("utf-8"), legacy_token.encode("utf-8")):
-                    log.info("[LegacyToken] 收到舊版 api_token 請求 (來源: %s, 路徑: %s)", client_ip, self.path)
-                    is_photo = (self.path.split("?", 1)[0] == "/v1/pet/photo")
-                    if not guard.check_rate_limit("legacy", is_photo=is_photo):
-                        guard.record_error(client_ip, "rate_limited", self.path, self.command, key_id="legacy")
-                        raise ApiError(429, "請求過於頻繁")
-                    return {"id": "legacy", "pet_ids": ["*"], "enabled": True}
-
-            # 4. 未持有效金鑰：檢查是否已達全域錯誤上限或被 IP 鎖定
+            # 4. 未持有效裝置金鑰：檢查是否已被 IP 鎖定或達全域錯誤上限
             if guard.is_locked(client_ip):
                 raise ApiError(429, "請求過於頻繁，已被暫時鎖定")
 
@@ -378,7 +365,16 @@ def make_server(brain: Brain, host: str, port: int, config_path: Optional[str] =
                 guard.record_error(client_ip, "global_limit", self.path, self.command)
                 raise ApiError(429, "系統目前僅接受有效金鑰")
 
-            # 5. 拋出對應之 401 / 403 錯誤並記錄
+            # 5. 未被鎖定時，比對舊版 api_token（過渡期相容；易受暴力破解，必須先經鎖定與全域上限檢查）
+            if token and legacy_token and hmac.compare_digest(token.encode("utf-8"), legacy_token.encode("utf-8")):
+                log.info("[LegacyToken] 收到舊版 api_token 請求 (來源: %s, 路徑: %s)", client_ip, self.path)
+                is_photo = (self.path.split("?", 1)[0] == "/v1/pet/photo")
+                if not guard.check_rate_limit("legacy", is_photo=is_photo):
+                    guard.record_error(client_ip, "rate_limited", self.path, self.command, key_id="legacy")
+                    raise ApiError(429, "請求過於頻繁")
+                return {"id": "legacy", "pet_ids": ["*"], "enabled": True}
+
+            # 6. 拋出對應之 401 / 403 錯誤並記錄
             if matched_disabled is not None:
                 guard.record_error(client_ip, "forbidden", self.path, self.command, key_id=matched_disabled.get("id"))
                 raise ApiError(403, "沒有權限")

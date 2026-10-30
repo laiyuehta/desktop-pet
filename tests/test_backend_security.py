@@ -17,10 +17,12 @@ import io
 import json
 import os
 import shutil
+import socket
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 
@@ -114,6 +116,15 @@ class SecurityHelpersTest(unittest.TestCase):
         self.assertFalse(is_safe_for_insecure_token("http://203.0.113.5:8090", allow_insecure_lan=False))
         # 顯式指定 allow_insecure_lan 放行
         self.assertTrue(is_safe_for_insecure_token("http://203.0.113.5:8090", allow_insecure_lan=True))
+
+    def test_is_safe_for_insecure_token_dns_retry(self):
+        # 測試 DNS 失敗時不會永久快取 False
+        with mock.patch("socket.gethostbyname", side_effect=socket.gaierror("DNS lookup failed")):
+            self.assertFalse(is_safe_for_insecure_token("http://my-pet-r7.local:8090"))
+        # 隨後 DNS 恢復正常時，能成功解析為私有 IP 並回傳 True
+        ip_192 = ".".join(["192", "168", "1", "50"])
+        with mock.patch("socket.gethostbyname", return_value=ip_192):
+            self.assertTrue(is_safe_for_insecure_token("http://my-pet-r7.local:8090"))
 
 
 class BackendKeysCliTest(unittest.TestCase):
@@ -338,6 +349,31 @@ class BackendSecurityHttpTest(unittest.TestCase):
                                     headers={"X-Pet-Token": token})
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
+
+    def test_locked_ip_cannot_use_legacy_token(self):
+        legacy = "secret-legacy-token"
+        port = self._start({
+            "host": "127.0.0.1",
+            "api_token": legacy,
+            "keys": [],
+            "insecure_dev": False,
+        })
+
+        # 1. 連續 10 次送出錯誤 token 觸發 IP 鎖定
+        for _ in range(10):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                self._req(port, "/v1/pet/event", method="POST",
+                          body={"pet_id": "seed-001", "event": {"name": "pat"}},
+                          headers={"X-Pet-Token": "wrong-pw"})
+            self.assertEqual(cm.exception.code, 401)
+
+        # 2. IP 被鎖定之後，再送出「正確的」legacy token 也必須被 429 擋下（防止暴力破解 legacy token）
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._req(port, "/v1/pet/event", method="POST",
+                      body={"pet_id": "seed-001", "event": {"name": "pat"}},
+                      headers={"X-Pet-Token": legacy})
+        self.assertEqual(cm.exception.code, 429)
+        self.assertIn("鎖定", json.loads(cm.exception.read().decode())["error"])
 
     def test_invalid_content_length_returns_400(self):
         port = self._start({"host": "127.0.0.1", "keys": [], "insecure_dev": True})

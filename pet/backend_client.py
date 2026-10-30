@@ -57,7 +57,9 @@ def _is_private_or_local(ip: ipaddress._BaseAddress) -> bool:
     return False
 
 
-@functools.lru_cache(maxsize=32)
+_SAFETY_CACHE: Dict[Tuple[str, bool], Tuple[float, bool]] = {}
+
+
 def is_safe_for_insecure_token(url: str, allow_insecure_lan: bool = False) -> bool:
     """檢查目標後端網址是否安全可送出金鑰（HTTPS、localhost 或 RFC 1918 私有 IP）。"""
     if allow_insecure_lan:
@@ -76,10 +78,23 @@ def is_safe_for_insecure_token(url: str, allow_insecure_lan: bool = False) -> bo
             return _is_private_or_local(ip)
         except ValueError:
             pass
+
+        now = time.monotonic()
+        cache_key = (host.lower(), allow_insecure_lan)
+        cached = _SAFETY_CACHE.get(cache_key)
+        if cached is not None:
+            ts, is_safe = cached
+            # 成功結果快取 300 秒（失敗結果絕不快取，避免開機網路未就緒而永久阻斷）
+            if now - ts < 300.0:
+                return is_safe
+
         try:
             addr = socket.gethostbyname(host)
             ip = ipaddress.ip_address(addr)
-            return _is_private_or_local(ip)
+            is_safe = _is_private_or_local(ip)
+            if is_safe:
+                _SAFETY_CACHE[cache_key] = (now, True)
+            return is_safe
         except Exception as exc:
             log.warning("解析後端主機名稱失敗 (%s)：%s", host, exc)
             return False
@@ -227,7 +242,6 @@ class BackendClient:
         self.token = token
         self.token_file = token_file
         self.allow_insecure_lan = allow_insecure_lan
-        self._is_safe_url = is_safe_for_insecure_token(self.base_url, self.allow_insecure_lan)
         self.heartbeat_s = heartbeat_s
         self.q: "queue.Queue[dict]" = queue.Queue(maxsize=queue_size)
         self.online: Optional[bool] = None
@@ -286,7 +300,7 @@ class BackendClient:
     # -- 背景執行緒 -----------------------------------------------------------------
     def _post_request(self, path: str, body: dict, timeout: float, token: str) -> dict:
         headers = {"Content-Type": "application/json"}
-        if token and self._is_safe_url:
+        if token and is_safe_for_insecure_token(self.base_url, self.allow_insecure_lan):
             headers["X-Pet-Token"] = token
         elif token:
             log.warning("非 HTTPS 且非私有 IP/localhost，拒絕送出金鑰（可設定 --allow-insecure-lan 放行）：%s", self.base_url)
