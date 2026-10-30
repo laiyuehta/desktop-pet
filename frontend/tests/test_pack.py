@@ -11,7 +11,7 @@ import tempfile
 import threading
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PIL import Image  # noqa: E402
 
@@ -22,7 +22,7 @@ from pet.outputs import PiscreenSink  # noqa: E402
 from pet.outputs.base import OutputSink  # noqa: E402
 from pet.pack import AnimationPack, PackDriver, PackPlayer  # noqa: E402
 
-ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def is_baseline_jpeg(data: bytes) -> bool:

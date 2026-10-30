@@ -117,6 +117,25 @@ def parse_args(argv=None, env=None, env_file=None):
     return args
 
 
+FRONTEND_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def auto_pack_candidates(skel_name: str) -> list:
+    """--pack auto 依序找的位置：~/.local/share/desktop-pet/packs/<骨架>，再來是 frontend/packs/<骨架>（#38 起 repo 內唯一位置）。"""
+    return [
+        os.path.join(os.path.expanduser(DEFAULT_EXTERNAL_PACKS_DIR), skel_name),
+        os.path.join(FRONTEND_DIR, "packs", skel_name),
+    ]
+
+
+def find_auto_pack(skel_name: str):
+    for path in auto_pack_candidates(skel_name):
+        pack = AnimationPack.try_load(path)
+        if pack is not None:
+            return pack
+    return None
+
+
 def make_sink(args, mirror=None, frames_server=None):
     if args.sink == "piscreen":
         sink = PiscreenSink(args.socket, quality=args.jpeg_quality)
@@ -166,10 +185,7 @@ def main(argv=None) -> int:
     sink = make_sink(args, mirror=mirror, frames_server=frames_server)
     pack_dir = args.pack
     if pack_dir == "auto":
-        skel_name = app.renderer.skeleton.name
-        ext_pack = os.path.join(os.path.expanduser(DEFAULT_EXTERNAL_PACKS_DIR), skel_name)
-        repo_pack = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs", skel_name)
-        pack = AnimationPack.try_load(ext_pack) or AnimationPack.try_load(repo_pack)
+        pack = find_auto_pack(app.renderer.skeleton.name)
     elif pack_dir and pack_dir != "none":
         pack = AnimationPack.try_load(os.path.expanduser(pack_dir))
     else:

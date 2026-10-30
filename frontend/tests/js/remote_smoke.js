@@ -1,5 +1,5 @@
 // 遙控頁 script 冒煙測試（node，假 DOM／假 fetch）：script 要能整段執行，螢幕畫面要真的設定圖片來源。
-// 用法：node tests/js/remote_smoke.js frontend/pet/web/remote.html [mjpeg|nomjpeg]
+// 用法：node frontend/tests/js/remote_smoke.js frontend/pet/web/remote.html [mjpeg|nomjpeg]
 const fs = require("fs");
 const html = fs.readFileSync(process.argv[2], "utf8");
 const mode = process.argv[3] || "mjpeg";

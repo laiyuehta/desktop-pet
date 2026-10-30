@@ -26,8 +26,11 @@ from unittest import mock
 import urllib.error
 import urllib.request
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # repo 根目錄（import backend）
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "shared"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 這支也測前端客戶端送金鑰的規則（pet.backend_client）
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "frontend"))
 
 from fake_llm import FakeLLM, free_port  # noqa: E402
 

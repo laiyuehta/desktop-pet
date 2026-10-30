@@ -14,7 +14,8 @@ EnvironmentFile=-/etc/desktop-pet/env
 RuntimeDirectory=desktop-pet
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes
-ExecStart=/usr/bin/python3 @HOME@/desktop-pet/frontend/services/desktop-pet-admin/admin.py --control-socket /run/desktop-pet/control.sock --frames-socket /run/desktop-pet/frames.sock --wifi auto
+# python 用 frontend/.venv（install.sh 會建立；#38）
+ExecStart=@HOME@/desktop-pet/frontend/.venv/bin/python @HOME@/desktop-pet/frontend/services/desktop-pet-admin/admin.py --control-socket /run/desktop-pet/control.sock --frames-socket /run/desktop-pet/frames.sock --wifi auto
 Restart=always
 RestartSec=3
 TimeoutStopSec=15

@@ -18,7 +18,7 @@ from pet.frames import FramesServer
 # 動態載入 frontend/services/desktop-pet-admin/admin.py
 ADMIN_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "frontend", "services", "desktop-pet-admin", "admin.py"
+    "services", "desktop-pet-admin", "admin.py"
 )
 spec = importlib.util.spec_from_file_location("desktop_pet_admin", ADMIN_PATH)
 admin_mod = importlib.util.module_from_spec(spec)

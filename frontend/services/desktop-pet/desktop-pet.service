@@ -17,7 +17,8 @@ RuntimeDirectory=desktop-pet
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes
 # 後端網址、token 檔、動畫包路徑等由環境變數（PET_BACKEND_URL、PET_BACKEND_TOKEN_FILE、PET_PACK_DIR 等）或內建預設決定
-ExecStart=/usr/bin/python3 @HOME@/desktop-pet/frontend/main.py --sink piscreen --input web --fps 20
+# python 用 frontend/.venv（install.sh 會建立；#38）
+ExecStart=@HOME@/desktop-pet/frontend/.venv/bin/python @HOME@/desktop-pet/frontend/main.py --sink piscreen --input web --fps 20
 Restart=always
 RestartSec=3
 TimeoutStopSec=15

@@ -109,3 +109,31 @@ render_template() {
     fi
     printf '%s\n' "$out"
 }
+
+# pet_flag_on <值>：1/true/yes/on 視為開（硬體開關 PET_ENABLE_* 用）
+pet_flag_on() {
+    case "$1" in
+        1|true|TRUE|True|yes|on) return 0 ;;
+    esac
+    return 1
+}
+
+# ensure_frontend_venv：建立 frontend/.venv（--system-site-packages：Pi 用 apt 裝的 python3-pil 直接可用，不用在 Pi 上編 Pillow）
+# 並安裝 frontend/requirements.txt（第一行 -e ../shared，相對路徑以 frontend/ 為準，所以要在 frontend/ 底下跑 pip）。
+# systemd unit 的 ExecStart 用這個 venv 的 python。
+ensure_frontend_venv() {
+    _fe="$PET_REPO_ROOT/frontend"
+    _venv="$_fe/.venv"
+    if [ ! -x "$_venv/bin/python" ]; then
+        echo "== 建立 $_venv"
+        python3 -m venv --system-site-packages "$_venv" || {
+            echo "建立 venv 失敗（Pi 上先 sudo apt install python3-venv）" >&2
+            return 1
+        }
+    fi
+    echo "== 安裝前端依賴（frontend/requirements.txt）"
+    (cd "$_fe" && "$_venv/bin/python" -m pip install --disable-pip-version-check -q -r requirements.txt) || {
+        echo "pip install 失敗：$_venv" >&2
+        return 1
+    }
+}

@@ -6,12 +6,19 @@ setlocal
 cd /d "%~dp0.."
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
+rem shared\ (common modules) is importable even without the venv
+set "PYTHONPATH=%CD%\shared;%PYTHONPATH%"
+if exist "%~dp0.venv\Scripts\python.exe" (
+    "%~dp0.venv\Scripts\python.exe" -m backend %*
+    goto :done
+)
 where py >nul 2>nul
 if %errorlevel%==0 (
     py -3 -m backend %*
 ) else (
     python -m backend %*
 )
+:done
 if errorlevel 1 (
     echo.
     echo [backend] exited with error. Is Python 3.10+ installed? Try: py -3 --version

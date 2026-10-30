@@ -43,6 +43,7 @@ PET_REPO_ROOT="$(cd ../../.. && pwd)"
 . "$PET_REPO_ROOT/frontend/tools/deploy/common.sh"
 load_deploy_env
 require_sys_env
+ensure_frontend_venv
 tmp=$(mktemp)
 render_template desktop-pet-admin.service > "$tmp" || { rm -f "$tmp"; exit 1; }
 sudo install -m 644 "$tmp" "$UNIT"

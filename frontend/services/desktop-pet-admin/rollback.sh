@@ -24,6 +24,8 @@ fi
 sudo systemctl disable desktop-pet-admin 2>/dev/null || true
 
 tmp_pet=$(mktemp)
+# unit 用 frontend/.venv 的 python；緊急回退時建 venv 失敗只警告不擋
+[ -x "$PET_REPO_ROOT/frontend/.venv/bin/python" ] || ensure_frontend_venv || echo "警告：frontend/.venv 不存在且建立失敗，desktop-pet 會起不來" >&2
 render_template "$PET_REPO_ROOT/frontend/services/desktop-pet/desktop-pet.service" > "$tmp_pet" || { rm -f "$tmp_pet"; exit 1; }
 sudo install -m 644 "$tmp_pet" "$PET_UNIT"
 rm -f "$tmp_pet"
