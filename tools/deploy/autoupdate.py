@@ -352,73 +352,148 @@ def link_shared_resources(
     home = home_dir or Path(os.environ.get("PET_HOME") or os.path.expanduser("~"))
 
     # 1. 處理 packs/
-    target_packs = target_release_dir / "packs"
-    target_packs.mkdir(parents=True, exist_ok=True)
-
-    # 優先從全域共用目錄帶入：~/.local/share/desktop-pet/packs
     shared_packs = home / ".local" / "share" / "desktop-pet" / "packs"
-    if shared_packs.exists() and shared_packs.is_dir():
-        for pack in shared_packs.iterdir():
-            dest = target_packs / pack.name
-            if not dest.exists():
-                try:
-                    if sys.platform != "win32":
-                        os.symlink(str(pack.resolve()), str(dest))
-                    else:
-                        if pack.is_dir():
-                            shutil.copytree(pack, dest)
-                        else:
-                            shutil.copy2(pack, dest)
-                except OSError:
-                    pass
+    shared_packs.mkdir(parents=True, exist_ok=True)
 
-    # 若舊 release 目錄有 packs，也同步連結進新 release
+    # 若舊 release 內有尚未移至 shared_packs 的動畫包，將其匯入 shared_packs
     if current_release_dir and current_release_dir.exists():
         old_packs = current_release_dir / "packs"
         if old_packs.exists() and old_packs.is_dir():
-            for pack in old_packs.iterdir():
-                dest = target_packs / pack.name
-                if not dest.exists():
-                    try:
-                        if sys.platform != "win32":
+            try:
+                for pack in list(old_packs.iterdir()):
+                    dest = shared_packs / pack.name
+                    if not dest.exists():
+                        try:
                             if pack.is_symlink():
                                 target = os.readlink(pack)
                                 if not os.path.isabs(target):
                                     target = str((pack.parent / target).resolve())
-                                os.symlink(target, str(dest))
-                            elif current_release_dir.is_symlink():
-                                os.symlink(str(pack.resolve()), str(dest))
+                                if Path(target).exists():
+                                    if Path(target).is_dir():
+                                        shutil.copytree(target, dest)
+                                    else:
+                                        shutil.copy2(target, dest)
                             else:
-                                # current_release_dir 是一般目錄（尚未遷移為 symlink），複製資源避免循環符號連結
                                 if pack.is_dir():
                                     shutil.copytree(pack, dest)
                                 else:
                                     shutil.copy2(pack, dest)
-                        else:
-                            if pack.is_dir():
-                                shutil.copytree(pack, dest)
-                            else:
-                                shutil.copy2(pack, dest)
-                    except OSError:
-                        pass
+                        except Exception as exc:
+                            log.warning("匯入舊動畫包 %s 至共用目錄失敗：%s", pack.name, exc)
+            except Exception as exc:
+                log.warning("讀取舊動畫包目錄失敗：%s", exc)
 
-    # 2. 處理 deploy.env
-    target_env = target_release_dir / "deploy.env"
-    if not target_env.exists():
-        if Path("/etc/desktop-pet/env").exists():
+    # 為 target_release_dir 建立 packs symlink 指向 shared_packs
+    target_packs = target_release_dir / "packs"
+    if target_packs.exists():
+        if target_packs.is_dir() and not target_packs.is_symlink():
             try:
-                if sys.platform != "win32":
-                    os.symlink("/etc/desktop-pet/env", str(target_env))
+                shutil.rmtree(target_packs)
+            except OSError as exc:
+                log.warning("清理目標 packs 預備目錄失敗：%s", exc)
+        else:
+            try:
+                target_packs.unlink()
+            except OSError:
+                pass
+
+    if not target_packs.exists() and not target_packs.is_symlink():
+        try:
+            if sys.platform != "win32":
+                os.symlink(str(shared_packs.resolve()), str(target_packs))
+            else:
+                try:
+                    os.symlink(str(shared_packs.resolve()), str(target_packs), target_is_directory=True)
+                except OSError:
+                    subprocess.run(["cmd", "/c", "mklink", "/J", str(target_packs), str(shared_packs.resolve())], check=True, capture_output=True)
+        except Exception as exc:
+            if sys.platform == "win32":
+                try:
+                    shutil.copytree(shared_packs, target_packs)
+                except Exception:
+                    log.warning("建立動畫包共享連結失敗：%s", exc)
+                    raise
+            else:
+                log.warning("建立動畫包共享連結失敗：%s", exc)
+                raise
+
+    # 2. 處理 deploy.env（僅在舊 release 存在時複製舊 release 的 deploy.env，不自 /etc/ 產生）
+    if current_release_dir and current_release_dir.exists():
+        old_env = current_release_dir / "deploy.env"
+        target_env = target_release_dir / "deploy.env"
+        if old_env.exists() and not target_env.exists():
+            try:
+                shutil.copy2(str(old_env), str(target_env))
+            except OSError as exc:
+                log.warning("複製舊版本 deploy.env 失敗：%s", exc)
+                raise
+
+
+def migrate_legacy_directory(
+    current_link: Path,
+    releases_dir: Optional[Path] = None,
+    home_dir: Optional[Path] = None,
+) -> Optional[Path]:
+    """若 current_link 為一般目錄而非 symlink，將其安全遷移為第一個 legacy release 並建立 symlink（PROPOSAL.md 16.9）。"""
+    if not (current_link.exists() and current_link.is_dir() and not current_link.is_symlink()):
+        if current_link.is_symlink():
+            return current_link.resolve()
+        return None
+
+    home = home_dir or Path(os.environ.get("PET_HOME") or os.path.expanduser("~"))
+    env_rel_dir = os.environ.get("PET_RELEASES_DIR")
+    releases = releases_dir or (Path(env_rel_dir) if env_rel_dir else current_link.parent / "desktop-pet-releases")
+    releases.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    legacy_dir = releases / f"{ts}-legacy"
+    log.info("偵測到 %s 為一般目錄，執行首次安裝遷移至 %s", current_link, legacy_dir)
+    shutil.move(str(current_link), str(legacy_dir))
+
+    if not (legacy_dir / "RELEASE.json").exists():
+        legacy_meta = {
+            "commit": "legacy",
+            "short": "legacy",
+            "describe": "initial-migration",
+            "deployed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "source": "manual",
+        }
+        (legacy_dir / "RELEASE.json").write_text(json.dumps(legacy_meta, indent=2), encoding="utf-8")
+
+    # 將 legacy_dir 中的 packs 搬移至全域共用目錄 ~/.local/share/desktop-pet/packs，並建立 symlink
+    legacy_packs = legacy_dir / "packs"
+    if legacy_packs.exists() and legacy_packs.is_dir() and not legacy_packs.is_symlink():
+        shared_packs = home / ".local" / "share" / "desktop-pet" / "packs"
+        shared_packs.mkdir(parents=True, exist_ok=True)
+        for p in list(legacy_packs.iterdir()):
+            dest = shared_packs / p.name
+            if not dest.exists():
+                if p.is_dir():
+                    shutil.copytree(p, dest)
                 else:
-                    shutil.copy2("/etc/desktop-pet/env", target_env)
-            except OSError:
-                pass
-        elif current_release_dir and (current_release_dir / "deploy.env").exists():
-            try:
-                # 複製現有 deploy.env，避免首次遷移一般目錄時形成循環符號連結
-                shutil.copy2(current_release_dir / "deploy.env", target_env)
-            except OSError:
-                pass
+                    shutil.copy2(p, dest)
+        try:
+            shutil.rmtree(legacy_packs)
+            if sys.platform != "win32":
+                os.symlink(str(shared_packs.resolve()), str(legacy_packs))
+            else:
+                try:
+                    os.symlink(str(shared_packs.resolve()), str(legacy_packs), target_is_directory=True)
+                except OSError:
+                    subprocess.run(["cmd", "/c", "mklink", "/J", str(legacy_packs), str(shared_packs.resolve())], check=True, capture_output=True)
+        except OSError as exc:
+            log.warning("遷移 legacy packs 目錄失敗：%s", exc)
+
+    # 建立 current_link symlink 指向 legacy_dir
+    if sys.platform == "win32":
+        try:
+            os.symlink(str(legacy_dir.resolve()), str(current_link), target_is_directory=True)
+        except OSError:
+            subprocess.run(["cmd", "/c", "mklink", "/J", str(current_link), str(legacy_dir.resolve())], check=True, capture_output=True)
+    else:
+        os.symlink(str(legacy_dir.resolve()), str(current_link))
+
+    return legacy_dir
 
 
 def write_manifest(release_dir: Path, manifest: Dict[str, str]) -> Path:
@@ -567,26 +642,19 @@ def pre_switch_check(release_dir: Path, python_bin: str = sys.executable) -> Tup
     return True, None
 
 
-def switch_symlink(release_dir: Path, current_link: Path) -> None:
+def switch_symlink(
+    release_dir: Path,
+    current_link: Path,
+    releases_dir: Optional[Path] = None,
+    home_dir: Optional[Path] = None,
+) -> None:
     """以原子方式切換 symlink 指向新版本（PROPOSAL.md 16.6）。"""
     current_link.parent.mkdir(parents=True, exist_ok=True)
 
     # 首次安裝遷移（PROPOSAL.md 16.9）：
-    # 若 current_link 是一般目錄而非 symlink，先將其安全遷移為第一個 legacy release
+    # 若 current_link 是一般目錄而非 symlink，先調用共用函式安全遷移為第一個 legacy release
     if current_link.exists() and current_link.is_dir() and not current_link.is_symlink():
-        releases_dir = current_link.parent / "desktop-pet-releases"
-        releases_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        legacy_dir = releases_dir / f"{ts}-legacy"
-        log.info("偵測到 %s 為一般目錄，執行首次安裝遷移至 %s", current_link, legacy_dir)
-        shutil.move(str(current_link), str(legacy_dir))
-        if sys.platform == "win32":
-            try:
-                os.symlink(str(legacy_dir.resolve()), str(current_link), target_is_directory=True)
-            except OSError:
-                subprocess.run(["cmd", "/c", "mklink", "/J", str(current_link), str(legacy_dir.resolve())], check=True, capture_output=True)
-        else:
-            os.symlink(str(legacy_dir.resolve()), str(current_link))
+        migrate_legacy_directory(current_link, releases_dir=releases_dir, home_dir=home_dir)
 
     tmp_link = current_link.parent / f".tmp_link_{os.getpid()}_{int(time.time())}"
     try:
@@ -901,9 +969,27 @@ def prune_old_releases(
     if not releases_dir.exists():
         return
 
+    # 永遠不刪被任何 symlink（例如 current_link）指到的目錄
+    parent_symlinks = set()
+    try:
+        for p in releases_dir.parent.iterdir():
+            if p.is_symlink():
+                try:
+                    parent_symlinks.add(p.resolve())
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     dirs = [
         d for d in releases_dir.iterdir()
-        if d.is_dir() and not d.name.startswith(".") and d != current_release and d != previous_release
+        if d.is_dir()
+        and not d.name.startswith(".")
+        and d != current_release
+        and d != previous_release
+        and d.resolve() not in parent_symlinks
+        and d.resolve() != current_release.resolve()
+        and (not previous_release or d.resolve() != previous_release.resolve())
     ]
     dirs.sort(key=lambda d: d.name, reverse=True)
 
@@ -919,13 +1005,13 @@ def prune_old_releases(
 
 # --- 主要自動更新控制類別 ---
 class AutoUpdater:
-    def __init__(self, env_path: Optional[Path] = None, dry_run: bool = False) -> None:
+    def __init__(self, env_path: Optional[Path] = None, dry_run: bool = False, home_dir: Optional[Path] = None) -> None:
         self.conf = load_env(env_path)
         self.dry_run = dry_run
+        self.home_dir = home_dir or Path(self.conf.get("PET_HOME") or os.environ.get("PET_HOME") or os.path.expanduser("~"))
         self.state_dir = Path(self.conf["PET_STATE_DIR"])
         self.releases_dir = Path(self.conf["PET_RELEASES_DIR"])
-        home = os.environ.get("PET_HOME") or os.path.expanduser("~")
-        self.current_link = Path(home) / "desktop-pet"
+        self.current_link = Path(self.home_dir) / "desktop-pet"
 
     def run_cycle(self, force: bool = False, retry: bool = False) -> int:
         """執行一次檢查與更新流程。回傳 0 表示成功或正常無更新，非 0 為異常。"""
@@ -941,29 +1027,16 @@ class AutoUpdater:
         current_commit = "unknown"
         if self.current_link.exists() or self.current_link.is_symlink():
             if self.current_link.is_dir() and not self.current_link.is_symlink():
-                # 首次遷移一般目錄為 legacy release
-                ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-                legacy_dir = self.releases_dir / f"{ts}-legacy"
-                log.info("偵測到 %s 為一般目錄，執行首次安裝遷移至 %s", self.current_link, legacy_dir)
-                shutil.move(str(self.current_link), str(legacy_dir))
-                if not (legacy_dir / "RELEASE.json").exists():
-                    legacy_meta = {
-                        "commit": "legacy",
-                        "short": "legacy",
-                        "describe": "initial-migration",
-                        "deployed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                        "source": "manual",
-                    }
-                    (legacy_dir / "RELEASE.json").write_text(json.dumps(legacy_meta, indent=2), encoding="utf-8")
-                if sys.platform == "win32":
+                current_release_dir = self.current_link
+                rel_json = current_release_dir / "RELEASE.json"
+                if rel_json.exists():
                     try:
-                        os.symlink(str(legacy_dir.resolve()), str(self.current_link), target_is_directory=True)
-                    except OSError:
-                        subprocess.run(["cmd", "/c", "mklink", "/J", str(self.current_link), str(legacy_dir.resolve())], check=True, capture_output=True)
+                        data = json.loads(rel_json.read_text(encoding="utf-8"))
+                        current_commit = data.get("commit", "legacy")
+                    except Exception:
+                        current_commit = "legacy"
                 else:
-                    os.symlink(str(legacy_dir.resolve()), str(self.current_link))
-                current_release_dir = legacy_dir
-                current_commit = "legacy"
+                    current_commit = "legacy"
             else:
                 try:
                     current_release_dir = self.current_link.resolve()
@@ -1075,6 +1148,10 @@ class AutoUpdater:
                 log.info("[Dry Run] 將下載並部署新版本：%s", target_commit[:12])
                 return 0
 
+            # 若 current_link 為一般目錄，在確認執行更新（通過所有暫停、檢查與 dry-run）後執行首次遷移
+            if self.current_link.exists() and self.current_link.is_dir() and not self.current_link.is_symlink():
+                current_release_dir = migrate_legacy_directory(self.current_link, self.releases_dir, self.home_dir)
+
             # 9. 下載並解壓 tarball
             staging_dir = self.releases_dir / ".staging"
             staging_dir.mkdir(parents=True, exist_ok=True)
@@ -1120,7 +1197,12 @@ class AutoUpdater:
                     pass
 
             # 建立非 git 共用資源連結（packs/ 與 deploy.env）
-            link_shared_resources(target_release_dir, current_release_dir)
+            try:
+                link_shared_resources(target_release_dir, current_release_dir, self.home_dir)
+            except Exception as exc:
+                log.error("帶入共用資源失敗，中止切換：%s", exc)
+                self._record_status(current_commit, auto_state, None, "resource_link_failed")
+                return 1
 
             # 產生 MANIFEST.sha256 與 RELEASE.json
             manifest = calculate_manifest(target_release_dir)
@@ -1163,7 +1245,7 @@ class AutoUpdater:
 
             # 13. 原子切換連結
             log.info("原子切換 symlink 到新版本：%s", target_release_dir.name)
-            switch_symlink(target_release_dir, self.current_link)
+            switch_symlink(target_release_dir, self.current_link, self.releases_dir, self.home_dir)
 
             # 14. 選擇性重啟服務
             if affected_units:
@@ -1183,7 +1265,7 @@ class AutoUpdater:
                 # 回退程序
                 if current_release_dir and current_release_dir.exists():
                     log.info("回退到上一版本：%s", current_release_dir.name)
-                    switch_symlink(current_release_dir, self.current_link)
+                    switch_symlink(current_release_dir, self.current_link, self.releases_dir, self.home_dir)
                     if affected_units:
                         restart_units(affected_units)
                     prev_ok, prev_msg = run_health_check(self.conf, affected_units, timeout_sec=60)
@@ -1255,6 +1337,7 @@ def main() -> int:
     parser.add_argument("--once", action="store_true", help="執行單次更新週期並結束")
     parser.add_argument("--dry-run", action="store_true", help="僅檢查不實際切換或下載")
     parser.add_argument("--self-test", action="store_true", help="模組自我檢測並回傳 0")
+    parser.add_argument("--migrate", action="store_true", help="執行首次目錄遷移")
     parser.add_argument("--retry", action="store_true", help="清除失敗清單並重試")
     parser.add_argument("--status", action="store_true", help="印出目前更新狀態")
     parser.add_argument("--force", action="store_true", help="忽略間隔強制檢查更新")
@@ -1268,6 +1351,14 @@ def main() -> int:
         return 0
 
     updater = AutoUpdater(env_path=Path(args.env_file) if args.env_file else None, dry_run=args.dry_run)
+
+    if args.migrate:
+        migrated = migrate_legacy_directory(updater.current_link, updater.releases_dir, updater.home_dir)
+        if migrated:
+            log.info("已成功遷移一般目錄至：%s", migrated)
+        else:
+            log.info("目前路徑無需遷移：%s", updater.current_link)
+        return 0
 
     if args.status:
         st_file = updater.state_dir / "status.json"

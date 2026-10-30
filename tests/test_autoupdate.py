@@ -29,6 +29,7 @@ from tools.deploy.autoupdate import (
     link_shared_resources,
     load_env,
     load_failed_json,
+    migrate_legacy_directory,
     parse_pkt_lines,
     pre_switch_check,
     prune_old_releases,
@@ -447,6 +448,84 @@ class TestSymlinkSwitchAndPruning(unittest.TestCase):
         self.assertIn(prev.name, remaining)
         # 加上 2 個舊版本，總共應為 4 個
         self.assertEqual(len(remaining), 4)
+
+    def test_no_migration_on_pause_or_dry_run(self):
+        # 驗證 PAUSE 存在或 dry-run 時，不得遷移一般目錄
+        home_dir = self.tmp_dir / "home_test"
+        home_dir.mkdir()
+        pet_dir = home_dir / "desktop-pet"
+        pet_dir.mkdir()
+        (pet_dir / "main.py").write_text("print('hi')", encoding="utf-8")
+
+        state_dir = home_dir / ".local" / "state" / "desktop-pet" / "update"
+        state_dir.mkdir(parents=True)
+        pause_file = state_dir / "PAUSE"
+        pause_file.touch()
+
+        env_path = self.tmp_dir / "test.env"
+        env_path.write_text(
+            f"PET_HOME={home_dir}\n"
+            f"PET_STATE_DIR={state_dir}\n"
+            f"PET_RELEASES_DIR={home_dir / 'desktop-pet-releases'}\n",
+            encoding="utf-8",
+        )
+
+        # 1. PAUSE 存在時，執行 run_cycle 不應搬移目錄
+        updater = AutoUpdater(env_path=env_path, dry_run=False, home_dir=home_dir)
+        code = updater.run_cycle(force=True)
+        self.assertEqual(code, 0)
+        self.assertTrue(pet_dir.is_dir())
+        self.assertFalse(pet_dir.is_symlink())
+
+        pause_file.unlink()
+
+        # 2. dry_run=True 時，執行 run_cycle 亦不應搬移目錄
+        updater_dry = AutoUpdater(env_path=env_path, dry_run=True, home_dir=home_dir)
+        with unittest.mock.patch("tools.deploy.autoupdate.get_remote_commit", return_value="f" * 40):
+            code = updater_dry.run_cycle(force=True)
+            self.assertEqual(code, 0)
+            self.assertTrue(pet_dir.is_dir())
+            self.assertFalse(pet_dir.is_symlink())
+
+    def test_prune_retains_packs_after_many_releases(self):
+        # 驗證在經歷多次更新與舊版本 prune 後，動畫包依然可讀且保留在 shared_packs
+        home_dir = self.tmp_dir / "home2"
+        home_dir.mkdir()
+        pet_dir = home_dir / "desktop-pet"
+        pet_dir.mkdir()
+        (pet_dir / "main.py").write_text("v0", encoding="utf-8")
+        (pet_dir / "deploy.env").write_text("URL=https://pet.example.com\n", encoding="utf-8")
+        (pet_dir / "packs" / "cat").mkdir(parents=True)
+        (pet_dir / "packs" / "cat" / "a.png").write_text("cat_img", encoding="utf-8")
+
+        releases_dir = home_dir / "desktop-pet-releases"
+        releases_dir.mkdir()
+
+        # 首次遷移
+        legacy_dir = migrate_legacy_directory(pet_dir, releases_dir=releases_dir, home_dir=home_dir)
+        self.assertTrue(pet_dir.is_symlink())
+        self.assertEqual(pet_dir.resolve(), legacy_dir.resolve())
+        self.assertTrue((pet_dir / "packs" / "cat" / "a.png").exists())
+
+        # 連續進行 6 次發布與切換
+        cur_rel = legacy_dir
+        for i in range(1, 7):
+            new_rel = releases_dir / f"20261030T00000{i}Z-rel{i}"
+            new_rel.mkdir()
+            (new_rel / "main.py").write_text(f"v{i}", encoding="utf-8")
+            link_shared_resources(new_rel, cur_rel, home_dir=home_dir)
+            switch_symlink(new_rel, pet_dir, releases_dir=releases_dir, home_dir=home_dir)
+            prune_old_releases(releases_dir, current_release=new_rel, previous_release=cur_rel, keep_count=2)
+            cur_rel = new_rel
+
+        # 斷言 legacy 目錄已因超過 keep_count 而被 prune
+        self.assertFalse(legacy_dir.exists())
+
+        # 斷言目前活躍的 desktop-pet/packs/cat/a.png 仍完好可讀
+        self.assertTrue((pet_dir / "packs" / "cat" / "a.png").exists())
+        self.assertEqual((pet_dir / "packs" / "cat" / "a.png").read_text(encoding="utf-8"), "cat_img")
+        self.assertTrue((pet_dir / "deploy.env").exists())
+        self.assertEqual((pet_dir / "deploy.env").read_text(encoding="utf-8"), "URL=https://pet.example.com\n")
 
 
 class TestPolkitRuleAndSystemdTemplates(unittest.TestCase):
