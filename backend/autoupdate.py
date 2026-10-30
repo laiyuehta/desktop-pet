@@ -34,6 +34,7 @@ try:
         calculate_manifest,
         check_manual_steps,
         load_env,
+        load_update_state,
     )
     from shared.version import get_autoupdate_status, get_release_info
 except ImportError:
@@ -47,6 +48,7 @@ except ImportError:
             calculate_manifest,
             check_manual_steps,
             load_env,
+            load_update_state,
         )
         from shared.shared.version import get_autoupdate_status, get_release_info
     except ImportError:
@@ -319,7 +321,9 @@ class AutoUpdaterR7(AutoUpdaterCore):
         self.backend_host = self.env.get("PET_BACKEND_HOST", "127.0.0.1")
         self.backend_port = int(self.env.get("PET_BACKEND_PORT", "8090"))
         self.health_timeout = float(self.env.get("PET_AUTOUPDATE_HEALTH_TIMEOUT", DEFAULT_HEALTH_TIMEOUT))
-        self.last_affected: Optional[List[str]] = None
+        if getattr(self, "last_affected", None) is None:
+            st = load_update_state(self.state_dir)
+            self.last_affected = st.get("affected")
 
     def pre_switch_check(self, staged_dir: Path) -> Tuple[bool, Optional[str]]:
         return pre_switch_check_r7(staged_dir, install_dir=self.install_dir)
@@ -343,6 +347,9 @@ class AutoUpdaterR7(AutoUpdaterCore):
         return True
 
     def restart_after_rollback(self) -> bool:
+        if self.last_affected is None:
+            st = load_update_state(self.state_dir)
+            self.last_affected = st.get("affected")
         if self.last_affected is not None and "desktop-pet-backend" not in self.last_affected:
             log.info("回退完成：本次更新未涉及後端，維持現有後端程序運行")
             return True

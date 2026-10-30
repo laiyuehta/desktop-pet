@@ -985,8 +985,9 @@ class AutoUpdaterCore:
             self.pin_commit = None
 
         self.lock = ProcessLock(self.state_dir / "autoupdate.lock")
-        self.last_affected: Optional[List[str]] = None
         self.state_dir.mkdir(parents=True, exist_ok=True)
+        st = load_update_state(self.state_dir)
+        self.last_affected: Optional[List[str]] = st.get("affected")
 
     def is_paused(self) -> Tuple[bool, Optional[str]]:
         pause_file = self.state_dir / "PAUSE"
@@ -1020,7 +1021,12 @@ class AutoUpdaterCore:
 
     def restart_after_rollback(self) -> bool:
         """回退完成後，重新啟動該平台之服務。"""
-        affected = self.get_default_affected()
+        affected = self.last_affected
+        if affected is None:
+            st = load_update_state(self.state_dir)
+            affected = st.get("affected")
+        if affected is None:
+            affected = self.get_default_affected()
         if affected:
             return self.restart_affected(affected)
         return True
@@ -1034,11 +1040,13 @@ class AutoUpdaterCore:
     def rollback(self, newly_overwritten: Optional[Iterable[str]] = None) -> bool:
         """手動或自動執行回退至備份版本。"""
         log.warning("正在執行回退至上一版本...")
-        if newly_overwritten is None:
+        if newly_overwritten is None or self.last_affected is None:
             try:
                 st = load_update_state(self.state_dir)
-                if "incoming_files" in st:
+                if newly_overwritten is None and "incoming_files" in st:
                     newly_overwritten = st["incoming_files"]
+                if self.last_affected is None and "affected" in st:
+                    self.last_affected = st["affected"]
             except Exception:
                 pass
         ok = restore_from_backup(self.install_dir, self.backup_dir, newly_overwritten=newly_overwritten)
@@ -1410,6 +1418,7 @@ class AutoUpdaterCore:
                 "target_commit": target_commit,
                 "started_at": now_iso,
                 "incoming_files": sorted(incoming_release_files),
+                "affected": affected,
             })
 
             overwritten_files: List[str] = []
@@ -1475,6 +1484,7 @@ class AutoUpdaterCore:
                     "status": "in_progress",
                     "pending_boot_check": True,
                     "target_commit": target_commit,
+                    "affected": affected,
                 })
 
                 # 16. 執行切換後健康檢查

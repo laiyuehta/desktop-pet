@@ -1219,5 +1219,53 @@ class TestPetVersionModule(unittest.TestCase):
         self.assertTrue(st_paused["paused"])
 
 
+class TestPiRestartAfterRollbackAndPersistence(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp())
+        self.inst = self.tmp_dir / "inst"
+        self.backup = self.tmp_dir / "backup"
+        self.state = self.tmp_dir / "state"
+        self.inst.mkdir()
+        self.backup.mkdir()
+        self.state.mkdir()
+
+        self.updater = AutoUpdater(
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+            repo_url="https://github.com/laiyuehta/desktop-pet",
+            branch="feat/autoupdate-pi",
+            require_ci=False,
+            dry_run=False,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_restart_after_rollback_uses_persisted_affected(self):
+        write_update_state(self.state, {"status": "in_progress", "affected": ["desktop-pet.service"]})
+        fresh_updater = AutoUpdater(
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+            repo_url="https://github.com/laiyuehta/desktop-pet",
+            branch="feat/autoupdate-pi",
+            require_ci=False,
+            dry_run=False,
+        )
+        with mock.patch("tools.deploy.autoupdate.restart_units", return_value=True) as mock_restart:
+            res = fresh_updater.restart_after_rollback()
+            self.assertTrue(res)
+            mock_restart.assert_called_once_with(["desktop-pet.service"])
+
+    def test_restart_after_rollback_defaults_when_no_state(self):
+        self.updater.last_affected = None
+        self.updater._last_affected = None
+        with mock.patch("tools.deploy.autoupdate.restart_units", return_value=True) as mock_restart:
+            res = self.updater.restart_after_rollback()
+            self.assertTrue(res)
+            mock_restart.assert_called_once_with(["desktop-pet.service", "desktop-pet-admin.service", "picam.service"])
+
+
 if __name__ == "__main__":
     unittest.main()

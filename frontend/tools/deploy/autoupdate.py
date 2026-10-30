@@ -422,17 +422,28 @@ class AutoUpdaterPi(AutoUpdaterCore):
         return check_held_criteria(old_dir, new_dir, state_dir=self.state_dir, target_platform="pi")
 
     def detect_affected(self, old_dir: Path, new_dir: Path) -> List[str]:
-        return detect_affected_units(old_dir, new_dir)
+        affected = detect_affected_units(old_dir, new_dir)
+        self.last_affected = affected
+        self._last_affected = affected
+        return affected
 
     def get_default_affected(self) -> List[str]:
         return ["desktop-pet.service"]
 
     def restart_affected(self, affected: List[str]) -> bool:
+        self.last_affected = affected
         self._last_affected = affected
         return restart_units(affected)
 
     def restart_after_rollback(self) -> bool:
-        units = getattr(self, "_last_affected", None) or ["desktop-pet.service", "desktop-pet-admin.service", "picam.service"]
+        units = getattr(self, "_last_affected", None)
+        if units is None and self.last_affected is not None:
+            units = self.last_affected
+        if units is None:
+            st = load_update_state(self.state_dir)
+            units = st.get("affected")
+        if units is None:
+            units = ["desktop-pet.service", "desktop-pet-admin.service", "picam.service"]
         return restart_units(units)
 
     def ensure_dependencies(self, staged_dir: Path) -> Tuple[bool, Optional[str]]:

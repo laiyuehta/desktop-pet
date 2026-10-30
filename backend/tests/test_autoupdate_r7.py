@@ -463,5 +463,132 @@ class TestR7AutoUpdaterCycle(unittest.TestCase):
         self.assertIn("--install-dir", text)
 
 
+class TestR7RestartAfterRollbackAndPersistence(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.base = Path(self.temp_dir)
+        self.inst = self.base / "inst"
+        self.backup = self.base / "backup"
+        self.state = self.base / "state"
+        self.inst.mkdir()
+        self.backup.mkdir()
+        self.state.mkdir()
+
+        self.updater = AutoUpdaterR7(
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+            repo_url="https://github.com/laiyuehta/desktop-pet",
+            branch="feat/autoupdate-pi",
+            require_ci=False,
+            dry_run=False,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_restart_after_rollback_skips_when_last_affected_empty(self):
+        """若 last_affected 為空清單（僅更動前端/非後端），回退後應略過重啟後端。"""
+        self.updater.last_affected = []
+        with mock.patch("backend.autoupdate.stop_backend_process") as mock_stop:
+            res = self.updater.restart_after_rollback()
+            self.assertTrue(res)
+            mock_stop.assert_not_called()
+
+    def test_restart_after_rollback_skips_when_persisted_affected_has_no_backend(self):
+        """若實例之 last_affected 為 None，但 update_state.json 持久化記錄了受影響服務且不含後端，應略過重啟。"""
+        self.updater.last_affected = None
+        write_update_state(self.state, {"status": "in_progress", "affected": []})
+        with mock.patch("backend.autoupdate.stop_backend_process") as mock_stop:
+            res = self.updater.restart_after_rollback()
+            self.assertTrue(res)
+            mock_stop.assert_not_called()
+            self.assertEqual(self.updater.last_affected, [])
+
+    def test_restart_after_rollback_restarts_when_last_affected_contains_backend(self):
+        """若 last_affected 包含 desktop-pet-backend，回退後必須結束後端以供重啟。"""
+        self.updater.last_affected = ["desktop-pet-backend"]
+        with mock.patch("backend.autoupdate.stop_backend_process") as mock_stop:
+            res = self.updater.restart_after_rollback()
+            self.assertTrue(res)
+            mock_stop.assert_called_once_with(self.updater.backend_port, supervise=True)
+
+    def test_restart_after_rollback_restarts_when_persisted_affected_contains_backend(self):
+        """若實例 last_affected 為 None，但持久化狀態中包含後端，回退後必須重啟後端。"""
+        self.updater.last_affected = None
+        write_update_state(self.state, {"status": "in_progress", "affected": ["desktop-pet-backend"]})
+        with mock.patch("backend.autoupdate.stop_backend_process") as mock_stop:
+            res = self.updater.restart_after_rollback()
+            self.assertTrue(res)
+            mock_stop.assert_called_once_with(self.updater.backend_port, supervise=True)
+
+    def test_restart_after_rollback_defaults_to_restart_when_no_state(self):
+        """若無任何受影響狀態記錄（None），為確保系統可靠性，預設應執行後端重啟。"""
+        self.updater.last_affected = None
+        with mock.patch("backend.autoupdate.stop_backend_process") as mock_stop:
+            res = self.updater.restart_after_rollback()
+            self.assertTrue(res)
+            mock_stop.assert_called_once_with(self.updater.backend_port, supervise=True)
+
+    def test_interrupted_run_cycle_recovery_skips_restart_if_affected_persisted_empty(self):
+        """模擬 run_cycle 啟動時偵測到前次更新中途中斷（status=in_progress 且 affected=[]），回退復原時不應干擾運行中之後端。"""
+        target_commit = "1111111111111111111111111111111111111111"
+        (self.backup / "backup_manifest.json").write_text(json.dumps({"app.py": "hash"}), encoding="utf-8")
+        (self.backup / "app.py").write_text("old_app", encoding="utf-8")
+        write_update_state(self.state, {
+            "status": "in_progress",
+            "target_commit": target_commit,
+            "incoming_files": ["app.py"],
+            "affected": [],
+        })
+
+        fresh_updater = AutoUpdaterR7(
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+            repo_url="https://github.com/laiyuehta/desktop-pet",
+            branch="feat/autoupdate-pi",
+            require_ci=False,
+            dry_run=False,
+        )
+
+        with mock.patch("backend.autoupdate.stop_backend_process") as mock_stop:
+            code = fresh_updater.run_cycle(force=True)
+            self.assertEqual(code, 0)
+            mock_stop.assert_not_called()
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rolled_back")
+        failed = load_failed_json(self.state)
+        self.assertTrue(any(f.get("commit") == target_commit for f in failed))
+
+    def test_interrupted_boot_check_recovery_skips_restart_if_affected_persisted_empty(self):
+        """模擬開機自檢 boot_check 偵測到前次更新中途中斷，若受影響服務不包含後端，復原時應略過重啟。"""
+        target_commit = "2222222222222222222222222222222222222222"
+        (self.backup / "backup_manifest.json").write_text(json.dumps({"app.py": "hash"}), encoding="utf-8")
+        (self.backup / "app.py").write_text("old_app", encoding="utf-8")
+        write_update_state(self.state, {
+            "status": "in_progress",
+            "target_commit": target_commit,
+            "incoming_files": ["app.py"],
+            "affected": [],
+        })
+
+        fresh_updater = AutoUpdaterR7(
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+            repo_url="https://github.com/laiyuehta/desktop-pet",
+            branch="feat/autoupdate-pi",
+            require_ci=False,
+            dry_run=False,
+        )
+
+        with mock.patch("backend.autoupdate.stop_backend_process") as mock_stop:
+            recovered, reason = fresh_updater.boot_check()
+            self.assertTrue(recovered)
+            mock_stop.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

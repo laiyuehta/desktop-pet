@@ -240,5 +240,44 @@ class TestProcessLock(unittest.TestCase):
         lock2.release()
 
 
+class TestAutoUpdaterCoreAffectedPersistence(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.base = Path(self.temp_dir)
+        self.inst = self.base / "inst"
+        self.backup = self.base / "backup"
+        self.state = self.base / "state"
+        self.inst.mkdir()
+        self.backup.mkdir()
+        self.state.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_core_loads_persisted_affected_at_init(self):
+        write_update_state(self.state, {"status": "in_progress", "affected": ["custom_unit"]})
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        self.assertEqual(updater.last_affected, ["custom_unit"])
+
+    def test_core_rollback_recovers_affected_and_invokes_restart(self):
+        write_update_state(self.state, {"status": "in_progress", "affected": ["custom_unit"], "incoming_files": []})
+        (self.backup / "backup_manifest.json").write_text("{}", encoding="utf-8")
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "restart_affected", return_value=True) as mock_restart:
+            res = updater.rollback()
+            self.assertTrue(res)
+            mock_restart.assert_called_once_with(["custom_unit"])
+
+
 if __name__ == "__main__":
     unittest.main()
