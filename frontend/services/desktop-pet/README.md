@@ -32,3 +32,18 @@ sudo systemctl restart desktop-pet                   # 更新程式後重啟（�
 journalctl -u desktop-pet -f                         # 日誌
 ```
 Wi‑Fi 管理用 polkit 規則 `/etc/polkit-1/rules.d/50-desktop-pet-wifi.rules`（看執行桌寵的使用者，`sudo sh frontend/tools/wifi/install.sh <使用者>` 安裝），在 systemd 服務裡照樣有效。
+
+## #38 升級（前後端分資料夾，一次性手動步驟）
+
+程式搬到 `frontend/` 之後，**沒有進 git 的檔案不會自動搬**，部署時手動做一次：
+
+```bash
+sudo apt install python3-venv                     # install.sh 要建 frontend/.venv
+cd ~/desktop-pet
+# 動畫包：repo 內唯一位置是 frontend/packs/（--pack auto 先找 ~/.local/share/desktop-pet/packs/，再找 frontend/packs/；不再找根目錄 packs/）
+[ -d packs ] && [ ! -e frontend/packs ] && mv packs frontend/packs
+# deploy.env：位置不變，唯一位置是 repo 根目錄 ~/desktop-pet/deploy.env（建議改用 /etc/desktop-pet/env）
+# 硬體開關（環境檔）：有相機的 Pi 加 PET_ENABLE_PICAM=1；要用 camcast 加 PET_ENABLE_CAMCAST=1
+sh frontend/services/desktop-pet/install.sh       # 建 venv、裝依賴（含 shared/）、重裝 unit（ExecStart 改用 frontend/.venv/bin/python）
+# split 模式（有 desktop-pet-admin）改跑：sh frontend/services/desktop-pet-admin/switch.sh
+```

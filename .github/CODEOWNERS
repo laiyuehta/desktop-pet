@@ -23,7 +23,9 @@
 /frontend/services/       @laiyueda12-star
 /piwifi/                  @laiyueda12-star
 /frontend/services/desktop-pet-admin/ @laiyueda12-star
-/tests/                   @laiyueda12-star
+/frontend/tests/          @laiyueda12-star
+/backend/tests/           @laiyueda12-star
+/shared/                  @laiyueda12-star
 /.github/workflows/       @laiyueda12-star
 /frontend/requirements.txt @laiyueda12-star
 /backend/requirements.txt @laiyueda12-star
@@ -50,7 +52,7 @@
 /frontend/tools/bake.py   @laiyuehta
 /frontend/tools/gen_seed_parts.py @laiyuehta
 /frontend/tools/render_demo.py @laiyuehta
-/tests/test_emotion_levels.py @laiyuehta
+/frontend/tests/test_emotion_levels.py @laiyuehta
 
 # 公開與授權（桌寵專案機器人3 做過公開前整理與歷史改寫；之後改動由使用者核准）
 /LICENSE                  @laiyuehta

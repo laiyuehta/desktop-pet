@@ -33,8 +33,9 @@
 
 ```bash
 cd frontend                            # #38 起 Pi 端程式在 frontend/（以下路徑相對於它）
-# 電腦或 Pi 都只需要 Pillow
-pip install -r requirements.txt        # 或 Pi 上：sudo apt install python3-pil
+# 用 venv（第一行 -e ../shared 會把共用模組 shared/ 裝進來；相對路徑以目前目錄為準，所以要在 frontend/ 底下跑）
+python3 -m venv --system-site-packages .venv && . .venv/bin/activate   # Pi 上可先 sudo apt install python3-venv python3-pil
+pip install -r requirements.txt
 ```
 
 ## 在電腦上預覽
@@ -222,7 +223,9 @@ frontend/tools/gen_seed_parts.py    產生零件圖
 frontend/tools/render_demo.py       產生預覽 GIF / PNG
 frontend/tools/bake.py              產生／檢查動畫包（packs/<外觀>/，不進 git）
 frontend/tools/bench.py             量 fps（即時繪圖、分段毫秒 --stages、動畫包播放 --pack）
-tests/                     unittest（含假 LLM 伺服器 tests/fake_llm.py）
+frontend/tests/            前端 unittest；backend/tests/ 後端（含假 LLM 伺服器 fake_llm.py）；shared/tests/ 共用模組
+shared/                    前後端共用模組（protocol 協定常數、apikey 金鑰格式、envfile 環境檔格式），兩端 requirements 第一行 -e ../shared
+piwifi/                    Rust Wi‑Fi 守護程式（獨立編譯部署）
 backend/                   後端（大腦）：server.py（HTTP API）、keys.py（API 金鑰管理與常數時間比對）、
                            security.py（速率限制、鎖定與安全防護）、store.py（存檔）、mood.py（心情/成長）、
                            llm.py（OpenAI 相容客戶端、JSON 抽取驗證）、router.py（本機/雲端路由）、
@@ -294,7 +297,9 @@ backend/                   後端（大腦）：server.py（HTTP API）、keys.p
 ## 測試
 
 ```bash
-python3 -m unittest discover -s tests -t . -v     # 不需要額外套件（pytest 也能跑）；後端測試用假 LLM，不需要真的模型
+(cd frontend && python3 -m unittest discover -s tests -t . -v)   # 前端（pytest 也能跑：cd frontend && python -m pytest -q）
+python3 -m unittest discover -s backend/tests -t . -v           # 後端：用假 LLM，不需要真的模型
+python3 -m unittest discover -s shared/tests -v                # 共用模組
 ```
 
 ## 效能
