@@ -1,4 +1,6 @@
-# 執行只需要 Pillow（Pi OS bookworm 內建的 python3-pil 9.x 也可以）
+-e ../shared
+# 前後端共用模組（第一行；pip 的相對路徑以「目前目錄」為準，請在 frontend/ 底下執行 pip install -r requirements.txt）
+# 執行只需要 Pillow（Pi OS 內建的 python3-pil 也可以：venv 用 --system-site-packages 建立就會直接用到）
 Pillow>=9.0
 # 測試只用標準函式庫 unittest；想用 pytest 也可以（選用）：
 # pytest>=7

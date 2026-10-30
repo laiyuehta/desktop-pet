@@ -29,6 +29,9 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, List, Optional, Tuple
 
+from shared.apikey import read_key_file
+from shared.protocol import PATH_PHOTO, TOKEN_HEADER
+
 from services.picam import picam_client
 from services.picam.picam_client import PicamError
 
@@ -84,10 +87,10 @@ class PhotoUploader:
                                     "taken": "%.3f" % (round(float(meta.get("taken", time.time())) * 1000) / 1000)})
         headers = {"Content-Type": "image/jpeg", "Content-Length": str(len(data))}
         if token and is_safe_for_insecure_token(self.base_url, self.allow_insecure_lan):
-            headers["X-Pet-Token"] = token
+            headers[TOKEN_HEADER] = token
         elif token:
             log.warning("非 HTTPS 且非私有 IP/localhost，拒絕送出金鑰（可設定 --allow-insecure-lan 放行）：%s", self.base_url)
-        req = urllib.request.Request(f"{self.base_url}/v1/pet/photo?{q}", data=data, headers=headers, method="POST")
+        req = urllib.request.Request(f"{self.base_url}{PATH_PHOTO}?{q}", data=data, headers=headers, method="POST")
         with _OPENER.open(req, timeout=self.timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
         if not body.get("ok") or not body.get("photo_id"):
@@ -102,8 +105,7 @@ class PhotoUploader:
                 try:
                     exp_path = os.path.expanduser(self.token_file)
                     if os.path.isfile(exp_path):
-                        with open(exp_path, "r", encoding="utf-8") as fh:
-                            new_tok = fh.read().strip()
+                        new_tok = read_key_file(exp_path)
                         if new_tok and new_tok != self.token:
                             log.info("上傳照片收到 401，已自 %s 重新載入金鑰並重試一次", exp_path)
                             self.token = new_tok

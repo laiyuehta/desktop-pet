@@ -1,1 +1,4 @@
-# 後端只用 Python 標準函式庫（CPython 3.10+），不需要安裝任何套件。
+-e ../shared
+# 前後端共用模組（第一行；請在 backend\ 底下執行 pip install -r requirements.txt）
+# 後端其餘只用 Python 標準函式庫（CPython 3.10+），不需要安裝任何套件。
+# （#38：R7 改用 backend\.venv，不再借用 ComfyUI 內附 python；後端沒有用到 ComfyUI 環境裡的任何套件，所以這裡不用加。）

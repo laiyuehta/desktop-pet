@@ -26,6 +26,9 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from shared.apikey import read_key_file
+from shared.protocol import PATH_EVENT, PATH_TALK, TOKEN_HEADER
+
 from .events import make_event
 
 log = logging.getLogger("pet.backend")
@@ -301,7 +304,7 @@ class BackendClient:
     def _post_request(self, path: str, body: dict, timeout: float, token: str) -> dict:
         headers = {"Content-Type": "application/json"}
         if token and is_safe_for_insecure_token(self.base_url, self.allow_insecure_lan):
-            headers["X-Pet-Token"] = token
+            headers[TOKEN_HEADER] = token
         elif token:
             log.warning("非 HTTPS 且非私有 IP/localhost，拒絕送出金鑰（可設定 --allow-insecure-lan 放行）：%s", self.base_url)
         req = urllib.request.Request(self.base_url + path, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
@@ -317,8 +320,7 @@ class BackendClient:
                 try:
                     exp_path = os.path.expanduser(self.token_file)
                     if os.path.isfile(exp_path):
-                        with open(exp_path, "r", encoding="utf-8") as fh:
-                            new_tok = fh.read().strip()
+                        new_tok = read_key_file(exp_path)
                         if new_tok and new_tok != self.token:
                             log.info("收到 401，已自 %s 重新載入新金鑰並重試一次", exp_path)
                             self.token = new_tok
@@ -366,7 +368,7 @@ class BackendClient:
                     self._last_contact = time.monotonic()
                 else:
                     continue
-            path = "/v1/pet/talk" if job["kind"] == "talk" else "/v1/pet/event"
+            path = PATH_TALK if job["kind"] == "talk" else PATH_EVENT
             timeout = self.talk_timeout if job["kind"] == "talk" else self.timeout
             try:
                 reply = self._post(path, job["body"], timeout)

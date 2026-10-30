@@ -19,6 +19,8 @@ import signal
 import sys
 import time
 
+from shared.apikey import read_key_file
+
 from pet.app import PetApp
 from pet.env import expand_pet_path, load_pi_env
 from pet.events import make_event
@@ -140,8 +142,7 @@ def main(argv=None) -> int:
     token = args.backend_token
     if args.backend_token_file:
         try:
-            with open(os.path.expanduser(args.backend_token_file), "r", encoding="utf-8") as fh:
-                token = fh.read().strip()
+            token = read_key_file(args.backend_token_file)
         except OSError as exc:
             log.error("讀不到後端 token 檔 %s：%s", args.backend_token_file, exc.strerror)
             return 2
