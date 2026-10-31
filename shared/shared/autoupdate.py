@@ -1151,29 +1151,27 @@ class AutoUpdaterCore:
             except Exception:
                 pass
         ok = restore_from_backup(self.install_dir, self.backup_dir, newly_overwritten=newly_overwritten)
+        st = load_update_state(self.state_dir)
+        st["last_rollback_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        st["pending_boot_check"] = False
         if ok:
             log.info("回退完成，重新啟動服務...")
             restart_ok = self.restart_after_rollback()
             if not restart_ok:
                 log.error("回退檔案已還原，但重新啟動服務失敗！")
-                write_update_state(self.state_dir, {
-                    "status": "rollback_failed",
-                    "last_rollback_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    "reason": "restart_after_rollback_failed",
-                })
+                st["status"] = "rollback_failed"
+                st["reason"] = "restart_after_rollback_failed"
+                write_update_state(self.state_dir, st)
                 return False
 
-            write_update_state(self.state_dir, {
-                "status": "rolled_back",
-                "last_rollback_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            })
+            st["status"] = "rolled_back"
+            st.pop("reason", None)
+            write_update_state(self.state_dir, st)
             return True
         log.error("回退失敗！請手動檢查 %s 與備份目錄 %s", self.install_dir, self.backup_dir)
-        write_update_state(self.state_dir, {
-            "status": "rollback_failed",
-            "last_rollback_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "reason": "restore_from_backup_failed",
-        })
+        st["status"] = "rollback_failed"
+        st["reason"] = "restore_from_backup_failed"
+        write_update_state(self.state_dir, st)
         return False
 
     def get_remote_commit(self, repo_url: str, branch: str) -> Optional[str]:
@@ -1212,6 +1210,22 @@ class AutoUpdaterCore:
         try:
             st = load_update_state(self.state_dir)
             status = st.get("status")
+
+            # 0.5 若前次回退失敗，嘗試自癒修復或維持失敗狀態
+            if status == "rollback_failed":
+                reason = st.get("reason", "")
+                if reason == "restore_from_backup_failed" and self.backup_dir.exists():
+                    log.info("開機自檢：偵測到前次回退還原失敗，嘗試執行 rollback()...")
+                    if self.rollback():
+                        return True, "rollback_failed_healed"
+                elif reason == "restart_after_rollback_failed":
+                    log.info("開機自檢：偵測到前次回退重啟服務失敗，嘗試執行 restart_after_rollback()...")
+                    if self.restart_after_rollback():
+                        st["status"] = "rolled_back"
+                        st.pop("reason", None)
+                        write_update_state(self.state_dir, st)
+                        return True, "rollback_failed_healed"
+                return False, f"rollback_failed: {reason or 'unknown'}"
 
             # 1. 優先處理中途中斷：若處於 in_progress / updating 且非 pending_boot_check 均必須先回退復原
             if (status in ("in_progress", "updating")) and not st.get("pending_boot_check"):
@@ -1270,18 +1284,18 @@ class AutoUpdaterCore:
         now_ts = time.time()
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-        if retry:
-            clear_failed_records(self.state_dir)
-            st_pre_retry = load_update_state(self.state_dir)
-            if st_pre_retry.get("status") == "rollback_failed":
-                st_pre_retry["status"] = "idle"
-                write_update_state(self.state_dir, st_pre_retry)
-
         if not self.lock.acquire():
             log.info("已有另一個更新程序在執行中，本次週期跳過")
             return 0
 
         try:
+            if retry:
+                clear_failed_records(self.state_dir)
+                st_pre_retry = load_update_state(self.state_dir)
+                if st_pre_retry.get("status") == "rollback_failed":
+                    st_pre_retry["status"] = "idle"
+                    write_update_state(self.state_dir, st_pre_retry)
+
             # 1. 檢查暫停與 dry-run（注意：手動 PAUSE、PET_AUTOUPDATE=0 或 dry-run 絕不動檔案與服務）
             paused, pause_reason = self.is_paused()
             if paused and "本地檔案遭手動修改" not in (pause_reason or ""):
@@ -1293,7 +1307,57 @@ class AutoUpdaterCore:
                 log.info("[Dry Run] 僅執行檢查，不動任何檔案與服務。")
                 return 0
 
-            # 0. 檢查前次更新是否曾中途中斷（如斷電、kill、crash 導致留在 in_progress / updating / restarting）
+            # 0. 檢查前次回退狀態與中途中斷
+            st_pre = load_update_state(self.state_dir)
+            if st_pre.get("status") == "rollback_failed":
+                reason = st_pre.get("reason", "")
+                healed = False
+                if reason == "restore_from_backup_failed" and self.backup_dir.exists():
+                    log.info("偵測到前次回退還原失敗，再次嘗試執行 rollback()...")
+                    healed = self.rollback()
+                elif reason == "restart_after_rollback_failed":
+                    log.info("偵測到前次回退重啟服務失敗，再次嘗試執行 restart_after_rollback()...")
+                    if self.restart_after_rollback():
+                        st_pre["status"] = "rolled_back"
+                        st_pre.pop("reason", None)
+                        write_update_state(self.state_dir, st_pre)
+                        healed = True
+
+                if not healed:
+                    log.warning("前次回退失敗且尚未修復 (reason=%s)，維持 broken 狀態", reason)
+                    self._record_status(
+                        "broken",
+                        current_commit=st_pre.get("previous_commit") or st_pre.get("current_commit") or st_pre.get("target_commit"),
+                        check_result=f"前次回退失敗 ({reason or 'unknown'})",
+                    )
+                    append_updates_jsonl(self.state_dir, {
+                        "timestamp": now_iso,
+                        "target": self.target,
+                        "from_commit": st_pre.get("previous_commit"),
+                        "to_commit": st_pre.get("target_commit"),
+                        "status": "rollback_failed",
+                        "reason": f"前次回退失敗: {reason or 'unknown'}",
+                    })
+                    return 0
+                else:
+                    log.info("前次回退失敗已成功自癒修復，狀態轉為 rolled_back")
+                    st_pre = load_update_state(self.state_dir)
+                    self._record_status(
+                        "broken",
+                        current_commit=st_pre.get("previous_commit") or st_pre.get("current_commit") or st_pre.get("target_commit"),
+                        check_result="前次回退失敗已自癒修復",
+                    )
+                    append_updates_jsonl(self.state_dir, {
+                        "timestamp": now_iso,
+                        "target": self.target,
+                        "from_commit": st_pre.get("previous_commit"),
+                        "to_commit": st_pre.get("target_commit"),
+                        "status": "rolled_back",
+                        "reason": f"前次回退失敗已自癒修復: {reason or 'unknown'}",
+                    })
+                    return 0
+
+            # 檢查前次更新是否曾中途中斷（如斷電、kill、crash 導致留在 in_progress / updating / restarting）
             st_pre = load_update_state(self.state_dir)
             if st_pre.get("pending_boot_check") or st_pre.get("status") == "restarting":
                 target_commit = st_pre.get("target_commit", "")
@@ -1460,14 +1524,6 @@ class AutoUpdaterCore:
                     return 1
 
             if current_commit == target_commit and not force:
-                if st_pre.get("status") == "rollback_failed":
-                    log.warning("目前已是最新版本 (%s)，但前次回退失敗，維持 broken 狀態", target_commit[:12])
-                    self._record_status("broken", current_commit=current_commit, check_result=f"前次回退失敗 ({target_commit[:12]})")
-                    append_updates_jsonl(self.state_dir, {
-                        "timestamp": now_iso, "target": self.target, "current_commit": current_commit,
-                        "to_commit": target_commit, "status": "rollback_failed", "reason": "前次回退失敗，維持 broken"
-                    })
-                    return 0
                 log.info("目前已是最新版本 (%s)，無需更新", target_commit[:12])
                 self._record_status("on", current_commit=current_commit, check_result=f"已是最新 ({target_commit[:12]})")
                 append_updates_jsonl(self.state_dir, {

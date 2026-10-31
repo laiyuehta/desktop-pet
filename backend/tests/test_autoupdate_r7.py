@@ -718,6 +718,38 @@ class TestR7RestartAfterRollbackAndPersistence(unittest.TestCase):
             self.assertTrue(recovered)
             mock_stop.assert_not_called()
 
+    def test_r7_rollback_returns_failure_when_restart_fails(self):
+        """驗證 R7 端回退時若 restart_after_rollback 失敗，rollback() 應回傳 False 並記錄 rollback_failed。"""
+        self.backup.mkdir(parents=True, exist_ok=True)
+        (self.backup / "app.py").write_text("v1_original", encoding="utf-8")
+        (self.backup / "backup_manifest.json").write_text(json.dumps({
+            "files": ["app.py"],
+            "incoming_files": ["app.py"],
+        }), encoding="utf-8")
+
+        with mock.patch.object(self.updater, "restart_after_rollback", return_value=False):
+            ok = self.updater.rollback()
+            self.assertFalse(ok)
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rollback_failed")
+        self.assertEqual(st.get("reason"), "restart_after_rollback_failed")
+
+    def test_restart_after_rollback_returns_false_when_stop_backend_process_fails(self):
+        """若結束後端程序失敗，restart_after_rollback 應回傳 False。"""
+        self.updater.last_affected = ["desktop-pet-backend"]
+        with mock.patch("backend.autoupdate.stop_backend_process", return_value=False) as mock_stop:
+            res = self.updater.restart_after_rollback()
+            self.assertFalse(res)
+            mock_stop.assert_called_once_with(self.updater.backend_port, supervise=True)
+
+    def test_restart_affected_returns_false_when_stop_backend_process_fails(self):
+        """若重啟受影響服務時結束後端程序失敗，restart_affected 應回傳 False。"""
+        with mock.patch("backend.autoupdate.stop_backend_process", return_value=False) as mock_stop:
+            res = self.updater.restart_affected(["desktop-pet-backend"])
+            self.assertFalse(res)
+            mock_stop.assert_called_once_with(self.updater.backend_port, supervise=False)
+
 
 if __name__ == "__main__":
     unittest.main()
