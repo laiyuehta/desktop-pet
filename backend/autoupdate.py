@@ -248,14 +248,15 @@ def detect_affected_r7(old_dir: Path, new_dir: Path) -> List[str]:
     return units
 
 
-def stop_backend_process(port: int = 8090, supervise: bool = False) -> None:
+def stop_backend_process(port: int = 8090, supervise: bool = False) -> bool:
     """結束佔用後端通訊埠的程序（讓 supervise.py 自動重啟）。若 supervise=True 則一併重啟 supervisor 工作。"""
+    ok = True
     if os.name == "nt":
         if supervise:
             try:
                 subprocess.run(["schtasks", "/End", "/TN", "DesktopPet Backend"], capture_output=True, timeout=15)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("schtasks /End 失敗: %s", e)
         # Windows: 用 netstat 找出 PID 並 taskkill
         try:
             out = subprocess.check_output(f'netstat -ano | findstr :{port}', shell=True, text=True, timeout=15)
@@ -265,20 +266,32 @@ def stop_backend_process(port: int = 8090, supervise: bool = False) -> None:
                     pid = parts[-1]
                     if pid.isdigit() and int(pid) > 0 and int(pid) != os.getpid():
                         log.info("正在結束後端程序 (PID: %s)...", pid)
-                        subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, timeout=15)
-        except Exception:
+                        res = subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, timeout=15)
+                        if res.returncode != 0:
+                            log.warning("taskkill PID %s 失敗: %s", pid, res.stderr)
+                            ok = False
+        except subprocess.CalledProcessError:
             pass
+        except Exception as e:
+            log.warning("查詢或結束後端程序失敗: %s", e)
+            ok = False
         if supervise:
             try:
-                subprocess.run(["schtasks", "/Run", "/TN", "DesktopPet Backend"], capture_output=True, timeout=15)
-            except Exception:
-                pass
+                res = subprocess.run(["schtasks", "/Run", "/TN", "DesktopPet Backend"], capture_output=True, timeout=15)
+                if res.returncode != 0:
+                    log.warning("schtasks /Run 失敗: %s", res.stderr)
+                    ok = False
+            except Exception as e:
+                log.warning("schtasks /Run 例外: %s", e)
+                ok = False
     else:
         # POSIX (CI/Linux 環境)
         try:
             subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True, timeout=15)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("fuser 結束後端程序失敗: %s", e)
+            ok = False
+    return ok
 
 
 def check_http_health_r7(url: str, timeout: float = 3.0) -> Tuple[Optional[Dict[str, Any]], Dict[str, str]]:
@@ -388,7 +401,7 @@ class AutoUpdaterR7(AutoUpdaterCore):
         if affected:
             log.info("重啟後端：結束現有後端程序以由 supervisor 自動重啟...")
             supervise = "desktop-pet-supervisor" in affected
-            stop_backend_process(self.backend_port, supervise=supervise)
+            return stop_backend_process(self.backend_port, supervise=supervise)
         return True
 
     def restart_after_rollback(self) -> bool:
@@ -399,8 +412,7 @@ class AutoUpdaterR7(AutoUpdaterCore):
             log.info("回退完成：本次更新未涉及後端，維持現有後端程序運行")
             return True
         log.info("回退完成，結束後端程序以供自動重啟...")
-        stop_backend_process(self.backend_port, supervise=True)
-        return True
+        return stop_backend_process(self.backend_port, supervise=True)
 
     def check_normal_boot_health(self) -> Tuple[bool, str]:
         """R7 開機自檢健康檢查：確認 backend/server.py 存在並連線 /health。"""

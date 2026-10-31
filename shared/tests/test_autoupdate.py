@@ -358,6 +358,45 @@ class TestAutoUpdaterCoreAffectedPersistence(unittest.TestCase):
         st = load_update_state(self.state)
         self.assertEqual(st.get("status"), "rollback_failed")
 
+    def test_core_rollback_preserves_state_fields_on_failure_and_success(self):
+        """驗證回退失敗或成功時，保留 target_commit、incoming_files、affected 等狀態欄位，且 pending_boot_check 設為 False。"""
+        write_update_state(self.state, {
+            "status": "in_progress",
+            "target_commit": "abcdef123456",
+            "incoming_files": ["foo.py"],
+            "affected": ["unit1"],
+            "pending_boot_check": True,
+        })
+        (self.backup / "backup_manifest.json").write_text("{}", encoding="utf-8")
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "restart_after_rollback", return_value=False):
+            res = updater.rollback()
+            self.assertFalse(res)
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rollback_failed")
+        self.assertEqual(st.get("target_commit"), "abcdef123456")
+        self.assertEqual(st.get("incoming_files"), ["foo.py"])
+        self.assertEqual(st.get("affected"), ["unit1"])
+        self.assertFalse(st.get("pending_boot_check"))
+
+        # 接著驗證回退成功時也同樣保留欄位
+        with mock.patch.object(updater, "restart_after_rollback", return_value=True):
+            res2 = updater.rollback()
+            self.assertTrue(res2)
+
+        st2 = load_update_state(self.state)
+        self.assertEqual(st2.get("status"), "rolled_back")
+        self.assertEqual(st2.get("target_commit"), "abcdef123456")
+        self.assertEqual(st2.get("incoming_files"), ["foo.py"])
+        self.assertEqual(st2.get("affected"), ["unit1"])
+        self.assertFalse(st2.get("pending_boot_check"))
+
 
 class TestAutoUpdaterCoreInterruptedRecovery(unittest.TestCase):
     def setUp(self):
@@ -539,6 +578,108 @@ class TestAutoUpdaterCoreInterruptedRecovery(unittest.TestCase):
         st = load_update_state(self.state)
         self.assertNotEqual(st.get("status"), "rollback_failed")
 
+    def test_run_cycle_preserves_broken_status_when_rollback_failed_even_if_new_commit_available(self):
+        """驗證前次回退失敗（rollback_failed）且遠端有新 commit 時，run_cycle 在步驟 0 提早中止，維持 broken 狀態而不部署新 commit。"""
+        write_update_state(self.state, {
+            "status": "rollback_failed",
+            "current_commit": "deadbeef1234",
+            "target_commit": "deadbeef1234",
+            "reason": "some_unresolvable_error",
+        })
+        (self.inst / "RELEASE.json").write_text(json.dumps({"commit": "deadbeef1234"}), encoding="utf-8")
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "get_remote_commit", return_value="newcommit9999") as mock_get_commit:
+            rc = updater.run_cycle()
+            self.assertEqual(rc, 0)
+            mock_get_commit.assert_not_called()
+
+        status_path = self.state / "status.json"
+        self.assertTrue(status_path.exists())
+        st = json.loads(status_path.read_text(encoding="utf-8"))
+        self.assertEqual(st.get("status"), "broken")
+        self.assertIn("前次回退失敗", st.get("last_check_result", ""))
+
+    def test_run_cycle_heals_rollback_failed_when_restart_after_rollback_succeeds(self):
+        """驗證前次回退因重啟失敗（restart_after_rollback_failed）時，run_cycle 嘗試重啟自癒，成功後狀態轉為 rolled_back。"""
+        write_update_state(self.state, {
+            "status": "rollback_failed",
+            "reason": "restart_after_rollback_failed",
+            "current_commit": "deadbeef1234",
+            "target_commit": "deadbeef1234",
+        })
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "restart_after_rollback", return_value=True) as mock_restart:
+            rc = updater.run_cycle()
+            self.assertEqual(rc, 0)
+            mock_restart.assert_called_once()
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rolled_back")
+        self.assertNotIn("reason", st)
+
+    def test_run_cycle_heals_rollback_failed_when_restore_from_backup_succeeds(self):
+        """驗證前次回退因還原失敗（restore_from_backup_failed）時，若備份存在，run_cycle 嘗試 rollback() 自癒，成功後狀態轉為 rolled_back。"""
+        write_update_state(self.state, {
+            "status": "rollback_failed",
+            "reason": "restore_from_backup_failed",
+            "current_commit": "deadbeef1234",
+            "target_commit": "deadbeef1234",
+        })
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        def fake_rollback(*args, **kwargs):
+            write_update_state(self.state, {
+                "status": "rolled_back",
+                "current_commit": "deadbeef1234",
+                "target_commit": "deadbeef1234",
+            })
+            return True
+
+        with mock.patch.object(updater, "rollback", side_effect=fake_rollback) as mock_rb:
+            rc = updater.run_cycle()
+            self.assertEqual(rc, 0)
+            mock_rb.assert_called_once()
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rolled_back")
+
+    def test_run_cycle_retry_acquires_lock_before_modifying_state(self):
+        """驗證 run_cycle(retry=True) 必須在獲取鎖定之後才清理失敗紀錄與狀態。若未獲取鎖定，不得更動狀態檔案。"""
+        write_update_state(self.state, {
+            "status": "rollback_failed",
+            "current_commit": "deadbeef1234",
+        })
+        record_failed_commit(self.state, "badcommit", "type", "reason")
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater.lock, "acquire", return_value=False):
+            rc = updater.run_cycle(retry=True)
+            self.assertEqual(rc, 0)
+
+        # 斷言狀態與失敗紀錄未被清理
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rollback_failed")
+        failed = load_failed_json(self.state)
+        self.assertEqual(len(failed), 1)
+
 
 class TestAutoUpdaterCoreBootCheck(unittest.TestCase):
     def setUp(self):
@@ -597,6 +738,45 @@ class TestAutoUpdaterCoreBootCheck(unittest.TestCase):
 
         st = load_update_state(self.state)
         self.assertEqual(st.get("status"), "rolled_back")
+
+    def test_boot_check_heals_rollback_failed_when_restart_succeeds(self):
+        """驗證開機自檢遇 status=rollback_failed 且 reason=restart_after_rollback_failed 時，可自癒重啟成功。"""
+        write_update_state(self.state, {
+            "status": "rollback_failed",
+            "reason": "restart_after_rollback_failed",
+            "target_commit": "deadbeef1234",
+        })
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        with mock.patch.object(updater, "restart_after_rollback", return_value=True):
+            ok, msg = updater.boot_check()
+            self.assertTrue(ok)
+            self.assertEqual(msg, "rollback_failed_healed")
+
+        st = load_update_state(self.state)
+        self.assertEqual(st.get("status"), "rolled_back")
+        self.assertNotIn("reason", st)
+
+    def test_boot_check_fails_when_rollback_failed_unresolvable(self):
+        """驗證開機自檢遇 status=rollback_failed 且無法自癒時，回傳 False。"""
+        write_update_state(self.state, {
+            "status": "rollback_failed",
+            "reason": "unresolvable",
+            "target_commit": "deadbeef1234",
+        })
+        updater = AutoUpdaterCore(
+            target="test",
+            install_dir=self.inst,
+            backup_dir=self.backup,
+            state_dir=self.state,
+        )
+        ok, msg = updater.boot_check()
+        self.assertFalse(ok)
+        self.assertIn("rollback_failed: unresolvable", msg)
 
 
 class TestPipTimeout(unittest.TestCase):
